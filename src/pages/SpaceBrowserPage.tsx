@@ -1,11 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary } from '@interop/was-client';
 import { getToken, clearToken } from '../lib/auth';
-import { getWASClient } from '../lib/was';
-
-const wasClient = getWASClient('my-secret-seed-that-is-long-enou', 'http://localhost:3000');
-const SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
+import { getSessionWASClient } from '../lib/was';
 
 const FILE_ICON = (
   <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -23,6 +20,9 @@ const FOLDER_ICON = (
 
 export default function FileBrowserPage() {
   const navigate = useNavigate();
+  // The client signs with the key pair that authenticated at login, against
+  // the space URL the login API returned.
+  const session = useMemo(() => getSessionWASClient(), []);
   const [spaceName, setSpaceName] = useState('');
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [selected, setSelected] = useState<CollectionSummary | null>(null);
@@ -51,20 +51,25 @@ export default function FileBrowserPage() {
     setError('');
 
     try {
-      const client = await wasClient;
-      const space = client.space(SPACE_ID);
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const space = s.client.space(s.spaceId);
       const [description, collectionList] = await Promise.all([
         space.describe(),
         space.collections(),
       ]);
-      setSpaceName(description?.name ?? SPACE_ID);
+      setSpaceName(description?.name ?? s.spaceId);
       setCollections(collectionList?.items ?? []);
     } catch (err) {
       handleError(err);
     } finally {
       setLoading(false);
     }
-  }, [navigate, handleError]);
+  }, [navigate, handleError, session]);
 
   const loadResources = useCallback(async (collection: CollectionSummary) => {
     const token = getToken();
@@ -77,15 +82,20 @@ export default function FileBrowserPage() {
     setError('');
 
     try {
-      const client = await wasClient;
-      const resourceList = await client.space(SPACE_ID).collection(collection.id).list();
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const resourceList = await s.client.space(s.spaceId).collection(collection.id).list();
       setResources(resourceList?.items ?? []);
     } catch (err) {
       handleError(err);
     } finally {
       setLoading(false);
     }
-  }, [navigate, handleError]);
+  }, [navigate, handleError, session]);
 
   useEffect(() => {
     loadCollections();

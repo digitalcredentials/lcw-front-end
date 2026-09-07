@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken, setSpaceUrl } from '../lib/auth';
+import { setToken, setSpaceUrl, setSessionKey } from '../lib/auth';
 import { login } from '../lib/login';
 
 export default function LoginPage() {
@@ -16,12 +16,14 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const result = await login(email, password);
+      const { result, keyPair } = await login(email, password);
 
       setToken(result.controller);
       if (result.space) {
         setSpaceUrl(result.space);
       }
+      // Keep the authenticated key pair for signing WAS requests this session
+      setSessionKey(await keyPair.export({ secretKey: true, includeContext: true }));
       navigate('/files');
     } catch (err) {
       const status = (err as { status?: number }).status;
