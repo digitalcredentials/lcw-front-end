@@ -21,7 +21,10 @@ export async function deriveKeyPair(password: string) {
   return keyPair
 }
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(
+  email: string,
+  password: string
+): Promise<{ result: LoginResult; keyPair: Ed25519VerificationKey }> {
   const base = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
   const keyPair = await deriveKeyPair(password)
   const zcapClient = new ZcapClient({
@@ -37,5 +40,5 @@ export async function login(email: string, password: string): Promise<LoginResul
     action: 'write',
     json: { email }
   })
-  return response.data as LoginResult
+  return { result: response.data as LoginResult, keyPair }
 }
