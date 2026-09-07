@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@interop/did-method-key": "^7.3.5",
+    "@interop/ed25519-signature": "^7.2.1",
     "@interop/ed25519-verification-key": "^8.0.4",
     "@interop/ezcap": "^7.4.3",
     "@interop/was-client": "^0.41.0",

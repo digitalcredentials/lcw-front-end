@@ -1,7 +1,7 @@
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
-import FileBrowserPage from './pages/FileBrowserPage'
+import FileBrowserPage from './pages/SpaceBrowserPage'
 import RequireAuth from './components/RequireAuth'
 import './App.css'
 
