@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken } from '../lib/auth';
+import { setToken, setSpaceUrl } from '../lib/auth';
+import { login } from '../lib/login';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -15,27 +16,20 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      /* const base = import.meta.env.VITE_API_BASE_URL ?? '';
-      const res = await fetch(`${base}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
+      const result = await login(email, password);
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError((data as { message?: string }).message ?? 'Invalid credentials');
-        return;
+      setToken(result.controller);
+      if (result.space) {
+        setSpaceUrl(result.space);
       }
-
-      const data = (await res.json()) as { token: string };
-
-      setToken(data.token);
-       */
-      setToken('dummy-token'); // For testing purposes
       navigate('/files');
-    } catch {
-      setError('Unable to connect. Please try again.');
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 400 || status === 401) {
+        setError('Invalid email or password.');
+      } else {
+        setError('Unable to connect. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -49,16 +43,16 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-              Username
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              Email
             </label>
             <input
-              id="username"
-              type="text"
-              autoComplete="username"
+              id="email"
+              type="email"
+              autoComplete="email"
               required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               placeholder="you@example.com"
             />
