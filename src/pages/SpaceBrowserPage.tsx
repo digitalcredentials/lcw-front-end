@@ -11,6 +11,10 @@ const ISSUER_DIDS = {
   'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
     issuerName: 'DCC Demo University',
     url: 'https://digitalcredentials.mit.edu/'
+  },
+  'did:key:z6MktL8XGbuYv5f7hwf6hVyJkJWynNtNhcsXFYe9NJzjKHkW': {
+    issuerName: 'Digital Credentials Consortium',
+    url: 'https://digitalcredentials.mit.edu/'
   }
 };
 
