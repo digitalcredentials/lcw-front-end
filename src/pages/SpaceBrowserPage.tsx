@@ -6,6 +6,14 @@ import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
 
+// Issuers whose credentials the verifier accepts, keyed by DID
+const ISSUER_DIDS = {
+  'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
+    issuerName: 'DCC Demo University',
+    url: 'https://digitalcredentials.mit.edu/'
+  }
+};
+
 const FILE_ICON = (
   <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -35,11 +43,17 @@ export default function FileBrowserPage() {
   const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
 
   // <veri-good> fires veri-good-is-ready synchronously on connect, so by the
-  // time React attaches the ref the element accepts verify() calls.
+  // time React attaches the ref the element accepts calls. The issuer DIDs
+  // must go through setIssuerDids() here: the component reads a <template>
+  // child's .content fragment, which React never populates (it renders
+  // template children as ordinary child nodes), so the declarative form
+  // silently yields an empty issuer list.
   const handleVerifierRef = useCallback(
     (node: HTMLElement | null) => {
       if (node && viewing) {
-        (node as VeriGoodElement).verify(viewing.vc);
+        const verifier = node as VeriGoodElement;
+        verifier.setIssuerDids(JSON.stringify(ISSUER_DIDS));
+        verifier.verify(viewing.vc);
       }
     },
     [viewing]
@@ -329,16 +343,7 @@ export default function FileBrowserPage() {
                 Close
               </button>
             </div>
-            <veri-good ref={handleVerifierRef}>
-              <template id="issuer-dids">
-                {JSON.stringify({
-                  'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
-                    issuerName: 'DCC Demo University',
-                    url: 'https://digitalcredentials.mit.edu/'
-                  }
-                })}
-              </template>
-            </veri-good>
+            <veri-good ref={handleVerifierRef} />
           </div>
         </div>
       )}
