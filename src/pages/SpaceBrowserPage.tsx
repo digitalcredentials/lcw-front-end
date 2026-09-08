@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary } from '@interop/was-client';
+import '@digitalcredentials/veri-good';
+import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
 
@@ -29,6 +31,19 @@ export default function FileBrowserPage() {
   const [resources, setResources] = useState<ResourceSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // The clicked resource and its retrieved content, shown in the verifier modal
+  const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
+
+  // <veri-good> fires veri-good-is-ready synchronously on connect, so by the
+  // time React attaches the ref the element accepts verify() calls.
+  const handleVerifierRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (node && viewing) {
+        (node as VeriGoodElement).verify(viewing.vc);
+      }
+    },
+    [viewing]
+  );
 
   // Turns a failed request into either a redirect to login or a shown message.
   const handleError = useCallback((err: unknown) => {
@@ -96,6 +111,36 @@ export default function FileBrowserPage() {
       setLoading(false);
     }
   }, [navigate, handleError, session]);
+
+  // Retrieves the clicked resource through the WAS client (a signed request)
+  // and hands its content to the verifier.
+  const openResource = useCallback(async (resource: ResourceSummary) => {
+    if (!selected) {
+      return;
+    }
+    setLoading(true);
+    setError('');
+
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const data = await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).get();
+      if (data === null) {
+        setError('This resource could not be retrieved.');
+        return;
+      }
+      const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
+      setViewing({ resource, vc });
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate, handleError, session, selected]);
 
   useEffect(() => {
     loadCollections();
@@ -233,12 +278,19 @@ export default function FileBrowserPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {resources.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
+                  <tr
+                    key={item.id}
+                    onClick={() => openResource(item)}
+                    className="hover:bg-gray-50 cursor-pointer"
+                  >
                     <td className="px-4 py-3">
-                      <span className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openResource(item); }}
+                        className="flex items-center gap-2 text-left"
+                      >
                         {FILE_ICON}
-                        <span className="text-gray-700">{item.name ?? item.id}</span>
-                      </span>
+                        <span className="text-gray-700 hover:underline">{item.name ?? item.id}</span>
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
                       {item.contentType}
@@ -253,6 +305,43 @@ export default function FileBrowserPage() {
           </div>
         )}
       </main>
+
+      {/* Credential verifier: retrieved resource content is handed to <veri-good> */}
+      {viewing && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setViewing(null)}
+        >
+          <div
+            role="dialog"
+            aria-label={viewing.resource.name ?? viewing.resource.id}
+            className="w-full max-w-lg max-h-[85vh] overflow-y-auto bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-800">
+                {viewing.resource.name ?? viewing.resource.id}
+              </h2>
+              <button
+                onClick={() => setViewing(null)}
+                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+            <veri-good ref={handleVerifierRef}>
+              <template id="issuer-dids">
+                {JSON.stringify({
+                  'did:web:digitalcredentials.github.io:testDID': {
+                    issuerName: 'Digital Credentials Consortium',
+                    url: 'https://digitalcredentials.mit.edu'
+                  }
+                })}
+              </template>
+            </veri-good>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
