@@ -329,9 +329,16 @@ export default function FileBrowserPage() {
                 Close
               </button>
             </div>
-            {/* No issuer-dids template: veri-good falls back to its default
-                set of known issuer DIDs */}
-            <veri-good ref={handleVerifierRef} />
+            <veri-good ref={handleVerifierRef}>
+              <template id="issuer-dids">
+                {JSON.stringify({
+                  'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
+                    issuerName: 'DCC Demo University',
+                    url: 'https://digitalcredentials.mit.edu/'
+                  }
+                })}
+              </template>
+            </veri-good>
           </div>
         </div>
       )}
