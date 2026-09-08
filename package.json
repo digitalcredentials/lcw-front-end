@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@digitalcredentials/veri-good": "^0.0.0-beta.2",
     "@interop/did-method-key": "^7.3.5",
     "@interop/ed25519-signature": "^7.2.1",
     "@interop/ed25519-verification-key": "^8.0.4",
