@@ -21,7 +21,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "vanilla-jsoneditor": "^3.13.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

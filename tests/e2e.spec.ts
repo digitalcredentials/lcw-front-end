@@ -91,9 +91,9 @@ test('uploads a credential from a picked file', async ({ page }) => {
   await (await chooser).setFiles(FIXTURE_PATH);
 
   // picking a file stages it: the name field takes the file's name (still
-  // editable) and the JSON fills the textarea
+  // editable) and the JSON fills the editor
   await expect(modal.getByLabel('Name')).toHaveValue('PlaywrightUpload.json');
-  await expect(modal.getByLabel('Credential JSON')).toHaveValue(/VerifiablePresentation/);
+  await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
   await modal.getByRole('button', { name: 'Upload', exact: true }).click();
 
   // the refreshed list contains the uploaded credential, and it verifies
@@ -108,7 +108,7 @@ test('uploads a credential from pasted JSON under a chosen name', async ({ page 
   await openUniversityCollection(page);
   const modal = await openUploadModal(page);
 
-  await modal.getByLabel('Credential JSON').fill(readFileSync(FIXTURE_PATH, 'utf8'));
+  await modal.locator('.cm-content').fill(readFileSync(FIXTURE_PATH, 'utf8'));
   await modal.getByLabel('Name').fill('PastedUpload.json');
   await modal.getByRole('button', { name: 'Upload', exact: true }).click();
 
@@ -133,16 +133,22 @@ test('uploads a credential dropped onto the drop zone', async ({ page }) => {
   await expect(page.getByRole('row').filter({ hasText: 'DraggedUpload' })).toBeVisible();
 });
 
-test('rejects pasted content that is not JSON', async ({ page }) => {
+test('flags invalid JSON and blocks the upload', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
   const modal = await openUploadModal(page);
 
-  await modal.getByLabel('Credential JSON').fill('not json at all');
+  await modal.locator('.cm-content').fill('{"type": ["VerifiablePresentation"');
   await modal.getByLabel('Name').fill('bad.json');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
 
-  await expect(modal.getByRole('alert')).toHaveText('bad.json is not valid JSON.');
+  // the editor highlights the parse error dynamically, and the upload is
+  // blocked until the JSON parses
+  await expect(modal.locator('.cm-lint-marker-error').first()).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeDisabled();
+
+  // repairing the JSON re-enables the upload
+  await modal.locator('.cm-content').fill('{"type": ["VerifiablePresentation"]}');
+  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeEnabled();
 });
 
 test('verifies a second credential after the first', async ({ page }) => {
