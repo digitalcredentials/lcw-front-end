@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
-import { getToken, clearToken } from '../lib/auth';
+import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
 import UploadCredentialModal from '../components/UploadCredentialModal';
+import ShareCredentialModal from '../components/ShareCredentialModal';
+import JSONInput from '../components/JSONInput';
 
 // Issuers whose credentials the verifier accepts, keyed by DID
 const ISSUER_DIDS = {
@@ -47,9 +49,16 @@ export default function FileBrowserPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [error, setError] = useState('');
-  // The clicked resource and its retrieved content, shown in the verifier
-  // below the browser; its row in the resource table is highlighted
-  const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
+  // The resource being shown below the browser (in the verifier or the
+  // source viewer, per mode); its row in the resource table is highlighted
+  const [viewing, setViewing] = useState<{
+    resource: ResourceSummary;
+    vc: string;
+    mode: 'verify' | 'source';
+  } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
 
   // The verifier is mounted once and reused for every verification. It fires
   // veri-good-is-ready synchronously on connect, so it accepts calls as soon
@@ -133,9 +142,9 @@ export default function FileBrowserPage() {
     }
   }, [navigate, handleError, session]);
 
-  // Retrieves the clicked resource through the WAS client (a signed request)
-  // and hands its content to the verifier.
-  const openResource = useCallback(async (resource: ResourceSummary) => {
+  // Retrieves a resource through the WAS client (a signed request) and shows
+  // it below the browser: in the verifier, or in the read-only source viewer.
+  const openResource = useCallback(async (resource: ResourceSummary, mode: 'verify' | 'source') => {
     if (!selected) {
       return;
     }
@@ -155,15 +164,60 @@ export default function FileBrowserPage() {
         return;
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
-      setViewing({ resource, vc });
-      verifierRef.current?.verify(vc);
-      verifierRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setViewing({ resource, vc, mode });
+      if (mode === 'verify') {
+        verifierRef.current?.verify(vc);
+        verifierRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     } catch (err) {
       handleError(err);
     } finally {
       setLoading(false);
     }
   }, [navigate, handleError, session, selected]);
+
+  // Moves the credential into the space's Trash collection (the WAS DELETE
+  // endpoint's soft-delete semantics), then refreshes the list.
+  const deleteCredential = useCallback(async (resource: ResourceSummary) => {
+    if (!selected) {
+      return;
+    }
+    setDeleting(true);
+    setError('');
+
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).delete();
+      setDeleteTarget(null);
+      setViewing((v) => (v?.resource.id === resource.id ? null : v));
+      await loadResources(selected);
+    } catch (err) {
+      setDeleteTarget(null);
+      handleError(err);
+    } finally {
+      setDeleting(false);
+    }
+  }, [navigate, handleError, session, selected, loadResources]);
+
+  // The source shown pretty-printed in the read-only viewer
+  const viewingSource = useMemo(() => {
+    if (!viewing) {
+      return '';
+    }
+    try {
+      return JSON.stringify(JSON.parse(viewing.vc), null, 2);
+    } catch {
+      return viewing.vc;
+    }
+  }, [viewing]);
+
+  // item.url is a path on the WAS server; the share sheet wants it absolute
+  const wasOrigin = (getSpaceUrl() ?? '').replace(/\/space\/.*$/, '');
 
   // Uploads credential JSON (pasted, picked, or dropped) to the selected
   // collection under the given name, then refreshes the resource list.
@@ -342,34 +396,51 @@ export default function FileBrowserPage() {
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Name</th>
                   <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Content Type</th>
-                  <th className="px-4 py-3 text-right font-medium hidden md:table-cell">URL</th>
+                  <th className="px-4 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {resources.map((item) => (
                   <tr
                     key={item.id}
-                    onClick={() => openResource(item)}
-                    className={`cursor-pointer ${
-                      viewing?.resource.id === item.id
-                        ? 'bg-indigo-50'
-                        : 'hover:bg-gray-50'
-                    }`}
+                    className={viewing?.resource.id === item.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}
                   >
                     <td className="px-4 py-3">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openResource(item); }}
-                        className="flex items-center gap-2 text-left"
-                      >
+                      <span className="flex items-center gap-2">
                         {FILE_ICON}
-                        <span className="text-gray-700 hover:underline">{item.name ?? item.id}</span>
-                      </button>
+                        <span className="text-gray-700">{item.name ?? item.id}</span>
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
                       {item.contentType}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-400 hidden md:table-cell">
-                      {item.url}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => openResource(item, 'verify')}
+                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          Verify
+                        </button>
+                        <button
+                          onClick={() => openResource(item, 'source')}
+                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          View Source
+                        </button>
+                        <button
+                          onClick={() => setShareTarget(item)}
+                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          Share
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(item)}
+                          className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -383,7 +454,7 @@ export default function FileBrowserPage() {
             component misbehaves when remounted -- and shown only on the
             collection page once a credential has been selected. */}
         <section
-          className={`mt-8 ${selected && viewing ? '' : 'hidden'}`}
+          className={`mt-8 ${selected && viewing?.mode === 'verify' ? '' : 'hidden'}`}
           aria-label="Credential verification"
         >
           <div className="flex items-baseline justify-between mb-3">
@@ -400,6 +471,21 @@ export default function FileBrowserPage() {
             <veri-good ref={handleVerifierRef} />
           </div>
         </section>
+
+        {/* Read-only source viewer, in the same spot as the verifier */}
+        {selected && viewing?.mode === 'source' && (
+          <section className="mt-8" aria-label="Credential source">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">
+                Credential Source
+              </h2>
+              <span className="text-sm text-gray-600">
+                {viewing.resource.name ?? viewing.resource.id}
+              </span>
+            </div>
+            <JSONInput text={viewingSource} readOnly />
+          </section>
+        )}
       </main>
 
       {uploadOpen && (
@@ -408,6 +494,50 @@ export default function FileBrowserPage() {
           error={uploadError}
           onClose={() => setUploadOpen(false)}
           onUpload={uploadCredential}
+        />
+      )}
+
+      {/* Confirm before moving a credential to the Trash collection */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            role="dialog"
+            aria-label="Delete Credential"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">Delete Credential</h2>
+            <p className="text-sm text-gray-600 mb-5">
+              Move <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span> to
+              the Trash collection?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteCredential(deleteTarget)}
+                disabled={deleting}
+                className="bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareTarget && (
+        <ShareCredentialModal
+          resourceName={shareTarget.name ?? shareTarget.id}
+          resourceUrl={`${wasOrigin}${shareTarget.url ?? ''}`}
+          onClose={() => setShareTarget(null)}
         />
       )}
     </div>
