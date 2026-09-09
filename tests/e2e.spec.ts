@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -72,25 +73,76 @@ test('shows the verifier only after a credential is selected', async ({ page }) 
   await expect(verifier).toBeHidden();
 });
 
-test('uploads a credential to the collection', async ({ page }) => {
+const FIXTURE_PATH = new URL('./fixtures/PlaywrightUpload.json', import.meta.url).pathname;
+
+async function openUploadModal(page: Page) {
+  // Upload Credential appears only on the collection page
+  await page.getByRole('button', { name: 'Upload Credential' }).click();
+  return page.getByRole('dialog', { name: 'Upload Credential' });
+}
+
+test('uploads a credential from a picked file', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
-
-  // Upload Credential appears only on the collection page
-  const upload = page.getByRole('button', { name: 'Upload Credential' });
-  await expect(upload).toBeVisible();
+  const modal = await openUploadModal(page);
 
   const chooser = page.waitForEvent('filechooser');
-  await upload.click();
-  await (await chooser).setFiles(
-    new URL('./fixtures/PlaywrightUpload.json', import.meta.url).pathname
-  );
+  await modal.getByRole('button', { name: 'Choose File' }).click();
+  await (await chooser).setFiles(FIXTURE_PATH);
+
+  // picking a file stages it: the name field takes the file's name (still
+  // editable) and the JSON fills the textarea
+  await expect(modal.getByLabel('Name')).toHaveValue('PlaywrightUpload.json');
+  await expect(modal.getByLabel('Credential JSON')).toHaveValue(/VerifiablePresentation/);
+  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
 
   // the refreshed list contains the uploaded credential, and it verifies
   const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
   await expect(row).toBeVisible();
   await row.click();
   await expect(page.getByText('Signature is valid.')).toBeVisible();
+});
+
+test('uploads a credential from pasted JSON under a chosen name', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await modal.getByLabel('Credential JSON').fill(readFileSync(FIXTURE_PATH, 'utf8'));
+  await modal.getByLabel('Name').fill('PastedUpload.json');
+  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'PastedUpload' })).toBeVisible();
+});
+
+test('uploads a credential dropped onto the drop zone', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  const dataTransfer = await page.evaluateHandle((content) => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([content], 'DraggedUpload.json', { type: 'application/json' }));
+    return dt;
+  }, readFileSync(FIXTURE_PATH, 'utf8'));
+  await modal.getByTestId('credential-drop-zone').dispatchEvent('drop', { dataTransfer });
+
+  await expect(modal.getByLabel('Name')).toHaveValue('DraggedUpload.json');
+  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'DraggedUpload' })).toBeVisible();
+});
+
+test('rejects pasted content that is not JSON', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await modal.getByLabel('Credential JSON').fill('not json at all');
+  await modal.getByLabel('Name').fill('bad.json');
+  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+
+  await expect(modal.getByRole('alert')).toHaveText('bad.json is not valid JSON.');
 });
 
 test('verifies a second credential after the first', async ({ page }) => {

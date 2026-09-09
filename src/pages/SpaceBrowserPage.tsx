@@ -5,6 +5,7 @@ import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
+import UploadCredentialModal from '../components/UploadCredentialModal';
 
 // Issuers whose credentials the verifier accepts, keyed by DID
 const ISSUER_DIDS = {
@@ -43,11 +44,12 @@ export default function FileBrowserPage() {
   const [resources, setResources] = useState<ResourceSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [error, setError] = useState('');
   // The clicked resource and its retrieved content, shown in the verifier
   // below the browser; its row in the resource table is highlighted
   const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The verifier is mounted once and reused for every verification. It fires
   // veri-good-is-ready synchronously on connect, so it accepts calls as soon
@@ -163,21 +165,21 @@ export default function FileBrowserPage() {
     }
   }, [navigate, handleError, session, selected]);
 
-  // Uploads a credential file to the selected collection, named after the
-  // file, then refreshes the resource list.
-  const uploadCredential = useCallback(async (file: File) => {
+  // Uploads credential JSON (pasted, picked, or dropped) to the selected
+  // collection under the given name, then refreshes the resource list.
+  const uploadCredential = useCallback(async (name: string, text: string) => {
     if (!selected) {
       return;
     }
     setUploading(true);
-    setError('');
+    setUploadError('');
 
     try {
       let credential: unknown;
       try {
-        credential = JSON.parse(await file.text());
+        credential = JSON.parse(text);
       } catch {
-        setError(`${file.name} is not valid JSON.`);
+        setUploadError(`${name} is not valid JSON.`);
         return;
       }
 
@@ -187,14 +189,15 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      await s.client.space(s.spaceId).collection(selected.id).put(file.name, credential as ResourceData);
+      await s.client.space(s.spaceId).collection(selected.id).put(name, credential as ResourceData);
+      setUploadOpen(false);
       await loadResources(selected);
     } catch (err) {
-      handleError(err);
+      setUploadError(err instanceof Error ? err.message : 'The upload failed.');
     } finally {
       setUploading(false);
     }
-  }, [navigate, handleError, session, selected, loadResources]);
+  }, [navigate, session, selected, loadResources]);
 
   useEffect(() => {
     loadCollections();
@@ -261,28 +264,12 @@ export default function FileBrowserPage() {
             )}
           </nav>
           {selected && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) {
-                    uploadCredential(file);
-                  }
-                }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-              >
-                {uploading ? 'Uploading…' : 'Upload Credential'}
-              </button>
-            </>
+            <button
+              onClick={() => { setUploadError(''); setUploadOpen(true); }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+            >
+              Upload Credential
+            </button>
           )}
         </div>
 
@@ -414,6 +401,15 @@ export default function FileBrowserPage() {
           </div>
         </section>
       </main>
+
+      {uploadOpen && (
+        <UploadCredentialModal
+          busy={uploading}
+          error={uploadError}
+          onClose={() => setUploadOpen(false)}
+          onUpload={uploadCredential}
+        />
+      )}
     </div>
   );
 }
