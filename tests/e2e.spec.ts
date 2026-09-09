@@ -37,12 +37,12 @@ test('logs in and lists the space collections', async ({ page }) => {
   await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
 });
 
-test('verifies a clicked credential and highlights its row', async ({ page }) => {
+test('verifies a credential and highlights its row', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
 
   const row = page.getByRole('row').filter({ hasText: 'LCWExperience' });
-  await row.click();
+  await row.getByRole('button', { name: 'Verify' }).click();
 
   await expect(page.getByText('Signature is valid.')).toBeVisible();
   await expect(page.getByText('Has not been revoked')).toBeVisible();
@@ -64,8 +64,9 @@ test('shows the verifier only after a credential is selected', async ({ page }) 
   await expect(page.getByRole('row').filter({ hasText: 'LCWExperience' })).toBeVisible();
   await expect(verifier).toBeHidden();
 
-  // …only once a credential is selected
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' }).click();
+  // …only once a credential is selected for verification
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Verify' }).click();
   await expect(verifier).toBeVisible();
 
   // and it hides again on leaving the collection
@@ -99,7 +100,7 @@ test('uploads a credential from a picked file', async ({ page }) => {
   // the refreshed list contains the uploaded credential, and it verifies
   const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
   await expect(row).toBeVisible();
-  await row.click();
+  await row.getByRole('button', { name: 'Verify' }).click();
   await expect(page.getByText('Signature is valid.')).toBeVisible();
 });
 
@@ -151,17 +152,70 @@ test('flags invalid JSON and blocks the upload', async ({ page }) => {
   await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeEnabled();
 });
 
+test('shows a credential source in the read-only editor', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'View Source' }).click();
+
+  const source = page.locator('section[aria-label="Credential source"]');
+  await expect(source).toBeVisible();
+  await expect(source.locator('.cm-content')).toContainText('VerifiablePresentation');
+  // the verifier section stays hidden in source mode
+  await expect(page.locator('section[aria-label="Credential verification"]')).toBeHidden();
+});
+
+test('offers the share options', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+
+  const modal = page.getByRole('dialog', { name: 'Share Credential' });
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Add to LinkedIn' })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'QR code' })).toBeVisible();
+
+  // the options are stubs for now
+  await modal.getByRole('button', { name: 'QR code' }).click();
+  await expect(modal.getByRole('status')).toHaveText('QR code is coming soon.');
+});
+
+test('deletes a credential into the Trash collection', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  // PastedUpload.json was created by the pasted-JSON upload test above
+  const row = page.getByRole('row').filter({ hasText: 'PastedUpload' });
+  await row.getByRole('button', { name: 'Delete' }).click();
+
+  const modal = page.getByRole('dialog', { name: 'Delete Credential' });
+  await expect(modal).toContainText('Move PastedUpload.json to the Trash collection?');
+  await modal.getByRole('button', { name: 'Delete' }).click();
+
+  // the refreshed list no longer contains it…
+  await expect(row).toHaveCount(0);
+
+  // …and the space now has a Trash collection holding it
+  await page.getByRole('button', { name: 'Collections' }).click();
+  await page.reload();
+  await page.getByRole('button', { name: /Trash/ }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'PastedUpload' })).toBeVisible();
+});
+
 test('verifies a second credential after the first', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
 
   const experience = page.getByRole('row').filter({ hasText: 'LCWExperience' });
-  await experience.click();
+  await experience.getByRole('button', { name: 'Verify' }).click();
   await expect(page.getByText('LCW Experience Badge').first()).toBeVisible();
   await expect(page.getByText('Signature is valid.')).toBeVisible();
 
   const bachelors = page.getByRole('row').filter({ hasText: 'Bachelors' });
-  await bachelors.click();
+  await bachelors.getByRole('button', { name: 'Verify' }).click();
   // the verifier re-renders with the second credential's content, and the
   // highlight moves to its row
   await expect(page.getByText('Bachelors in Computer Science').first()).toBeVisible();

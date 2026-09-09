@@ -3,12 +3,13 @@ import { createJSONEditor, Mode, type Content, type JsonEditor, type MenuItem } 
 
 interface JSONInputProps {
   text: string;
-  onChange: (text: string) => void;
+  onChange?: (text: string) => void;
+  readOnly?: boolean;
 }
 
 // A JSON text editor with dynamic error checking and highlighting, after
 // exchange-ui's JSONInput: vanilla-jsoneditor in text mode, wrapped for React.
-export default function JSONInput({ text, onChange }: JSONInputProps) {
+export default function JSONInput({ text, onChange, readOnly = false }: JSONInputProps) {
   const refContainer = useRef<HTMLDivElement>(null);
   const refEditor = useRef<JsonEditor | null>(null);
   // Tracks the editor's own text so external updates (a staged file) can be
@@ -22,6 +23,7 @@ export default function JSONInput({ text, onChange }: JSONInputProps) {
       target: refContainer.current!,
       props: {
         mode: Mode.text,
+        readOnly,
         content: { text: lastEditorText.current },
         onRenderMenu: (items: MenuItem[]) =>
           items.filter(
@@ -32,7 +34,7 @@ export default function JSONInput({ text, onChange }: JSONInputProps) {
         onChange: (content: Content) => {
           const updated = 'text' in content ? content.text : JSON.stringify(content.json, null, 2);
           lastEditorText.current = updated;
-          onChangeRef.current(updated);
+          onChangeRef.current?.(updated);
         }
       }
     });
