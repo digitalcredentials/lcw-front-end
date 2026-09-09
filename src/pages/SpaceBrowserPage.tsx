@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
@@ -43,25 +43,24 @@ export default function FileBrowserPage() {
   const [resources, setResources] = useState<ResourceSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  // The clicked resource and its retrieved content, shown in the verifier modal
+  // The clicked resource and its retrieved content, shown in the verifier
+  // below the browser; its row in the resource table is highlighted
   const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
 
-  // <veri-good> fires veri-good-is-ready synchronously on connect, so by the
-  // time React attaches the ref the element accepts calls. The issuer DIDs
-  // must go through setIssuerDids() here: the component reads a <template>
-  // child's .content fragment, which React never populates (it renders
-  // template children as ordinary child nodes), so the declarative form
-  // silently yields an empty issuer list.
-  const handleVerifierRef = useCallback(
-    (node: HTMLElement | null) => {
-      if (node && viewing) {
-        const verifier = node as VeriGoodElement;
-        verifier.setIssuerDids(JSON.stringify(ISSUER_DIDS));
-        verifier.verify(viewing.vc);
-      }
-    },
-    [viewing]
-  );
+  // The verifier is mounted once and reused for every verification. It fires
+  // veri-good-is-ready synchronously on connect, so it accepts calls as soon
+  // as React attaches the ref. The issuer DIDs must go through
+  // setIssuerDids(): the component reads a <template> child's .content
+  // fragment, which React never populates (it renders template children as
+  // ordinary child nodes), so the declarative form silently yields an empty
+  // issuer list.
+  const verifierRef = useRef<VeriGoodElement | null>(null);
+  const handleVerifierRef = useCallback((node: HTMLElement | null) => {
+    verifierRef.current = node as VeriGoodElement | null;
+    if (node) {
+      (node as VeriGoodElement).setIssuerDids(JSON.stringify(ISSUER_DIDS));
+    }
+  }, []);
 
   // Turns a failed request into either a redirect to login or a shown message.
   const handleError = useCallback((err: unknown) => {
@@ -153,6 +152,8 @@ export default function FileBrowserPage() {
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc });
+      verifierRef.current?.verify(vc);
+      verifierRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {
       handleError(err);
     } finally {
@@ -167,12 +168,14 @@ export default function FileBrowserPage() {
   function openCollection(collection: CollectionSummary) {
     setSelected(collection);
     setResources([]);
+    setViewing(null);
     loadResources(collection);
   }
 
   function backToCollections() {
     setSelected(null);
     setResources([]);
+    setViewing(null);
     setError('');
   }
 
@@ -299,7 +302,11 @@ export default function FileBrowserPage() {
                   <tr
                     key={item.id}
                     onClick={() => openResource(item)}
-                    className="hover:bg-gray-50 cursor-pointer"
+                    className={`cursor-pointer ${
+                      viewing?.resource.id === item.id
+                        ? 'bg-indigo-50'
+                        : 'hover:bg-gray-50'
+                    }`}
                   >
                     <td className="px-4 py-3">
                       <button
@@ -322,35 +329,25 @@ export default function FileBrowserPage() {
             </table>
           </div>
         )}
-      </main>
-
-      {/* Credential verifier: retrieved resource content is handed to <veri-good> */}
-      {viewing && (
-        <div
-          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
-          onClick={() => setViewing(null)}
-        >
-          <div
-            role="dialog"
-            aria-label={viewing.resource.name ?? viewing.resource.id}
-            className="w-full max-w-lg max-h-[85vh] overflow-y-auto bg-white rounded-2xl shadow-xl p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800">
+        {/* Credential verifier: mounted once, below the browser. Clicking a
+            resource hands its retrieved content to verify() and highlights
+            the row above. */}
+        <section className="mt-8" aria-label="Credential verification">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">
+              Credential Verification
+            </h2>
+            {viewing && (
+              <span className="text-sm text-gray-600">
                 {viewing.resource.name ?? viewing.resource.id}
-              </h2>
-              <button
-                onClick={() => setViewing(null)}
-                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                Close
-              </button>
-            </div>
+              </span>
+            )}
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
             <veri-good ref={handleVerifierRef} />
           </div>
-        </div>
-      )}
+        </section>
+      </main>
     </div>
   );
 }
