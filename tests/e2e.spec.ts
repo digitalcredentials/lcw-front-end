@@ -50,6 +50,49 @@ test('verifies a clicked credential and highlights its row', async ({ page }) =>
   await expect(row).toHaveClass(/bg-indigo-50/);
 });
 
+test('shows the verifier only after a credential is selected', async ({ page }) => {
+  await logIn(page);
+  const verifier = page.locator('section[aria-label="Credential verification"]');
+
+  // not on the collections page…
+  await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
+  await expect(verifier).toBeHidden();
+
+  // …not on the collection page before a click…
+  await openUniversityCollection(page);
+  await expect(page.getByRole('row').filter({ hasText: 'LCWExperience' })).toBeVisible();
+  await expect(verifier).toBeHidden();
+
+  // …only once a credential is selected
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' }).click();
+  await expect(verifier).toBeVisible();
+
+  // and it hides again on leaving the collection
+  await page.getByRole('button', { name: 'Collections' }).click();
+  await expect(verifier).toBeHidden();
+});
+
+test('uploads a credential to the collection', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  // Upload Credential appears only on the collection page
+  const upload = page.getByRole('button', { name: 'Upload Credential' });
+  await expect(upload).toBeVisible();
+
+  const chooser = page.waitForEvent('filechooser');
+  await upload.click();
+  await (await chooser).setFiles(
+    new URL('./fixtures/PlaywrightUpload.json', import.meta.url).pathname
+  );
+
+  // the refreshed list contains the uploaded credential, and it verifies
+  const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(page.getByText('Signature is valid.')).toBeVisible();
+});
+
 test('verifies a second credential after the first', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);

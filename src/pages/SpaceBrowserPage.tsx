@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { ResourceSummary, CollectionSummary } from '@interop/was-client';
+import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken } from '../lib/auth';
@@ -42,10 +42,12 @@ export default function FileBrowserPage() {
   const [selected, setSelected] = useState<CollectionSummary | null>(null);
   const [resources, setResources] = useState<ResourceSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   // The clicked resource and its retrieved content, shown in the verifier
   // below the browser; its row in the resource table is highlighted
   const [viewing, setViewing] = useState<{ resource: ResourceSummary; vc: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // The verifier is mounted once and reused for every verification. It fires
   // veri-good-is-ready synchronously on connect, so it accepts calls as soon
@@ -161,6 +163,39 @@ export default function FileBrowserPage() {
     }
   }, [navigate, handleError, session, selected]);
 
+  // Uploads a credential file to the selected collection, named after the
+  // file, then refreshes the resource list.
+  const uploadCredential = useCallback(async (file: File) => {
+    if (!selected) {
+      return;
+    }
+    setUploading(true);
+    setError('');
+
+    try {
+      let credential: unknown;
+      try {
+        credential = JSON.parse(await file.text());
+      } catch {
+        setError(`${file.name} is not valid JSON.`);
+        return;
+      }
+
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      await s.client.space(s.spaceId).collection(selected.id).put(file.name, credential as ResourceData);
+      await loadResources(selected);
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setUploading(false);
+    }
+  }, [navigate, handleError, session, selected, loadResources]);
+
   useEffect(() => {
     loadCollections();
   }, [loadCollections]);
@@ -208,22 +243,48 @@ export default function FileBrowserPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-sm mb-4" aria-label="Breadcrumb">
-          <button
-            onClick={backToCollections}
-            disabled={!selected}
-            className="text-gray-500 hover:text-gray-700 disabled:text-gray-400 disabled:cursor-default transition-colors"
-          >
-            Collections
-          </button>
+        {/* Breadcrumb and collection actions */}
+        <div className="flex items-center justify-between mb-4">
+          <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
+            <button
+              onClick={backToCollections}
+              disabled={!selected}
+              className="text-gray-500 hover:text-gray-700 disabled:text-gray-400 disabled:cursor-default transition-colors"
+            >
+              Collections
+            </button>
+            {selected && (
+              <>
+                <span className="text-gray-300" aria-hidden="true">/</span>
+                <span className="text-gray-800 font-medium">{selected.name || selected.id}</span>
+              </>
+            )}
+          </nav>
           {selected && (
             <>
-              <span className="text-gray-300" aria-hidden="true">/</span>
-              <span className="text-gray-800 font-medium">{selected.name || selected.id}</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) {
+                    uploadCredential(file);
+                  }
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {uploading ? 'Uploading…' : 'Upload Credential'}
+              </button>
             </>
           )}
-        </nav>
+        </div>
 
         {/* States */}
         {loading && (
@@ -331,8 +392,13 @@ export default function FileBrowserPage() {
         )}
         {/* Credential verifier: mounted once, below the browser. Clicking a
             resource hands its retrieved content to verify() and highlights
-            the row above. */}
-        <section className="mt-8" aria-label="Credential verification">
+            the row above. Hidden with CSS rather than unmounted -- the
+            component misbehaves when remounted -- and shown only on the
+            collection page once a credential has been selected. */}
+        <section
+          className={`mt-8 ${selected && viewing ? '' : 'hidden'}`}
+          aria-label="Credential verification"
+        >
           <div className="flex items-baseline justify-between mb-3">
             <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">
               Credential Verification
