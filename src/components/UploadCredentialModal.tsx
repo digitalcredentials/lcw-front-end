@@ -1,4 +1,5 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useMemo, useRef, useState, type DragEvent } from 'react';
+import JSONInput from './JSONInput';
 
 interface UploadCredentialModalProps {
   busy: boolean;
@@ -16,6 +17,17 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
   const [name, setName] = useState('');
   const [text, setText] = useState('');
   const [dragActive, setDragActive] = useState(false);
+
+  // The editor highlights errors as the user types; this gates the Upload
+  // button on the same condition.
+  const jsonValid = useMemo(() => {
+    try {
+      JSON.parse(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [text]);
 
   async function stageFile(file: File | undefined) {
     if (file) {
@@ -94,17 +106,10 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
 
         <div className="space-y-3">
           <div>
-            <label htmlFor="credential-json" className="block text-sm font-medium text-gray-700 mb-1">
+            <span className="block text-sm font-medium text-gray-700 mb-1">
               Credential JSON
-            </label>
-            <textarea
-              id="credential-json"
-              rows={6}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder='{"@context": [...], "type": ["VerifiablePresentation"], ...}'
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 font-mono placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
+            </span>
+            <JSONInput text={text} onChange={setText} />
           </div>
           <div>
             <label htmlFor="credential-name" className="block text-sm font-medium text-gray-700 mb-1">
@@ -121,7 +126,7 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
           </div>
           <button
             onClick={() => onUpload(name.trim(), text)}
-            disabled={busy || !text.trim() || !name.trim()}
+            disabled={busy || !text.trim() || !name.trim() || !jsonValid}
             className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
           >
             {busy ? 'Uploading…' : 'Upload'}
