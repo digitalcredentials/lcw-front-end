@@ -30,3 +30,16 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+## Deploy
+
+The site is served from the `dcc-lcw-ui` S3 bucket behind CloudFront
+(`https://dk59u8ewdxjcs.cloudfront.net`, distribution `E6VT0O094YUC1`).
+`npm run build` bakes in the deployed lcw-back-end API URL from
+`.env.production` (local dev keeps using `.env`).
+
+```bash
+npm run build
+aws s3 sync dist/ s3://dcc-lcw-ui/ --delete
+aws cloudfront create-invalidation --distribution-id E6VT0O094YUC1 --paths "/*"
+```
