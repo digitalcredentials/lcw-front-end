@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -57,6 +58,30 @@ test('logs in and lists the space collections', async ({ page }) => {
   await logIn(page);
   await expect(page.getByText('Verifiable Credentials Collection')).toBeVisible();
   await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
+});
+
+test('creates a new collection', async ({ page }) => {
+  await logIn(page);
+  await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
+
+  // New Collection is offered on the collections page
+  await page.getByRole('button', { name: 'New Collection' }).click();
+  const modal = page.getByRole('dialog', { name: 'New Collection' });
+  await modal.getByLabel('Name').fill('Playwright Made This');
+  await modal.getByRole('button', { name: 'Create' }).click();
+
+  // the refreshed list contains it (id = name with whitespace dashed), and it
+  // opens as an empty collection
+  const row = page.getByRole('row').filter({ hasText: 'Playwright-Made-This' });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: /Playwright-Made-This/ }).click();
+  await expect(page.getByText('This collection is empty.')).toBeVisible();
+
+  // clean up so the next run can create it again
+  execSync(
+    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/collections/Playwright-Made-This/description.json --region us-east-1',
+    { stdio: 'ignore' }
+  );
 });
 
 test('verifies a credential and highlights its row', async ({ page }) => {

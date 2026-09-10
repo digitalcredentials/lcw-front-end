@@ -59,6 +59,10 @@ export default function FileBrowserPage() {
   const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
+  const [newCollectionOpen, setNewCollectionOpen] = useState(false);
+  const [newCollectionName, setNewCollectionName] = useState('');
+  const [creatingCollection, setCreatingCollection] = useState(false);
+  const [newCollectionError, setNewCollectionError] = useState('');
 
   // The verifier is mounted once and reused for every verification. It fires
   // veri-good-is-ready synchronously on connect, so it accepts calls as soon
@@ -253,6 +257,39 @@ export default function FileBrowserPage() {
     }
   }, [navigate, session, selected, loadResources]);
 
+  // Creates a collection named by the user via a PUT of its description (the
+  // WAS create-by-id path). The id is the name with whitespace dashed, since
+  // it becomes a path segment and an S3 prefix; force acknowledges that
+  // configure() cannot read a description that does not exist yet.
+  const createCollection = useCallback(async () => {
+    const name = newCollectionName.trim();
+    if (!name) {
+      return;
+    }
+    setCreatingCollection(true);
+    setNewCollectionError('');
+
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      await s.client.space(s.spaceId).collection(name.replace(/\s+/g, '-')).configure({
+        name,
+        force: true
+      });
+      setNewCollectionOpen(false);
+      setNewCollectionName('');
+      await loadCollections();
+    } catch (err) {
+      setNewCollectionError(err instanceof Error ? err.message : 'Could not create the collection.');
+    } finally {
+      setCreatingCollection(false);
+    }
+  }, [navigate, session, newCollectionName, loadCollections]);
+
   useEffect(() => {
     loadCollections();
   }, [loadCollections]);
@@ -317,12 +354,19 @@ export default function FileBrowserPage() {
               </>
             )}
           </nav>
-          {selected && (
+          {selected ? (
             <button
               onClick={() => { setUploadError(''); setUploadOpen(true); }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
             >
               Upload Credential
+            </button>
+          ) : (
+            <button
+              onClick={() => { setNewCollectionError(''); setNewCollectionName(''); setNewCollectionOpen(true); }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+            >
+              New Collection
             </button>
           )}
         </div>
@@ -495,6 +539,65 @@ export default function FileBrowserPage() {
           onClose={() => setUploadOpen(false)}
           onUpload={uploadCredential}
         />
+      )}
+
+      {/* Name and create a new collection */}
+      {newCollectionOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setNewCollectionOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-label="New Collection"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">New Collection</h2>
+            <form
+              onSubmit={(e) => { e.preventDefault(); createCollection(); }}
+              className="space-y-4"
+            >
+              <div>
+                <label htmlFor="collection-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Name
+                </label>
+                <input
+                  id="collection-name"
+                  type="text"
+                  autoFocus
+                  value={newCollectionName}
+                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  placeholder="e.g. Diplomas"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+              </div>
+
+              {newCollectionError && (
+                <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {newCollectionError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNewCollectionOpen(false)}
+                  className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingCollection || !newCollectionName.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  {creatingCollection ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Confirm before moving a credential to the Trash collection */}
