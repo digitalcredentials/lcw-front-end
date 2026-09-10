@@ -1,19 +1,20 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { setToken } from '../lib/auth';
+import { Link } from 'react-router-dom';
+import { register } from '../lib/register';
 
 export default function RegisterPage() {
-  const navigate = useNavigate();
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [registrationCode, setRegistrationCode] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    setNotice('');
 
     if (password !== confirmPassword) {
       setError('Passwords do not match.');
@@ -23,11 +24,11 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      // Placeholder registration flow for client-side testing.
-      setToken('dummy-token');
-      navigate('/files');
-    } catch {
-      setError('Unable to register. Please try again.');
+      // Registration finishes by email: the back end starts the registration
+      // flow, which sends a confirmation link.
+      setNotice(await register(email, password, registrationCode));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to register. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -40,22 +41,6 @@ export default function RegisterPage() {
         <p className="text-sm text-gray-500 mb-6">Register to access your files</p>
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          <div>
-            <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-              Username
-            </label>
-            <input
-              id="username"
-              type="text"
-              autoComplete="username"
-              required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              placeholder="jchartrand"
-            />
-          </div>
-
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
               Email
@@ -104,9 +89,31 @@ export default function RegisterPage() {
             />
           </div>
 
+          <div>
+            <label htmlFor="registrationCode" className="block text-sm font-medium text-gray-700 mb-1">
+              Registration Code
+            </label>
+            <input
+              id="registrationCode"
+              type="text"
+              autoComplete="off"
+              required
+              value={registrationCode}
+              onChange={(e) => setRegistrationCode(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              placeholder="Your registration code"
+            />
+          </div>
+
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
+            </p>
+          )}
+
+          {notice && (
+            <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              {notice}
             </p>
           )}
 
@@ -115,7 +122,7 @@ export default function RegisterPage() {
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
           >
-            {loading ? 'Creating account…' : 'Create account'}
+            {loading ? 'Registering…' : 'Create account'}
           </button>
         </form>
 

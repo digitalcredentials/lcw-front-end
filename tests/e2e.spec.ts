@@ -31,6 +31,28 @@ test('rejects a wrong password', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveText('Invalid email or password.');
 });
 
+test('rejects registration with an invalid registration code', async ({ page }) => {
+  await page.goto('/#/register');
+  await page.getByLabel('Email').fill('someone@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('a brand new passphrase');
+  await page.getByLabel('Confirm password').fill('a brand new passphrase');
+  await page.getByLabel('Registration Code').fill('not-the-code');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByRole('alert')).toHaveText(
+    "Your registration code isn't valid. Please try again or obtain a new code."
+  );
+});
+
+test('rejects registration when passwords do not match', async ({ page }) => {
+  await page.goto('/#/register');
+  await page.getByLabel('Email').fill('someone@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('one passphrase');
+  await page.getByLabel('Confirm password').fill('a different passphrase');
+  await page.getByLabel('Registration Code').fill('anything');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Passwords do not match.');
+});
+
 test('logs in and lists the space collections', async ({ page }) => {
   await logIn(page);
   await expect(page.getByText('Verifiable Credentials Collection')).toBeVisible();
