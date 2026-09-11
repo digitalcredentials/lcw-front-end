@@ -3,15 +3,43 @@ import { useState } from 'react';
 interface ShareCredentialModalProps {
   resourceName: string;
   // Absolute URL of the credential in the space, offered to the device share
-  // sheet
+  // sheet and returned as the public link
   resourceUrl: string;
+  // Marks the credential world-readable and resolves to its public URL
+  onCreatePublicLink: () => Promise<string>;
   onClose: () => void;
 }
 
-const STUB_OPTIONS = ['Create Public Link', 'Add to LinkedIn', 'QR code'];
+const STUB_OPTIONS = ['Add to LinkedIn', 'QR code'];
 
-export default function ShareCredentialModal({ resourceName, resourceUrl, onClose }: ShareCredentialModalProps) {
+export default function ShareCredentialModal({ resourceName, resourceUrl, onCreatePublicLink, onClose }: ShareCredentialModalProps) {
   const [notice, setNotice] = useState('');
+  const [publicLink, setPublicLink] = useState('');
+  const [creatingLink, setCreatingLink] = useState(false);
+  const [linkError, setLinkError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  async function createPublicLink() {
+    setCreatingLink(true);
+    setLinkError('');
+    try {
+      setPublicLink(await onCreatePublicLink());
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not create the public link.');
+    } finally {
+      setCreatingLink(false);
+    }
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(publicLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable; the link is selectable in the input
+    }
+  }
   // The device share sheet (email, message, AirDrop, ...) exists only where
   // the Web Share API does
   const canDeviceShare = typeof navigator.share === 'function';
@@ -47,6 +75,41 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onClos
         <p className="text-sm text-gray-500 mb-4">{resourceName}</p>
 
         <div className="space-y-2">
+          {!publicLink ? (
+            <button
+              onClick={createPublicLink}
+              disabled={creatingLink}
+              className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
+            >
+              {creatingLink ? 'Creating public link…' : 'Create Public Link'}
+            </button>
+          ) : (
+            <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  aria-label="Public link"
+                  value={publicLink}
+                  onFocus={(e) => e.target.select()}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 bg-gray-50"
+                />
+                <button
+                  onClick={copyLink}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-md px-3 transition-colors"
+                >
+                  {copied ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">
+                Anyone with this link can view this credential.
+              </p>
+            </div>
+          )}
+          {linkError && (
+            <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {linkError}
+            </p>
+          )}
           {STUB_OPTIONS.map((option) => (
             <button
               key={option}

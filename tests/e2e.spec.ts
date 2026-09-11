@@ -222,6 +222,34 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
   await expect(page.locator('section[aria-label="Credential verification"]')).toBeHidden();
 });
 
+test('creates a public link that serves the credential unsigned', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  const modal = page.getByRole('dialog', { name: 'Share Credential' });
+  await modal.getByRole('button', { name: 'Create Public Link' }).click();
+
+  const link = await modal.getByLabel('Public link').inputValue();
+  expect(link).toContain('/UniversityOfToronto/LCWExperience.json');
+
+  // the link works without any authorization
+  const res = await page.request.get(link);
+  expect(res.status()).toBe(200);
+  expect(await res.text()).toContain('VerifiablePresentation');
+
+  // ...and only for this resource: a sibling stays private
+  const sibling = link.replace('LCWExperience.json', 'Bachelors.json');
+  expect((await page.request.get(sibling)).status()).not.toBe(200);
+
+  // clean up the policy so the next run starts private
+  execSync(
+    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
+    { stdio: 'ignore' }
+  );
+});
+
 test('offers the share options', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
@@ -232,6 +260,7 @@ test('offers the share options', async ({ page }) => {
   const modal = page.getByRole('dialog', { name: 'Share Credential' });
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
   await expect(modal.getByRole('button', { name: 'Add to LinkedIn' })).toBeVisible();
+  // (Create Public Link is real; the remaining options are stubs)
   await expect(modal.getByRole('button', { name: 'QR code' })).toBeVisible();
 
   // the options are stubs for now
