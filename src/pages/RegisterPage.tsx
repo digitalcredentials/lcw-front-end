@@ -47,8 +47,7 @@ export default function RegisterPage() {
           </p>
         </header>
         <div className="w-full bg-white rounded-2xl shadow-md p-8">
-        <h2 className="text-2xl font-semibold text-gray-800 mb-1">Create account</h2>
-        <p className="text-sm text-gray-500 mb-6">Register to access your files</p>
+        <h2 className="text-2xl font-semibold text-gray-800 mb-6">Create account</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
