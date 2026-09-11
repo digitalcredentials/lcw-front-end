@@ -636,10 +636,20 @@ export default function FileBrowserPage() {
         </div>
       )}
 
-      {shareTarget && (
+      {shareTarget && selected && (
         <ShareCredentialModal
           resourceName={shareTarget.name ?? shareTarget.id}
           resourceUrl={`${wasOrigin}${shareTarget.url ?? ''}`}
+          onCreatePublicLink={async () => {
+            const s = await session;
+            if (!s) {
+              throw new Error('Your session has expired. Sign in again.');
+            }
+            // Only this resource becomes world-readable; the collection
+            // listing and its other members stay private
+            await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).setPublic();
+            return `${wasOrigin}${shareTarget.url ?? ''}`;
+          }}
           onClose={() => setShareTarget(null)}
         />
       )}
