@@ -39,8 +39,18 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-md p-8">
-        <h1 className="text-2xl font-semibold text-gray-800 mb-1">Sign in</h1>
+      <div className="w-full max-w-sm">
+        <header className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">Learner Credential Wallet</h1>
+          <p className="mt-3 text-xs font-semibold tracking-wide text-amber-700">
+            THIS IS A SANDBOX FOR TESTING AND WILL BE RESET FREQUENTLY
+          </p>
+          <p className="mt-1 text-xs font-semibold tracking-wide text-amber-700">
+            DO NOT STORE ANYTHING YOU&#39;D LIKE TO KEEP
+          </p>
+        </header>
+        <div className="w-full bg-white rounded-2xl shadow-md p-8">
+        <h2 className="text-2xl font-semibold text-gray-800 mb-1">Sign in</h2>
         <p className="text-sm text-gray-500 mb-6">Enter your credentials to continue</p>
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -97,6 +107,7 @@ export default function LoginPage() {
             Register
           </Link>
         </p>
+        </div>
       </div>
     </div>
   );

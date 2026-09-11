@@ -24,6 +24,15 @@ async function openUniversityCollection(page: Page) {
   await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
 }
 
+test('shows the sandbox banner on the login and registration pages', async ({ page }) => {
+  for (const path of ['/#/login', '/#/register']) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { name: 'Learner Credential Wallet' })).toBeVisible();
+    await expect(page.getByText('THIS IS A SANDBOX FOR TESTING AND WILL BE RESET FREQUENTLY')).toBeVisible();
+    await expect(page.getByText("DO NOT STORE ANYTHING YOU'D LIKE TO KEEP")).toBeVisible();
+  }
+});
+
 test('rejects a wrong password', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
