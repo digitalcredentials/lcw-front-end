@@ -3,7 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 // Smoke tests against a deployed instance. Opt-in: they run only when
 // DEPLOYED_URL is set, so the regular local suite never touches production.
 //
-//   DEPLOYED_URL=https://dk59u8ewdxjcs.cloudfront.net npx playwright test tests/deployed.spec.ts
+//   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 //
 // They use the deployed demo account (its registered spaceURL points at the
 // deployed WAS API) and only read -- no uploads or deletes against the real

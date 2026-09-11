@@ -60,7 +60,7 @@ verification, source view, share options, and the delete round trip into
 `Trash`. The Vite dev server is started or reused automatically.
 
 ```bash
-DEPLOYED_URL=https://dk59u8ewdxjcs.cloudfront.net npx playwright test tests/deployed.spec.ts
+DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 ```
 
 Opt-in smoke tests against a deployed instance (login as the deployed demo
@@ -89,8 +89,9 @@ See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rule
 
 ## Deploy
 
-The site is served from the `dcc-lcw-ui` S3 bucket behind CloudFront
-(`https://dk59u8ewdxjcs.cloudfront.net`, distribution `E6VT0O094YUC1`).
+The site is served at [https://lcw-sandbox.org](https://lcw-sandbox.org)
+from the `dcc-lcw-ui` S3 bucket behind CloudFront (distribution
+`E6VT0O094YUC1`; the `dk59u8ewdxjcs.cloudfront.net` domain still works).
 `npm run build` bakes in the deployed lcw-back-end API URL from
 `.env.production` (local dev keeps using `.env`).
 
