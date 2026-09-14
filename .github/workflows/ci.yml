@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever its base. Filtering on `branches: [main]`
+  # here would filter on the *base* branch, silently skipping stacked pull
+  # requests that target another branch -- which is exactly when a check is
+  # most useful.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
