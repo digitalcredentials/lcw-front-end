@@ -13,6 +13,21 @@ for repo in "$BE_REPO" "$WAS_REPO"; do
   [ -d "$repo" ] || { echo "missing repo: $repo" >&2; exit 1; }
 done
 
+# sam build deletes and recreates .aws-sam/build. If sam local start-api is
+# already running with warm containers, its containers have those exact paths
+# mounted, and the rebuild pulls the directory out from under them. The symptom
+# is not a build error: routes start failing with
+# `Runtime.ImportModuleError: Cannot find module 'app'` and
+# `getcwd: cannot access parent directories`, which read like code bugs. Refuse
+# to run rather than leave a half-broken stack behind.
+running=$(pgrep -f 'sam local start-api' || true)
+if [ -n "$running" ]; then
+  echo "sam local start-api is already running (pid(s): $(echo $running | tr '\n' ' '))." >&2
+  echo "This script runs sam build, which would corrupt those warm containers." >&2
+  echo "Stop the sam local processes first, then re-run." >&2
+  exit 1
+fi
+
 echo "==> docker network"
 docker network inspect lcw-local >/dev/null 2>&1 || docker network create lcw-local >/dev/null
 

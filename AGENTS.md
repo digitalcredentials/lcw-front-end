@@ -140,7 +140,7 @@ AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest \
 node scripts/local-stack/seed.mjs
 ```
 
-## Four things that will bite you
+## Five things that will bite you
 
 These were each a dead end once. They are why `up.sh` and
 `patch-built-template.mjs` exist.
@@ -164,7 +164,18 @@ it back to `wallet-test`, which is why that API needs `--env-vars env.json`.
 Function-level values beat the `Globals` injection, so this override cannot
 live in the patch.
 
-**4. DynamoDB Local needs `-sharedDb`.** Without it, tables are namespaced per
+**4. Never run `up.sh` while `sam local` is running.** `up.sh` runs `sam build`,
+which deletes and recreates `.aws-sam/build`. A running `sam local start-api`
+with `--warm-containers EAGER` has those exact paths mounted into its
+containers, so the rebuild pulls the directory out from under them. It does not
+fail as a build error. Routes start returning
+`Runtime.ImportModuleError: Cannot find module 'app'` and
+`shell-init: getcwd: cannot access parent directories`, which read like broken
+code and are not. A suite that normally takes a minute took six and failed ten
+tests this way. `up.sh` now refuses to run if it finds a `sam local` process, so
+the order is: stop the APIs, run `up.sh`, start the APIs again.
+
+**5. DynamoDB Local needs `-sharedDb`.** Without it, tables are namespaced per
 access-key/region pair, and the seed script and the Lambdas end up looking at
 two different namespaces — the table is created, and the Lambda still reports
 `ResourceNotFoundException`.
