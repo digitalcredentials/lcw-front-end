@@ -2,6 +2,17 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
+// Deletes an object from the demo space. When the space lives in the local S3
+// substitute rather than real S3, LOCAL_S3_URL points the CLI at it (see
+// AGENTS.md); unset, this deletes from real S3 as before.
+function removeFromSpace(key: string) {
+  const endpoint = process.env.LOCAL_S3_URL ? ` --endpoint-url ${process.env.LOCAL_S3_URL}` : '';
+  execSync(
+    `aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/${key} --region us-east-1${endpoint}`,
+    { stdio: 'ignore' }
+  );
+}
+
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
 // - the was-server-aws sam local API on :3000 (the space)
@@ -87,10 +98,7 @@ test('creates a new collection', async ({ page }) => {
   await expect(page.getByText('This collection is empty.')).toBeVisible();
 
   // clean up so the next run can create it again
-  execSync(
-    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/collections/Playwright-Made-This/description.json --region us-east-1',
-    { stdio: 'ignore' }
-  );
+  removeFromSpace('collections/Playwright-Made-This/description.json');
 });
 
 test('verifies a credential and highlights its row', async ({ page }) => {
@@ -244,10 +252,7 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   expect((await page.request.get(sibling)).status()).not.toBe(200);
 
   // clean up the policy so the next run starts private
-  execSync(
-    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
-    { stdio: 'ignore' }
-  );
+  removeFromSpace('policies/UniversityOfToronto/LCWExperience.json.json');
 });
 
 test('offers the share options', async ({ page }) => {
