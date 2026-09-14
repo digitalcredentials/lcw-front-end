@@ -45,6 +45,12 @@ Both run on a Docker network named `lcw-local`, which the `sam local` Lambda
 containers join so they can reach them by container name. Nothing touches AWS
 and no credentials are needed.
 
+It is not fully offline, though: `seed.mjs` signs the Bachelors credential, and
+signing resolves the JSON-LD contexts the credential references over the
+network (`w3.org`, `purl.imsglobal.org`, `w3id.org`). They are cached per run,
+not vendored, so seeding on a disconnected machine fails in `documentLoader`
+with a context fetch error rather than anything about AWS.
+
 ### Bring it up
 
 ```bash
