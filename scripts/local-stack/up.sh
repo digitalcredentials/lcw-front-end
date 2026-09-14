@@ -73,6 +73,31 @@ nc -z localhost 8000 >/dev/null 2>&1 || { echo "dynamodb-local did not become re
 
 # sam local reads .aws-sam/build, so every source change needs a rebuild, and
 # every rebuild drops the injected environment and needs re-patching.
+# Every S3 client in was-server-aws must be constructed with forcePathStyle
+# when the endpoint is overridden, or the bucket goes in the hostname
+# (my-bucket.lcw-minio) and never resolves. That change is NOT committed
+# upstream, so a fresh checkout does not have it -- and the failure is silent:
+# the stack comes up, prints Ready, and then every space request hangs until
+# the caller times out. Check before building rather than after.
+missing_path_style=$(
+  grep -rl --include='*.mjs' --include='*.js' --exclude-dir=node_modules \
+    'new S3Client' "$WAS_REPO/src" 2>/dev/null \
+    | while read -r f; do grep -q 'forcePathStyle' "$f" || echo "$f"; done
+)
+if [ -n "$missing_path_style" ]; then
+  echo "was-server-aws has S3 clients without forcePathStyle:" >&2
+  echo "$missing_path_style" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "Each must be constructed as:" >&2
+  echo "  const s3 = new S3Client(" >&2
+  echo "    process.env.AWS_ENDPOINT_URL_S3 ? { forcePathStyle: true } : {}" >&2
+  echo "  );" >&2
+  echo "" >&2
+  echo "Without it the stack starts and every space request hangs. See the" >&2
+  echo "\"one source change\" section of lcw-front-end/AGENTS.md." >&2
+  exit 1
+fi
+
 echo "==> sam build + patch (was-server-aws)"
 (cd "$WAS_REPO" && sam build >/dev/null)
 node "$HERE/patch-built-template.mjs" "$WAS_REPO/.aws-sam/build/template.yaml"

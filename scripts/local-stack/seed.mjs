@@ -52,10 +52,24 @@ const SEED_PASSPHRASE = process.env.SEED_PASSPHRASE;
 // Deliberately not defaulted to DEMO_PASSPHRASE. That passphrase is committed
 // in this repo, so falling back to it would hand your account a key anyone can
 // derive -- and you would not be able to log in with the passphrase you meant.
+const seedExtra = Boolean(SEED_EMAIL) && Boolean(SEED_PASSPHRASE);
 if (Boolean(SEED_EMAIL) !== Boolean(SEED_PASSPHRASE)) {
+  // A warning rather than an exit: up.sh runs this under `set -e`, so exiting
+  // here would abort the whole bring-up over a half-set variable and leave the
+  // demo account unseeded. Loud, but it still seeds what it can.
   const missing = SEED_EMAIL ? "SEED_PASSPHRASE" : "SEED_EMAIL";
-  console.error(`${missing} is not set, so no extra account was seeded. Set both:`);
-  console.error("  SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' npm run seed");
+  console.warn(`\n  !! ${missing} is not set, so no extra account will be seeded.`);
+  console.warn("  !! Set both to add one:");
+  console.warn("  !!   SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' npm run seed\n");
+}
+
+// 2. Seeding the demo email as the "extra" account would overwrite the demo
+// row's did and spaceURL and silently break every e2e test.
+if (SEED_EMAIL && SEED_EMAIL.toLowerCase() === DEMO_EMAIL.toLowerCase()) {
+  console.error(`SEED_EMAIL is the demo account (${DEMO_EMAIL}).`);
+  console.error("Seeding it again with a different passphrase would replace the");
+  console.error("demo row's DID and space, which every e2e test depends on.");
+  console.error("Use a different address, or unset SEED_EMAIL to seed only the demo.");
   process.exit(1);
 }
 
@@ -254,7 +268,7 @@ await ensureTable();
 // space id.
 await seedAccount({ email: DEMO_EMAIL, passphrase: DEMO_PASSPHRASE, spaceId: SPACE_ID });
 
-if (SEED_EMAIL) {
+if (seedExtra) {
   await seedAccount({
     email: SEED_EMAIL,
     passphrase: SEED_PASSPHRASE,

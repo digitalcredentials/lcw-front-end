@@ -12,7 +12,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:e2e:local": "LOCAL_S3_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest playwright test tests/e2e.spec.ts --workers=1"
+    "test:e2e:local": "LOCAL_S3_URL=http://localhost:9000 AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= playwright test tests/e2e.spec.ts --workers=1"
   },
   "dependencies": {
     "@digitalcredentials/veri-good": "^0.0.0-beta.7",

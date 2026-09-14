@@ -140,7 +140,7 @@ instead. Registering on the deployed sandbox is a separate thing and does work.
 To reset the space:
 
 ```bash
-AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest \
+AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
   aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/ --recursive \
   --endpoint-url http://localhost:9000
 node scripts/local-stack/seed.mjs
@@ -211,8 +211,11 @@ container name. The installed AWS SDK has no `AWS_S3_FORCE_PATH_STYLE` env var,
 so path style has to be set in code. It is gated on the endpoint override, which
 is never set in a deployed environment, so real S3 behaviour is unchanged.
 
-This change is not committed upstream, so **anything new that reaches S3 needs
-it applied too**. A handler that misses it does not fail loudly: the request
+This change is not committed upstream, so a fresh checkout of `was-server-aws`
+does not have it and **anything new that reaches S3 needs it applied too**.
+`up.sh` checks every file constructing an `S3Client` before it builds, and stops
+with the list if any lacks it — otherwise the stack comes up, prints `Ready`,
+and hangs on the first space request. A handler that misses it does not fail loudly: the request
 simply hangs until the caller times out, because `bucket.lcw-minio` never
 resolves.
 
@@ -229,9 +232,15 @@ target MinIO instead of real S3, and it pins the suite to one worker and to
 
 ```bash
 LOCAL_S3_URL=http://localhost:9000 \
-AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest \
+AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
   playwright test tests/e2e.spec.ts --workers=1
 ```
+
+`AWS_SESSION_TOKEN=` is not decoration. If you have a live SSO or assume-role
+session in the shell, its token is inherited, MinIO rejects it with
+`InvalidTokenId`, and the two tests that clean up after themselves fail with
+nothing pointing at the cause. Clearing it is what makes the static
+`localtest` credentials take effect.
 
 Bare `npm run test:e2e` is `playwright test` with no arguments. It runs the
 whole `tests/` directory in parallel with none of that environment, so the
