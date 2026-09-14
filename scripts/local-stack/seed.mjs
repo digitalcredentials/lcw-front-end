@@ -52,8 +52,9 @@ const SEED_PASSPHRASE = process.env.SEED_PASSPHRASE;
 // Deliberately not defaulted to DEMO_PASSPHRASE. That passphrase is committed
 // in this repo, so falling back to it would hand your account a key anyone can
 // derive -- and you would not be able to log in with the passphrase you meant.
-if (SEED_EMAIL && !SEED_PASSPHRASE) {
-  console.error("SEED_EMAIL is set but SEED_PASSPHRASE is not. Set both:");
+if (Boolean(SEED_EMAIL) !== Boolean(SEED_PASSPHRASE)) {
+  const missing = SEED_EMAIL ? "SEED_PASSPHRASE" : "SEED_EMAIL";
+  console.error(`${missing} is not set, so no extra account was seeded. Set both:`);
   console.error("  SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' npm run seed");
   process.exit(1);
 }

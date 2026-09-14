@@ -61,21 +61,27 @@ npm install          # first time only
 
 `up.sh` is idempotent. It creates the network, starts the two substitute
 containers, runs `sam build` for both back ends, patches the built templates
-(see below), and seeds the demo account and space. Then start the three
-foreground processes, each in its own terminal:
+(see below), and seeds the demo account and space.
+
+It then prints the three foreground processes to start, each in its own
+terminal, with **absolute paths for your checkout** — use what it prints. The
+shape, written from the directory that holds all three repos as siblings:
 
 ```bash
 # the space, on :3000
-cd ../was-server-aws && sam local start-api --port 3000 --region us-east-1 \
+cd was-server-aws && sam local start-api --port 3000 --region us-east-1 \
   --docker-network lcw-local --warm-containers EAGER
 
 # the login API, on :3001
-cd ../lcw-back-end && sam local start-api --port 3001 --region us-east-1 \
+cd lcw-back-end && sam local start-api --port 3001 --region us-east-1 \
   --env-vars env.json --docker-network lcw-local --warm-containers EAGER
 
 # the front end, on :5173
-npm run dev
+cd lcw-front-end && npm run dev
 ```
+
+Each path is relative to the repos' shared parent, not to
+`scripts/local-stack` where you ran `up.sh`.
 
 Sign in at http://localhost:5173:
 
@@ -144,6 +150,13 @@ node scripts/local-stack/seed.mjs
 
 These were each a dead end once. They are why `up.sh` and
 `patch-built-template.mjs` exist.
+
+Re-run `sam build` before any deploy of either back end. `sam deploy` defaults
+to `.aws-sam/build/template.yaml`, and neither back end pins `template_file`, so
+deploying straight after using the local stack picks up a patched template full
+of container-name endpoints and `localtest` credentials. CloudFormation rejects
+the reserved `AWS_*` keys, so it fails rather than deploying something wrong —
+but it fails confusingly, and a fresh `sam build` discards the patch.
 
 **1. `sam local` only injects env vars the template already declares.** So the
 endpoint overrides cannot come from `--env-vars`, and `--container-env-vars`

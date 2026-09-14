@@ -4,7 +4,15 @@
 // already declares, and `--container-env-vars` applies only to debug sessions,
 // so the endpoint overrides have to come from the template itself. Patching the
 // *built* template (.aws-sam/build, generated and gitignored) keeps the
-// deployable template.yaml untouched.
+// source template.yaml untouched.
+//
+// That is not the same as being deploy-safe. `sam deploy` defaults to
+// .aws-sam/build/template.yaml, and neither back end pins `template_file`, so a
+// `sam deploy` after using the local stack would pick up a patched template
+// carrying container-name endpoints and `localtest` credentials.
+// CloudFormation rejects the reserved AWS_* environment keys, so it fails
+// rather than deploying something wrong -- but it fails confusingly. Re-run
+// `sam build` before any deploy to discard the patch.
 //
 // Re-run after every `sam build`. Idempotent.
 // Usage: node patch-built-template.mjs <path-to-built-template.yaml>
@@ -116,7 +124,7 @@ if (globals === -1) {
         // Merge into the existing Variables block: replace any key we also
         // set, then append the rest. No duplicate keys, and any variable the
         // template declared that we do not override is left alone.
-        const varsEnd = blockEnd(lines, vars, envEnd);
+        let varsEnd = blockEnd(lines, vars, envEnd);
         const existingIndent = (() => {
           for (let i = vars + 1; i < varsEnd; i++) {
             if (!isBlank(lines[i]) && !isComment(lines[i])) return indentOf(lines[i]);
@@ -124,14 +132,34 @@ if (globals === -1) {
           return 8;
         })();
         const pending = { ...VARS };
+        // Collect the keys we override before touching anything, together with
+        // the full extent of each one's block. A variable's value may be a
+        // nested block rather than a scalar -- `sam build` renders a !Ref that
+        // way:
+        //
+        //     TABLE_NAME:
+        //       Ref: WalletTestTable
+        //
+        // so replacing only the key's own line would leave the child line
+        // orphaned under a scalar and produce invalid YAML.
+        const replacements = [];
         for (let i = vars + 1; i < varsEnd; i++) {
           if (isBlank(lines[i]) || isComment(lines[i])) continue;
+          if (indentOf(lines[i]) !== existingIndent) continue;
           const name = lines[i].trim().split(":")[0];
           if (name in pending) {
-            lines[i] = `${" ".repeat(existingIndent)}${name}: ${pending[name]}`;
+            replacements.push({ start: i, end: blockEnd(lines, i, varsEnd), name });
             delete pending[name];
           }
         }
+        // Apply back to front so earlier indices stay valid.
+        let removed = 0;
+        for (let r = replacements.length - 1; r >= 0; r--) {
+          const { start, end, name } = replacements[r];
+          lines.splice(start, end - start, `${" ".repeat(existingIndent)}${name}: ${VARS[name]}`);
+          removed += end - start - 1;
+        }
+        varsEnd -= removed;
         const add = Object.entries(pending).map(
           ([k, v]) => `${" ".repeat(existingIndent)}${k}: ${v}`
         );

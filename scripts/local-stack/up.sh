@@ -83,9 +83,21 @@ node "$HERE/patch-built-template.mjs" "$BE_REPO/.aws-sam/build/template.yaml"
 
 # The login function's TABLE_NAME is a !Ref, which sam local resolves to the
 # literal logical id, so it needs this override file.
+# Checked for content, not just existence: an env.json that exists but lacks
+# LcwLoginFunction.TABLE_NAME leaves the Lambda querying the literal logical id
+# and every login failing with ResourceNotFoundException.
 if [ ! -f "$BE_REPO/env.json" ]; then
   echo '{ "LcwLoginFunction": { "TABLE_NAME": "wallet-test" } }' > "$BE_REPO/env.json"
   echo "wrote $BE_REPO/env.json"
+elif ! node -e '
+  const j = require(process.argv[1]);
+  process.exit(j?.LcwLoginFunction?.TABLE_NAME ? 0 : 1);
+' "$BE_REPO/env.json" 2>/dev/null; then
+  echo "$BE_REPO/env.json exists but has no LcwLoginFunction.TABLE_NAME." >&2
+  echo "sam local would resolve TABLE_NAME to the literal logical id and every" >&2
+  echo "login would fail. Add it, or delete the file and re-run:" >&2
+  echo '  { "LcwLoginFunction": { "TABLE_NAME": "wallet-test" } }' >&2
+  exit 1
 fi
 
 echo "==> seeding the demo account and space"
