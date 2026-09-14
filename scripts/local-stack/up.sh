@@ -35,11 +35,26 @@ if ! docker ps --format '{{.Names}}' | grep -qx lcw-minio; then
     minio/minio:latest server /data --console-address ":9001" >/dev/null
 fi
 
+# Wait for both substitutes, and fail loudly rather than falling through to a
+# seed that dies in DescribeTable with an opaque error.
+wait_for() {
+  local name="$1" url="$2"
+  for _ in $(seq 1 60); do
+    curl -sf -o /dev/null "$url" 2>/dev/null && return 0
+    sleep 1
+  done
+  echo "$name did not become ready at $url after 60s" >&2
+  return 1
+}
 echo "==> waiting for the substitutes"
+wait_for minio http://localhost:9000/minio/health/live
+# DynamoDB Local answers any request with HTTP 400 once it is listening, which
+# curl -sf treats as a failure, so probe the port itself.
 for _ in $(seq 1 60); do
-  curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break
+  nc -z localhost 8000 >/dev/null 2>&1 && break
   sleep 1
 done
+nc -z localhost 8000 >/dev/null 2>&1 || { echo "dynamodb-local did not become ready on :8000 after 60s" >&2; exit 1; }
 
 # sam local reads .aws-sam/build, so every source change needs a rebuild, and
 # every rebuild drops the injected environment and needs re-patching.
@@ -59,23 +74,26 @@ if [ ! -f "$BE_REPO/env.json" ]; then
 fi
 
 echo "==> seeding the demo account and space"
-(cd "$HERE" && npm install --silent >/dev/null 2>&1 || true)
+# Not `|| true`: if this fails, seed.mjs dies later with an opaque
+# ERR_MODULE_NOT_FOUND instead of the real install error.
+(cd "$HERE" && npm install --silent)
 node "$HERE/seed.mjs"
 
-cat <<'NEXT'
+FE_REPO="$(cd "$HERE/../.." && pwd)"
+cat <<NEXT
 
 Ready. Now start the three foreground processes, each in its own terminal:
 
   # 1. was-server-aws (the space) on :3000
-  cd ../was-server-aws && sam local start-api --port 3000 --region us-east-1 \
-    --docker-network lcw-local
+  cd $WAS_REPO && sam local start-api --port 3000 --region us-east-1 \\
+    --docker-network lcw-local --warm-containers EAGER
 
   # 2. lcw-back-end (the login API) on :3001
-  cd ../lcw-back-end && sam local start-api --port 3001 --region us-east-1 \
+  cd $BE_REPO && sam local start-api --port 3001 --region us-east-1 \\
     --env-vars env.json --docker-network lcw-local --warm-containers EAGER
 
   # 3. the front end on :5173
-  npm run dev
+  cd $FE_REPO && npm run dev
 
 Then sign in at http://localhost:5173 as jc.chartrand@gmail.com
 with the passphrase: my-secret-seed-that-is-long-enou

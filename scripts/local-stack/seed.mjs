@@ -48,7 +48,15 @@ const COLLECTION_ID = "UniversityOfToronto";
 // so two accounts on one space would resolve to whichever row came back first
 // and verify against the wrong DID.
 const SEED_EMAIL = process.env.SEED_EMAIL;
-const SEED_PASSPHRASE = process.env.SEED_PASSPHRASE ?? DEMO_PASSPHRASE;
+const SEED_PASSPHRASE = process.env.SEED_PASSPHRASE;
+// Deliberately not defaulted to DEMO_PASSPHRASE. That passphrase is committed
+// in this repo, so falling back to it would hand your account a key anyone can
+// derive -- and you would not be able to log in with the passphrase you meant.
+if (SEED_EMAIL && !SEED_PASSPHRASE) {
+  console.error("SEED_EMAIL is set but SEED_PASSPHRASE is not. Set both:");
+  console.error("  SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' npm run seed");
+  process.exit(1);
+}
 
 // Derived so the same email always gets the same space, and valid as an S3
 // bucket name (the email itself is not).
@@ -79,14 +87,22 @@ async function deriveKeyPair(passphrase) {
   return keyPair;
 }
 
+// The driver needs its key types registered, or get() throws
+// `Unsupported "multibaseMultikeyHeader"`. The did:key branch of
+// documentLoader is not reached by signing today, but verification would.
 const didKeyDriver = didKey.driver();
+didKeyDriver.use({
+  multibaseMultikeyHeader: "z6Mk",
+  fromMultibase: Ed25519VerificationKey.from,
+});
 // Resolves did:key locally and fetches the remote JSON-LD contexts the
 // credential references. Contexts are cached per run.
 const contextCache = new Map();
 async function documentLoader(url) {
   if (url.startsWith("did:key:")) {
-    const didDocument = await didKeyDriver.get({ did: url.split("#")[0] });
-    return { contextUrl: null, documentUrl: url, document: didDocument };
+    const did = url.split("#")[0];
+    const didDocument = await didKeyDriver.get({ did });
+    return { contextUrl: null, documentUrl: did, document: didDocument };
   }
   if (!contextCache.has(url)) {
     const res = await fetch(url, { headers: { accept: "application/ld+json, application/json" } });
@@ -167,10 +183,16 @@ async function ensureBucket(bucket) {
   try {
     await s3.send(new HeadBucketCommand({ Bucket: bucket }));
     console.log(`  bucket ${bucket} already exists`);
-  } catch {
-    await s3.send(new CreateBucketCommand({ Bucket: bucket }));
-    console.log(`  created bucket ${bucket}`);
+    return;
+  } catch (err) {
+    // Only a genuine 404 means "create it". Anything else -- MinIO not up, bad
+    // credentials -- should surface rather than be retried as a create, which
+    // would fail with a less useful error.
+    const status = err.$metadata?.httpStatusCode;
+    if (status !== 404 && err.name !== "NotFound" && err.name !== "NoSuchBucket") throw err;
   }
+  await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+  console.log(`  created bucket ${bucket}`);
 }
 
 const putJson = (bucket, Key, body) =>

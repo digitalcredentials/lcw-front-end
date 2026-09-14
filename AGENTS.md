@@ -189,18 +189,24 @@ resolves.
 ## Tests
 
 ```bash
-npm run test:e2e        # Playwright, against the local stack
+npm run test:e2e:local     # Playwright, against the local stack
 ```
 
-Run the suite with the local S3 endpoint exported, so the tests that clean up
-after themselves with the `aws` CLI (through `removeFromSpace`) target MinIO
-instead of real S3:
+That script is the one to use. It exports the local S3 endpoint, so the tests
+that clean up after themselves with the `aws` CLI (through `removeFromSpace`)
+target MinIO instead of real S3, and it pins the suite to one worker and to
+`tests/e2e.spec.ts`:
 
 ```bash
 LOCAL_S3_URL=http://localhost:9000 \
 AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest \
-  npx playwright test tests/e2e.spec.ts --workers=1
+  playwright test tests/e2e.spec.ts --workers=1
 ```
+
+Bare `npm run test:e2e` is `playwright test` with no arguments. It runs the
+whole `tests/` directory in parallel with none of that environment, so the
+cleanup steps aim at real S3 and the suite fights itself. `tests/deployed.spec.ts`
+is safe either way — it skips unless `DEPLOYED_URL` is set.
 
 Use `--workers=1`. Every request is a `sam local` Lambda invocation, so the
 suite is slow and parallel runs fight over the same space. Occasional flakes
