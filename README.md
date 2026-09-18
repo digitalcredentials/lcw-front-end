@@ -98,5 +98,18 @@ from the `dcc-lcw-ui` S3 bucket behind CloudFront (distribution
 ```bash
 npm run build
 aws s3 sync dist/ s3://dcc-lcw-ui/ --delete
+# The HTML shells must never be cached: --delete removes old hashed chunks, so
+# a stale cached index.html/chapi.html would reference chunks that now 404.
+# CloudFront also serves these two paths with the CachingDisabled policy.
+for f in index.html chapi.html; do
+  aws s3 cp "s3://dcc-lcw-ui/$f" "s3://dcc-lcw-ui/$f" --metadata-directive REPLACE \
+    --cache-control "no-store, must-revalidate" --content-type text/html
+done
 aws cloudfront create-invalidation --distribution-id E6VT0O094YUC1 --paths "/*"
 ```
+
+CloudFront (`E6VT0O094YUC1`, Free plan → max 5 cache behaviors) carries three
+non-default behaviors: `/manifest.json` (CORS for CHAPI, via S3 bucket CORS +
+the managed CORS-S3Origin origin-request policy + CachingDisabled) and
+`/chapi.html` + `/index.html` (CachingDisabled, so the shells are always
+fresh). This config lives only on the live distribution, not in IaC.
