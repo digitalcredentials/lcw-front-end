@@ -5,6 +5,7 @@ import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
+import { registerWallet } from '../lib/chapi';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -18,6 +19,10 @@ const ISSUER_DIDS = {
   'did:key:z6MktL8XGbuYv5f7hwf6hVyJkJWynNtNhcsXFYe9NJzjKHkW': {
     issuerName: 'Digital Credentials Consortium',
     url: 'https://digitalcredentials.mit.edu/'
+  },
+  'did:key:z6MkkCNaxehr7RoeDJQP39oQ1yFbmUg29ziXfLwoyeCo1QFf': {
+    issuerName: 'LCW Sandbox Issuer',
+    url: 'https://issuer.lcw-sandbox.org'
   }
 };
 
@@ -316,6 +321,17 @@ export default function FileBrowserPage() {
     }
   }
 
+  const [walletRegistered, setWalletRegistered] = useState(false);
+
+  async function enableBrowserWallet() {
+    try {
+      await registerWallet();
+      setWalletRegistered(true);
+    } catch (err) {
+      handleError(err);
+    }
+  }
+
   function handleSignOut() {
     clearToken();
     navigate('/login', { replace: true });
@@ -328,12 +344,21 @@ export default function FileBrowserPage() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <span className="text-lg font-semibold text-gray-800">{spaceName}</span>
-        <button
-          onClick={handleSignOut}
-          className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-        >
-          Sign out
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={enableBrowserWallet}
+            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            title="Register this wallet with your browser so issuer sites can offer it (CHAPI)"
+          >
+            {walletRegistered ? 'Browser wallet enabled ✓' : 'Enable browser wallet'}
+          </button>
+          <button
+            onClick={handleSignOut}
+            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
