@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as polyfill from 'credential-handler-polyfill';
 import * as WebCredentialHandler from 'web-credential-handler';
 import type { CollectionSummary } from '@interop/was-client';
@@ -6,16 +6,13 @@ import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient } from '../lib/was';
 import { isAuthenticated } from '../lib/auth';
 
-// The window CHAPI opens when this wallet is chosen. It receives the
-// credential event, runs the issuer's exchange, and asks which collection to
-// save the issued credential into.
+// The window CHAPI opens when this wallet is chosen. It activates a credential
+// handler, runs the issuer's exchange when a request arrives, and asks which
+// collection to save the issued credential into. The handler's get() hook
+// returns a promise that resolves once the user saves, which keeps the
+// mediator popup open until then.
 
-type ChapiEvent = {
-  credentialRequestOptions?: {
-    web?: { VerifiablePresentation?: Record<string, unknown> };
-  };
-  respondWith: (value: Promise<unknown>) => void;
-};
+type GetResponse = { type: 'response'; dataType: string; data: unknown };
 
 type Phase =
   | { step: 'starting' }
@@ -35,68 +32,79 @@ function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | und
 
 export default function ChapiPage() {
   const [phase, setPhase] = useState<Phase>({ step: 'starting' });
-  const [respond, setRespond] = useState<((value: unknown) => void) | null>(null);
   const [collectionId, setCollectionId] = useState('');
   const [saving, setSaving] = useState(false);
+  // Resolves the get() hook's promise, handing the issued credential back to
+  // the mediator (and closing the popup).
+  const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
+  const claimRef = useRef<ClaimResult | null>(null);
+  const activatedRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
+    if (activatedRef.current) {
+      return;
+    }
+    activatedRef.current = true;
+
     (async () => {
-      try {
-        await polyfill.loadOnce();
-        const received = (await WebCredentialHandler.receiveCredentialEvent()) as ChapiEvent;
-        if (cancelled) {
-          return;
-        }
-        // Keep the CHAPI event open until the user finishes: respondWith gets
-        // a promise we resolve on save (or with null on failure/cancel).
-        let resolver: (value: unknown) => void;
-        received.respondWith(new Promise((resolve) => { resolver = resolve; }));
-        setRespond(() => resolver!);
+      await polyfill.loadOnce();
+      await WebCredentialHandler.activateHandler({
+        async get({ event }: { event: {
+          credentialRequestOptions?: { web?: { VerifiablePresentation?: Record<string, unknown> } };
+        } }) {
+          return new Promise<GetResponse>((resolve) => {
+            resolveRef.current = resolve;
+            (async () => {
+              try {
+                if (!isAuthenticated() || !(await getSessionWASClient())) {
+                  setPhase({ step: 'not-signed-in' });
+                  return;
+                }
+                const vpr = event.credentialRequestOptions?.web?.VerifiablePresentation;
+                const exchangeUrl = exchangeUrlFrom(vpr);
+                if (!exchangeUrl) {
+                  setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
+                  return;
+                }
 
-        if (!isAuthenticated() || !(await getSessionWASClient())) {
-          setPhase({ step: 'not-signed-in' });
-          return;
-        }
+                setPhase({ step: 'claiming' });
+                const claim = await runExchange(exchangeUrl);
+                claimRef.current = claim;
 
-        const vpr = received.credentialRequestOptions?.web?.VerifiablePresentation;
-        const exchangeUrl = exchangeUrlFrom(vpr);
-        if (!exchangeUrl) {
-          setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
-          return;
-        }
-
-        setPhase({ step: 'claiming' });
-        const claim = await runExchange(exchangeUrl);
-
-        const session = await getSessionWASClient();
-        const list = session ? await session.client.space(session.spaceId).collections() : null;
-        const collections = (list?.items ?? []).filter(
-          (c) => !['Trash', 'dids'].includes(c.id)
-        );
-        setPhase({ step: 'choose', claim, collections });
-        if (collections[0]) {
-          setCollectionId(collections[0].id);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
-        }
-      }
-    })();
-    return () => { cancelled = true; };
+                const session = await getSessionWASClient();
+                const list = session ? await session.client.space(session.spaceId).collections() : null;
+                const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids'].includes(c.id));
+                setPhase({ step: 'choose', claim, collections });
+                if (collections[0]) {
+                  setCollectionId(collections[0].id);
+                }
+              } catch (err) {
+                setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+              }
+            })();
+          });
+        },
+      });
+    })().catch((err) => {
+      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not connect to the wallet mediator.' });
+    });
   }, []);
 
   async function save() {
-    if (phase.step !== 'choose' || !collectionId) {
+    if (phase.step !== 'choose' || !collectionId || !claimRef.current) {
       return;
     }
     setSaving(true);
     try {
-      const credentialName = (phase.claim.credential.name as string) ?? 'credential';
+      const credentialName = (claimRef.current.credential.name as string) ?? 'credential';
       const resourceName = `${credentialName.replace(/\s+/g, '-')}-${Date.now()}.json`;
-      await saveCredential(collectionId, resourceName, phase.claim.envelope);
-      respond?.({ dataType: 'VerifiablePresentation', data: phase.claim.envelope });
+      await saveCredential(collectionId, resourceName, claimRef.current.envelope);
+      // Hand the issued presentation back to the issuer page via the mediator
+      resolveRef.current?.({
+        type: 'response',
+        dataType: 'VerifiablePresentation',
+        data: claimRef.current.envelope,
+      });
       setPhase({ step: 'saved', name: resourceName, collection: collectionId });
     } catch (err) {
       setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
@@ -105,8 +113,8 @@ export default function ChapiPage() {
     }
   }
 
+  // Closing the window makes the mediator return null to the issuer page.
   function cancel() {
-    respond?.(null);
     window.close();
   }
 
