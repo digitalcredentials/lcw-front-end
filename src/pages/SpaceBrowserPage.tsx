@@ -5,7 +5,7 @@ import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
-import { registerWallet } from '../lib/chapi';
+import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -321,14 +321,39 @@ export default function FileBrowserPage() {
     }
   }
 
-  const [walletRegistered, setWalletRegistered] = useState(false);
+  // 'unknown' until the CHAPI permission is queried; then reflects reality
+  const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
+  const [walletBusy, setWalletBusy] = useState(false);
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
+
+  useEffect(() => {
+    isWalletEnabled()
+      .then((enabled) => setWalletState(enabled ? 'enabled' : 'disabled'))
+      .catch(() => setWalletState('disabled'));
+  }, []);
 
   async function enableBrowserWallet() {
+    setWalletBusy(true);
     try {
       await registerWallet();
-      setWalletRegistered(true);
+      setWalletState('enabled');
     } catch (err) {
       handleError(err);
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
+  async function disableBrowserWallet() {
+    setWalletBusy(true);
+    setWalletMenuOpen(false);
+    try {
+      await unregisterWallet();
+      setWalletState('disabled');
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setWalletBusy(false);
     }
   }
 
@@ -345,13 +370,37 @@ export default function FileBrowserPage() {
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <span className="text-lg font-semibold text-gray-800">{spaceName}</span>
         <div className="flex items-center gap-4">
-          <button
-            onClick={enableBrowserWallet}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            title="Register this wallet with your browser so issuer sites can offer it (CHAPI)"
-          >
-            {walletRegistered ? 'Browser wallet enabled ✓' : 'Enable browser wallet'}
-          </button>
+          {walletState === 'enabled' ? (
+            <div className="relative">
+              <button
+                onClick={() => setWalletMenuOpen((o) => !o)}
+                disabled={walletBusy}
+                className="text-sm text-green-700 hover:text-green-800 transition-colors"
+                title="This wallet is registered with your browser (CHAPI). Click to manage."
+              >
+                {walletBusy ? 'Working…' : 'Browser wallet is enabled ✓'}
+              </button>
+              {walletMenuOpen && (
+                <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-md z-10">
+                  <button
+                    onClick={disableBrowserWallet}
+                    className="w-full text-left text-sm text-red-600 hover:bg-red-50 rounded-lg px-3 py-2"
+                  >
+                    Disable browser wallet
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={enableBrowserWallet}
+              disabled={walletBusy || walletState === 'unknown'}
+              className="text-sm text-gray-500 hover:text-gray-700 disabled:text-gray-400 transition-colors"
+              title="Register this wallet with your browser so issuer sites can offer it (CHAPI)"
+            >
+              {walletBusy ? 'Working…' : 'Enable browser wallet'}
+            </button>
+          )}
           <button
             onClick={handleSignOut}
             className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
