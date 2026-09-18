@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:claim": "node tests/scripts/claim-wire.mjs"
   },
   "dependencies": {
     "@digitalcredentials/veri-good": "^0.0.0-beta.7",
@@ -16,13 +17,17 @@
     "@interop/ed25519-signature": "^7.2.1",
     "@interop/ed25519-verification-key": "^8.0.4",
     "@interop/ezcap": "^7.4.3",
+    "@interop/jsonld-signatures": "^11.8.5",
+    "@interop/security-document-loader": "^10.1.2",
     "@interop/was-client": "^0.41.0",
     "@tailwindcss/vite": "^4.3.3",
+    "credential-handler-polyfill": "^4.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "tailwindcss": "^4.3.3",
-    "vanilla-jsoneditor": "^3.13.0"
+    "vanilla-jsoneditor": "^3.13.0",
+    "web-credential-handler": "^3.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
