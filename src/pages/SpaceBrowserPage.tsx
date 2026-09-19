@@ -714,6 +714,13 @@ export default function FileBrowserPage() {
         <ShareCredentialModal
           resourceName={shareTarget.name ?? shareTarget.id}
           resourceUrl={`${wasOrigin}${shareTarget.url ?? ''}`}
+          onCheckPublic={async () => {
+            const s = await session;
+            if (!s) {
+              throw new Error('Your session has expired. Sign in again.');
+            }
+            return s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).isPublic();
+          }}
           onCreatePublicLink={async () => {
             const s = await session;
             if (!s) {
@@ -723,6 +730,14 @@ export default function FileBrowserPage() {
             // listing and its other members stay private
             await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).setPublic();
             return `${wasOrigin}${shareTarget.url ?? ''}`;
+          }}
+          onUnshare={async () => {
+            const s = await session;
+            if (!s) {
+              throw new Error('Your session has expired. Sign in again.');
+            }
+            // Reverts the resource to capability-only access
+            await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).clearPolicy();
           }}
           onClose={() => setShareTarget(null)}
         />

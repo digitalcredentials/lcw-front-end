@@ -1,33 +1,76 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface ShareCredentialModalProps {
   resourceName: string;
   // Absolute URL of the credential in the space, offered to the device share
   // sheet and returned as the public link
   resourceUrl: string;
+  // Whether the credential is already world-readable
+  onCheckPublic: () => Promise<boolean>;
   // Marks the credential world-readable and resolves to its public URL
   onCreatePublicLink: () => Promise<string>;
+  // Removes public access, so the link stops resolving
+  onUnshare: () => Promise<void>;
   onClose: () => void;
 }
 
 const STUB_OPTIONS = ['Add to LinkedIn', 'QR code'];
 
-export default function ShareCredentialModal({ resourceName, resourceUrl, onCreatePublicLink, onClose }: ShareCredentialModalProps) {
+export default function ShareCredentialModal({
+  resourceName, resourceUrl, onCheckPublic, onCreatePublicLink, onUnshare, onClose,
+}: ShareCredentialModalProps) {
   const [notice, setNotice] = useState('');
-  const [publicLink, setPublicLink] = useState('');
-  const [creatingLink, setCreatingLink] = useState(false);
+  const [linkState, setLinkState] = useState<'checking' | 'private' | 'public'>('checking');
+  const [publicLink, setPublicLink] = useState(resourceUrl);
+  const [busy, setBusy] = useState(false);
   const [linkError, setLinkError] = useState('');
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    onCheckPublic()
+      .then((isPublic) => {
+        if (!cancelled) {
+          setLinkState(isPublic ? 'public' : 'private');
+        }
+      })
+      .catch(() => {
+        // If the check fails, offer to create: setPublic is idempotent
+        if (!cancelled) {
+          setLinkState('private');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function createPublicLink() {
-    setCreatingLink(true);
+    setBusy(true);
     setLinkError('');
+    setNotice('');
     try {
       setPublicLink(await onCreatePublicLink());
+      setLinkState('public');
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : 'Could not create the public link.');
     } finally {
-      setCreatingLink(false);
+      setBusy(false);
+    }
+  }
+
+  async function unshare() {
+    setBusy(true);
+    setLinkError('');
+    try {
+      await onUnshare();
+      setLinkState('private');
+      setNotice('Public access removed. The link no longer works.');
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not remove public access.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -75,15 +118,21 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
         <p className="text-sm text-gray-500 mb-4">{resourceName}</p>
 
         <div className="space-y-2">
-          {!publicLink ? (
+          {linkState === 'checking' && (
+            <p className="text-sm text-gray-400 border border-gray-200 rounded-lg px-4 py-2.5">
+              Checking public access…
+            </p>
+          )}
+          {linkState === 'private' && (
             <button
               onClick={createPublicLink}
-              disabled={creatingLink}
+              disabled={busy}
               className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
             >
-              {creatingLink ? 'Creating public link…' : 'Create Public Link'}
+              {busy ? 'Creating public link…' : 'Create Public Link'}
             </button>
-          ) : (
+          )}
+          {linkState === 'public' && (
             <div className="border border-gray-200 rounded-lg p-3 space-y-2">
               <div className="flex gap-2">
                 <input
@@ -102,6 +151,17 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
               </div>
               <p className="text-xs text-gray-500">
                 Anyone with this link can view this credential.
+              </p>
+              <button
+                onClick={unshare}
+                disabled={busy}
+                className="w-full text-left border border-red-200 hover:bg-red-50 disabled:opacity-60 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {busy ? 'Removing public access…' : 'Unshare'}
+              </button>
+              <p className="text-xs text-gray-500">
+                Unsharing removes public access: the link will stop working for
+                anyone who tries to use it.
               </p>
             </div>
           )}

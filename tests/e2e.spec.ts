@@ -243,7 +243,20 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   const sibling = link.replace('LCWExperience.json', 'Bachelors.json');
   expect((await page.request.get(sibling)).status()).not.toBe(200);
 
-  // clean up the policy so the next run starts private
+  // reopening the dialog shows the existing link, not Create Public Link
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toHaveCount(0);
+  await expect(modal).toContainText('the link will stop working');
+
+  // unsharing kills the link and restores the Create option
+  await modal.getByRole('button', { name: 'Unshare' }).click();
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
+  expect((await page.request.get(link)).status()).not.toBe(200);
+
+  // safety net in case an earlier expectation aborted before the UI unshare
   execSync(
     'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
     { stdio: 'ignore' }
