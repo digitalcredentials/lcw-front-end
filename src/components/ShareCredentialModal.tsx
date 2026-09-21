@@ -24,7 +24,11 @@ export default function ShareCredentialModal({
   const [publicLink, setPublicLink] = useState(resourceUrl);
   const [busy, setBusy] = useState(false);
   const [linkError, setLinkError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'public' | 'verifier' | null>(null);
+
+  // Opens VerifierPlus on the public credential URL; the vc parameter is
+  // passed unencoded, matching how VerifierPlus reads it from the fragment
+  const verifierLink = `https://verifierplus.org/#verify?vc=${publicLink}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -74,11 +78,11 @@ export default function ShareCredentialModal({
     }
   }
 
-  async function copyLink() {
+  async function copyLink(which: 'public' | 'verifier') {
     try {
-      await navigator.clipboard.writeText(publicLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(which === 'public' ? publicLink : verifierLink);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
     } catch {
       // clipboard unavailable; the link is selectable in the input
     }
@@ -143,14 +147,41 @@ export default function ShareCredentialModal({
                   className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 bg-gray-50"
                 />
                 <button
-                  onClick={copyLink}
+                  onClick={() => copyLink('public')}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-md px-3 transition-colors"
                 >
-                  {copied ? 'Copied!' : 'Copy'}
+                  {copied === 'public' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
               <p className="text-xs text-gray-500">
                 Anyone with this link can view this credential.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  aria-label="VerifierPlus link"
+                  value={verifierLink}
+                  onFocus={(e) => e.target.select()}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 bg-gray-50"
+                />
+                <button
+                  onClick={() => copyLink('verifier')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-md px-3 transition-colors"
+                >
+                  {copied === 'verifier' ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">
+                This one opens the credential in{' '}
+                <a
+                  href={verifierLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-600 hover:text-indigo-700 underline"
+                >
+                  VerifierPlus
+                </a>
+                , verified.
               </p>
               <button
                 onClick={unshare}
