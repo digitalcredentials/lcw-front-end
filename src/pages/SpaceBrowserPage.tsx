@@ -513,7 +513,6 @@ export default function FileBrowserPage() {
               <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Name</th>
-                  <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Content Type</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
@@ -528,9 +527,6 @@ export default function FileBrowserPage() {
                         {FILE_ICON}
                         <span className="text-gray-700">{item.name ?? item.id}</span>
                       </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
-                      {item.contentType}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
