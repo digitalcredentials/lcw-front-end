@@ -25,6 +25,7 @@ export default function ShareCredentialModal({
   const [busy, setBusy] = useState(false);
   const [linkError, setLinkError] = useState('');
   const [copied, setCopied] = useState<'public' | 'verifier' | null>(null);
+  const [confirmingUnshare, setConfirmingUnshare] = useState(false);
 
   // Opens VerifierPlus on the public credential URL; the vc parameter is
   // passed unencoded, matching how VerifierPlus reads it from the fragment
@@ -70,7 +71,8 @@ export default function ShareCredentialModal({
     try {
       await onUnshare();
       setLinkState('private');
-      setNotice('Public access removed. The link no longer works.');
+      setConfirmingUnshare(false);
+      setNotice('Public access removed. The links no longer work.');
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : 'Could not remove public access.');
     } finally {
@@ -176,17 +178,46 @@ export default function ShareCredentialModal({
                   {copied === 'verifier' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-              <button
-                onClick={unshare}
-                disabled={busy}
-                className="w-full text-left border border-red-200 hover:bg-red-50 disabled:opacity-60 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-              >
-                {busy ? 'Removing public access…' : 'Unshare'}
-              </button>
-              <p className="text-xs text-gray-500">
-                Unsharing removes public access: the link will stop working for
-                anyone who tries to use it.
-              </p>
+              {!confirmingUnshare ? (
+                <>
+                  <button
+                    onClick={() => setConfirmingUnshare(true)}
+                    className="w-full text-left border border-red-200 hover:bg-red-50 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                  >
+                    Unshare
+                  </button>
+                  <p className="text-xs text-gray-500">
+                    Unsharing removes public access. The links will stop working
+                    for anyone who tries to use them.
+                  </p>
+                </>
+              ) : (
+                <div role="alert" className="bg-red-50 border-2 border-red-300 rounded-lg p-3 space-y-3">
+                  <p className="text-sm font-semibold text-red-700">
+                    Remove public access?
+                  </p>
+                  <p className="text-sm text-red-700">
+                    The links above will stop working for anyone who tries to
+                    use them — including anyone you have already sent them to.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmingUnshare(false)}
+                      disabled={busy}
+                      className="flex-1 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                    >
+                      Keep sharing
+                    </button>
+                    <button
+                      onClick={unshare}
+                      disabled={busy}
+                      className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                    >
+                      {busy ? 'Removing…' : 'Yes, unshare'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {linkError && (

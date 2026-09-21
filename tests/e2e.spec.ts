@@ -253,10 +253,17 @@ test('creates a public link that serves the credential unsigned', async ({ page 
     .getByRole('button', { name: 'Share' }).click();
   await expect(modal.getByLabel('Public link')).toHaveValue(link);
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toHaveCount(0);
-  await expect(modal).toContainText('the link will stop working');
+  await expect(modal).toContainText('The links will stop working');
 
-  // unsharing kills the link and restores the Create option
+  // unsharing asks for confirmation first; backing out changes nothing
   await modal.getByRole('button', { name: 'Unshare' }).click();
+  await expect(modal).toContainText('Remove public access?');
+  await modal.getByRole('button', { name: 'Keep sharing' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+
+  // confirming kills the link and restores the Create option
+  await modal.getByRole('button', { name: 'Unshare' }).click();
+  await modal.getByRole('button', { name: 'Yes, unshare' }).click();
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
   expect((await page.request.get(link)).status()).not.toBe(200);
 
