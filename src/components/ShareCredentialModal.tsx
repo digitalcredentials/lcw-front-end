@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
 
 interface ShareCredentialModalProps {
   resourceName: string;
@@ -14,7 +15,15 @@ interface ShareCredentialModalProps {
   onClose: () => void;
 }
 
-const STUB_OPTIONS = ['Add to LinkedIn', 'QR code'];
+const STUB_OPTIONS = ['Add to LinkedIn'];
+
+interface QrState {
+  target: 'verifier' | 'public';
+  // True when the credential was private and was made public just for the QR:
+  // hiding the QR (or closing the dialog) reverts it
+  temporary: boolean;
+  images: { verifier: string; public: string };
+}
 
 export default function ShareCredentialModal({
   resourceName, resourceUrl, onCheckPublic, onCreatePublicLink, onUnshare, onClose,
@@ -26,6 +35,8 @@ export default function ShareCredentialModal({
   const [linkError, setLinkError] = useState('');
   const [copied, setCopied] = useState<'public' | 'verifier' | null>(null);
   const [confirmingUnshare, setConfirmingUnshare] = useState(false);
+  const [qr, setQr] = useState<QrState | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
 
   // Opens VerifierPlus on the public credential URL; the vc parameter is
   // passed unencoded, matching how VerifierPlus reads it from the fragment
@@ -72,12 +83,62 @@ export default function ShareCredentialModal({
       await onUnshare();
       setLinkState('private');
       setConfirmingUnshare(false);
+      // A showing QR encodes links that no longer resolve
+      setQr(null);
       setNotice('Public access removed. The links no longer work.');
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : 'Could not remove public access.');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function showQr() {
+    setQrBusy(true);
+    setLinkError('');
+    setNotice('');
+    try {
+      let url = publicLink;
+      const temporary = linkState !== 'public';
+      if (temporary) {
+        url = await onCreatePublicLink();
+        setPublicLink(url);
+      }
+      const options = { width: 240, margin: 1 };
+      const images = {
+        public: await QRCode.toDataURL(url, options),
+        verifier: await QRCode.toDataURL(`https://verifierplus.org/#verify?vc=${url}`, options),
+      };
+      setQr({ target: 'verifier', temporary, images });
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not create the QR code.');
+    } finally {
+      setQrBusy(false);
+    }
+  }
+
+  async function hideQr() {
+    if (!qr) {
+      return;
+    }
+    setQr(null);
+    // Revert temporary public access -- unless Create Public Link was clicked
+    // while the QR was showing, which made the sharing durable
+    if (qr.temporary && linkState !== 'public') {
+      setQrBusy(true);
+      try {
+        await onUnshare();
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : 'Could not remove the temporary public access.');
+      } finally {
+        setQrBusy(false);
+      }
+    }
+  }
+
+  async function close() {
+    await hideQr();
+    onClose();
   }
 
   async function copyLink(which: 'public' | 'verifier') {
@@ -104,7 +165,7 @@ export default function ShareCredentialModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         role="dialog"
@@ -115,7 +176,7 @@ export default function ShareCredentialModal({
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-lg font-semibold text-gray-800">Share Credential</h2>
           <button
-            onClick={onClose}
+            onClick={close}
             className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
           >
             Close
@@ -224,6 +285,48 @@ export default function ShareCredentialModal({
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {linkError}
             </p>
+          )}
+          <button
+            onClick={() => (qr ? hideQr() : showQr())}
+            disabled={qrBusy || linkState === 'checking'}
+            className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
+          >
+            {qrBusy ? 'Working…' : qr ? 'Hide QR code' : 'QR code'}
+          </button>
+          {qr && (
+            <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <div className="flex gap-1" role="group" aria-label="QR code target">
+                {([
+                  ['verifier', 'Verified page'],
+                  ['public', 'Raw credential'],
+                ] as const).map(([target, label]) => (
+                  <button
+                    key={target}
+                    onClick={() => setQr({ ...qr, target })}
+                    aria-pressed={qr.target === target}
+                    className={`flex-1 text-xs font-medium rounded-md px-2 py-1.5 transition-colors ${
+                      qr.target === target
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <img
+                src={qr.images[qr.target]}
+                alt={`QR code for the ${qr.target === 'verifier' ? 'verified page' : 'raw credential'} link`}
+                className="mx-auto w-60 h-60"
+              />
+              {qr.temporary && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  This credential is temporarily public while the QR code is
+                  showing. Hiding it or closing this dialog makes the
+                  credential private again.
+                </p>
+              )}
+            </div>
           )}
           {STUB_OPTIONS.map((option) => (
             <button
