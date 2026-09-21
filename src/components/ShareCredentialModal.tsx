@@ -138,9 +138,13 @@ export default function ShareCredentialModal({
           )}
           {linkState === 'public' && (
             <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <label htmlFor="public-link" className="block text-xs font-medium text-gray-700">
+                Public link to raw credential source code:
+              </label>
               <div className="flex gap-2">
                 <input
                   readOnly
+                  id="public-link"
                   aria-label="Public link"
                   value={publicLink}
                   onFocus={(e) => e.target.select()}
@@ -153,12 +157,13 @@ export default function ShareCredentialModal({
                   {copied === 'public' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-              <p className="text-xs text-gray-500">
-                Anyone with this link can view this credential.
-              </p>
+              <label htmlFor="verifierplus-link" className="block text-xs font-medium text-gray-700 pt-1">
+                Public link to verified human readable version:
+              </label>
               <div className="flex gap-2">
                 <input
                   readOnly
+                  id="verifierplus-link"
                   aria-label="VerifierPlus link"
                   value={verifierLink}
                   onFocus={(e) => e.target.select()}
@@ -171,18 +176,6 @@ export default function ShareCredentialModal({
                   {copied === 'verifier' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-              <p className="text-xs text-gray-500">
-                This one opens the credential in{' '}
-                <a
-                  href={verifierLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-indigo-600 hover:text-indigo-700 underline"
-                >
-                  VerifierPlus
-                </a>
-                , verified.
-              </p>
               <button
                 onClick={unshare}
                 disabled={busy}
