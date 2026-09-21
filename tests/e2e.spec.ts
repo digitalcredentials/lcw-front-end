@@ -234,6 +234,10 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   const link = await modal.getByLabel('Public link').inputValue();
   expect(link).toContain('/UniversityOfToronto/LCWExperience.json');
 
+  // ...along with a companion link that verifies it on VerifierPlus
+  await expect(modal.getByLabel('VerifierPlus link'))
+    .toHaveValue(`https://verifierplus.org/#verify?vc=${link}`);
+
   // the link works without any authorization
   const res = await page.request.get(link);
   expect(res.status()).toBe(200);
