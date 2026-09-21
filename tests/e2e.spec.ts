@@ -255,6 +255,16 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toHaveCount(0);
   await expect(modal).toContainText('The links will stop working');
 
+  // a QR code on an already-public credential doesn't revoke access on close
+  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
+  await expect(modal.getByRole('img', { name: /QR code/ })).toBeVisible();
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await expect(modal).toBeHidden();
+  expect((await page.request.get(link)).status()).toBe(200);
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+
   // unsharing asks for confirmation first; backing out changes nothing
   await modal.getByRole('button', { name: 'Unshare' }).click();
   await expect(modal).toContainText('Remove public access?');
@@ -283,13 +293,52 @@ test('offers the share options', async ({ page }) => {
 
   const modal = page.getByRole('dialog', { name: 'Share Credential' });
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
-  await expect(modal.getByRole('button', { name: 'Add to LinkedIn' })).toBeVisible();
-  // (Create Public Link is real; the remaining options are stubs)
-  await expect(modal.getByRole('button', { name: 'QR code' })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'QR code', exact: true })).toBeVisible();
 
-  // the options are stubs for now
-  await modal.getByRole('button', { name: 'QR code' }).click();
-  await expect(modal.getByRole('status')).toHaveText('QR code is coming soon.');
+  // LinkedIn is still a stub
+  await modal.getByRole('button', { name: 'Add to LinkedIn' }).click();
+  await expect(modal.getByRole('status')).toHaveText('Add to LinkedIn is coming soon.');
+});
+
+test('shows a QR code and shares only while it is visible', async ({ page }) => {
+  const link = 'http://localhost:3000/space/dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/UniversityOfToronto/LCWExperience.json';
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  const modal = page.getByRole('dialog', { name: 'Share Credential' });
+
+  // the credential starts private
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
+  expect((await page.request.get(link)).status()).not.toBe(200);
+
+  // the QR appears (VerifierPlus target first) and warns about the
+  // temporary public access it needed
+  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
+  const qrImage = modal.getByRole('img', { name: /QR code/ });
+  await expect(qrImage).toBeVisible();
+  expect(await qrImage.getAttribute('src')).toMatch(/^data:image\//);
+  await expect(modal).toContainText('temporarily public');
+  expect((await page.request.get(link)).status()).toBe(200);
+
+  // the toggle switches the encoded target
+  const verifierSrc = await qrImage.getAttribute('src');
+  await modal.getByRole('button', { name: 'Raw credential' }).click();
+  expect(await qrImage.getAttribute('src')).not.toBe(verifierSrc);
+
+  // closing the dialog reverts the temporary public access
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await expect(modal).toBeHidden();
+  await expect(async () => {
+    expect((await page.request.get(link)).status()).not.toBe(200);
+  }).toPass({ timeout: 10000 });
+
+  // safety net in case an earlier expectation aborted before the revert
+  execSync(
+    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
+    { stdio: 'ignore' }
+  );
 });
 
 test('deletes a credential into the Trash collection', async ({ page }) => {
