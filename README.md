@@ -4,8 +4,9 @@ The web front end for the Learner Credential Wallet (LCW): a React + TypeScript
 + Vite app for logging in with a passphrase-derived
 [did:key](https://w3c-ccg.github.io/did-key-spec/), browsing the account's
 [Wallet Attached Storage](https://w3c-ccg.github.io/wallet-attached-storage-spec/)
-space, and uploading, viewing, sharing, deleting, and verifying Verifiable
-Credentials.
+space, and adding, viewing, sharing, deleting, verifying, and claiming
+Verifiable Credentials — including claiming over
+[CHAPI](https://chapi.io/) from an external issuer.
 
 ## How it works
 
@@ -22,17 +23,46 @@ Credentials.
   signing every request with the login key. Each credential row offers
   **Verify** (opens it in the [veri-good](https://github.com/digitalcredentials/veri-good)
   web component below the browser), **View Source** (read-only JSON editor),
-  **Share** (stubbed options plus the device share sheet), and **Delete**
-  (soft delete into the space's `Trash` collection).
-- **Uploads** (`src/components/UploadCredentialModal.tsx`): paste JSON, pick a
-  file, or drag one in; a [vanilla-jsoneditor](https://github.com/josdejong/svelte-jsoneditor)
-  wrapper (`src/components/JSONInput.tsx`) checks and highlights JSON errors as
-  you type.
+  **Share**, and **Delete** (soft delete into the space's `Trash` collection).
+- **Sharing** (`src/components/ShareCredentialModal.tsx`): **Create Public
+  Link** marks just that credential world-readable (`resource.setPublic()`;
+  its collection and siblings stay private) and shows two links — the raw
+  credential URL and a [VerifierPlus](https://verifierplus.org) link that
+  renders it verified. **Unshare** (with a confirmation warning) clears the
+  policy. **QR code** renders either link as a scannable code; a private
+  credential is made public only while the QR is showing and reverts when it's
+  hidden or the dialog closes. The device share sheet appears where the Web
+  Share API exists; LinkedIn is still a stub.
+- **Add Credential** (`src/components/UploadCredentialModal.tsx`): paste JSON,
+  pick or drag a file, scan a QR code with the camera, or drop a QR image. A
+  QR may carry the credential JSON itself, a URL that serves it, or a CBOR-LD
+  presentation in the `VP1-` format the LCW mobile wallet emits (decoded with
+  [`@digitalcredentials/vpqr`](https://www.npmjs.com/package/@digitalcredentials/vpqr));
+  see `src/lib/scan.ts`. Every path stages into the same editable fields, and
+  a [vanilla-jsoneditor](https://github.com/josdejong/svelte-jsoneditor)
+  wrapper (`src/components/JSONInput.tsx`) checks and highlights JSON errors
+  as you type.
+- **Claiming over CHAPI** (`src/chapi/`, `src/lib/claim.ts`,
+  `src/lib/chapi.ts`): the header's **Enable browser wallet** button registers
+  the wallet with the [authn.io](https://authn.io) mediator (the button
+  reflects the real permission state and offers to disable). When an issuer
+  page requests a credential exchange, the mediator opens `chapi.html` (a
+  second Vite entry rendering `src/chapi/ChapiPage.tsx`), which runs the
+  [VC API exchange](https://www.w3.org/TR/vcalm-1.0/#workflows-and-exchanges):
+  it generates a fresh `did:key`, stores it (with its secret) in the space's
+  `dids` collection, signs the DIDAuth presentation over the issuer's
+  challenge and domain, and saves the issued credential to a collection the
+  user picks. The companion issuer lives in
+  [aws-lambda-issuer](https://github.com/digitalcredentials/aws-lambda-issuer).
 
-Two gotchas are documented in the code and worth knowing: veri-good's issuer
-list must be set via `setIssuerDids()` (React never populates a `<template>`
-child's `.content`), and the `<veri-good>` element is mounted once and hidden
-with CSS, never remounted.
+Gotchas documented in the code and worth knowing: veri-good's issuer list must
+be set via `setIssuerDids()` (React never populates a `<template>` child's
+`.content`); the `<veri-good>` element is mounted once and hidden with CSS,
+never remounted; CHAPI calls go through `navigator.credentialsPolyfill` rather
+than `navigator.credentials`, which password managers like 1Password can lock;
+and the handler page uses `WebCredentialHandler.activateHandler({get})` — not
+`receiveCredentialEvent()`, which only serves the redirect pattern and times
+out under the normal mediator flow.
 
 ## Local development
 
@@ -55,9 +85,23 @@ npm run test:e2e
 ```
 
 End-to-end Playwright tests against the local stack (see the prerequisites at
-the top of `tests/e2e.spec.ts`): login, browsing, all three upload modes,
-verification, source view, share options, and the delete round trip into
-`Trash`. The Vite dev server is started or reused automatically.
+the top of `tests/e2e.spec.ts`): login, browsing, adding credentials (file,
+paste, drag, and QR images carrying JSON, a URL, or a CBOR-LD `VP1-`
+payload), verification, source view, public links with the VerifierPlus
+companion link, the unshare confirmation round trip, QR sharing with
+temporary public access, and the delete round trip into `Trash`. The Vite
+dev server is started or reused automatically. Note: if the share test fails
+mid-flow it can leave the demo credential public, which cascades into later
+runs — clear `policies/UniversityOfToronto/LCWExperience.json.json` from the
+demo space bucket to reset.
+
+```bash
+npm run test:claim
+```
+
+Drives the wallet side of the CHAPI claim (exchange, DIDAuth, saving the
+issued credential) against the deployed issuer without a browser or the
+mediator.
 
 ```bash
 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
@@ -66,26 +110,6 @@ DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 Opt-in smoke tests against a deployed instance (login as the deployed demo
 account, list the space, verify a credential), with console errors and failed
 requests captured for debugging. Skipped unless `DEPLOYED_URL` is set.
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
 
 ## Deploy
 
