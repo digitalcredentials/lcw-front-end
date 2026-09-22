@@ -1,6 +1,7 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import QRCode from 'qrcode';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -134,8 +135,8 @@ const FIXTURE_PATH = new URL('./fixtures/PlaywrightUpload.json', import.meta.url
 
 async function openUploadModal(page: Page) {
   // Upload Credential appears only on the collection page
-  await page.getByRole('button', { name: 'Upload Credential' }).click();
-  return page.getByRole('dialog', { name: 'Upload Credential' });
+  await page.getByRole('button', { name: 'Add Credential' }).click();
+  return page.getByRole('dialog', { name: 'Add Credential' });
 }
 
 test('uploads a credential from a picked file', async ({ page }) => {
@@ -151,7 +152,7 @@ test('uploads a credential from a picked file', async ({ page }) => {
   // editable) and the JSON fills the editor
   await expect(modal.getByLabel('Name')).toHaveValue('PlaywrightUpload.json');
   await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   // the refreshed list contains the uploaded credential, and it verifies
   const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
@@ -167,7 +168,7 @@ test('uploads a credential from pasted JSON under a chosen name', async ({ page 
 
   await modal.locator('.cm-content').fill(readFileSync(FIXTURE_PATH, 'utf8'));
   await modal.getByLabel('Name').fill('PastedUpload.json');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   await expect(page.getByRole('row').filter({ hasText: 'PastedUpload' })).toBeVisible();
 });
@@ -185,9 +186,66 @@ test('uploads a credential dropped onto the drop zone', async ({ page }) => {
   await modal.getByTestId('credential-drop-zone').dispatchEvent('drop', { dataTransfer });
 
   await expect(modal.getByLabel('Name')).toHaveValue('DraggedUpload.json');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   await expect(page.getByRole('row').filter({ hasText: 'DraggedUpload' })).toBeVisible();
+});
+
+// A QR image can carry the credential JSON itself, a URL that serves it, or a
+// CBOR-LD-encoded presentation (the VP1- format the LCW mobile wallet uses)
+async function stageQrImage(modal: Locator, content: string) {
+  const buffer = await QRCode.toBuffer(content, { width: 480, margin: 2 });
+  await modal.locator('input[type=file]').setInputFiles({
+    name: 'credential-qr.png', mimeType: 'image/png', buffer,
+  });
+}
+
+test('adds a credential scanned from a QR image containing JSON', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(modal, JSON.stringify({
+    '@context': 'https://www.w3.org/2018/credentials/v1',
+    type: 'VerifiableCredential',
+    credentialSubject: { id: 'did:example:embedded-json-qr' },
+  }));
+
+  // scanning stages the decoded credential with a generated, editable name
+  await expect(modal.locator('.cm-content')).toContainText('did:example:embedded-json-qr');
+  await expect(modal.getByLabel('Name')).toHaveValue(/^scanned-/);
+  await modal.getByLabel('Name').fill('ScannedUpload.json');
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'ScannedUpload' })).toBeVisible();
+});
+
+test('stages a credential from a QR image containing a URL', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(
+    modal,
+    'https://digitalcredentials.github.io/vc-test-fixtures/verifiableCredentials/v1/bothSignatureTypes/didKey/fourRegistry-noStatus-noExpiry.json'
+  );
+
+  // the URL is fetched and its credential staged
+  await expect(modal.locator('.cm-content')).toContainText('VerifiableCredential');
+});
+
+test('stages a credential from a CBOR-LD (VP1) QR image', async ({ page }) => {
+  // Pre-encoded with @digitalcredentials/vpqr: a presentation holding one
+  // credential whose subject is did:example:qr-test-subject
+  const vp1 = 'VP1-B3ECQDIYACEMHIGDODB6KKAARDB2BQ3AYQKQRQ4DYDNSGSZB2MV4GC3LQNRSTU4LSFV2GK43UFVZXKYTKMVRXIGEIDJVLDRIADCGIEGIEAFMCF3IBKVK44ICANKL4FEWA54S6YF4GITMGJYFVIA55GT4QJZGYAM7V6GHA';
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(modal, vp1);
+
+  await expect(modal.locator('.cm-content')).toContainText('did:example:qr-test-subject');
+  await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
 });
 
 test('flags invalid JSON and blocks the upload', async ({ page }) => {
@@ -201,11 +259,11 @@ test('flags invalid JSON and blocks the upload', async ({ page }) => {
   // the editor highlights the parse error dynamically, and the upload is
   // blocked until the JSON parses
   await expect(modal.locator('.cm-lint-marker-error').first()).toBeVisible();
-  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeDisabled();
+  await expect(modal.getByRole('button', { name: 'Add', exact: true })).toBeDisabled();
 
   // repairing the JSON re-enables the upload
   await modal.locator('.cm-content').fill('{"type": ["VerifiablePresentation"]}');
-  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeEnabled();
+  await expect(modal.getByRole('button', { name: 'Add', exact: true })).toBeEnabled();
 });
 
 test('shows a credential source in the read-only editor', async ({ page }) => {

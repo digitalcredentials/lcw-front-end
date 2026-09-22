@@ -433,7 +433,7 @@ export default function FileBrowserPage() {
               onClick={() => { setUploadError(''); setUploadOpen(true); }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
             >
-              Upload Credential
+              Add Credential
             </button>
           ) : (
             <button
