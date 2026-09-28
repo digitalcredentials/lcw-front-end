@@ -1,1 +1,4 @@
 @import "tailwindcss";
+/* The batch-issuer panel ships prebuilt JSX with Tailwind classes; compile
+   them here (node_modules is outside Tailwind's default source scan). */
+@source "../node_modules/@digitalcredentials/batch-issuer-ui/dist";

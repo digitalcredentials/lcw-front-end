@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
@@ -370,6 +370,13 @@ export default function FileBrowserPage() {
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <span className="text-lg font-semibold text-gray-800">{spaceName}</span>
         <div className="flex items-center gap-4">
+          <Link
+            to="/batches"
+            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            title="Issue batches of credentials from a CSV"
+          >
+            Batch issuer
+          </Link>
           {walletState === 'enabled' ? (
             <div className="relative">
               <button
