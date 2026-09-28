@@ -1,6 +1,7 @@
 const TOKEN_KEY = 'lcw_auth_token';
 const SPACE_KEY = 'lcw_space_url';
 const SESSION_KEY_KEY = 'lcw_session_key';
+const EMAIL_KEY = 'lcw_email';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -14,6 +15,17 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(SPACE_KEY);
   localStorage.removeItem(SESSION_KEY_KEY);
+  localStorage.removeItem(EMAIL_KEY);
+}
+
+// The logged-in account's email, kept for the zcap-authenticated back-end
+// endpoints that identify the account by email (e.g. /spaces).
+export function getEmail(): string | null {
+  return localStorage.getItem(EMAIL_KEY);
+}
+
+export function setEmail(email: string): void {
+  localStorage.setItem(EMAIL_KEY, email);
 }
 
 // The exported key pair that authenticated at login, kept for signing WAS
