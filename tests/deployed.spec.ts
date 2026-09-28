@@ -71,3 +71,22 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     }
   }
 });
+
+test('opens the batch issuer screen', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    await page.getByRole('link', { name: 'Batch issuer' }).click();
+    // The panel is a linked (file:) package; if the bundle picks up its own
+    // React copy the screen white-screens with an invalid-hook TypeError, so
+    // assert both the render and the absence of page errors.
+    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New batch' })).toBeVisible();
+    const pageErrors = noise.filter((line) => line.startsWith('[pageerror]'));
+    expect(pageErrors).toEqual([]);
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
