@@ -4,6 +4,7 @@ import { BatchIssuerPanel, type BatchIssuerAdapter } from '@digitalcredentials/b
 import { clearToken } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
 import { createSpace, listSpaces, deleteSpace } from '../lib/spaces';
+import { notifyRecipients } from '../lib/notify';
 
 // The batch issuer screen: the @digitalcredentials/batch-issuer-ui panel
 // mounted in the wallet's chrome, driven by the wallet's own session (WAS
@@ -19,6 +20,7 @@ export default function BatchIssuerPage() {
         list: listSpaces,
         remove: deleteSpace,
       },
+      notifyRecipients,
       templatesApiBase: (import.meta.env.VITE_TEMPLATES_API_BASE ?? '').replace(/\/+$/, ''),
       onUnauthorized: () => {
         clearToken();
