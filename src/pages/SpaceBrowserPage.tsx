@@ -9,6 +9,14 @@ import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi'
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
+import {
+  credentialFrom,
+  credentialName,
+  issuerName,
+  credentialIssuance,
+  credentialExpiration,
+  type CredentialLike,
+} from '../lib/linkedin';
 
 // Issuers whose credentials the verifier accepts, keyed by DID
 const ISSUER_DIDS = {
@@ -53,13 +61,17 @@ export default function FileBrowserPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [error, setError] = useState('');
-  // The resource being shown below the browser (in the verifier or the
-  // source viewer, per mode); its row in the resource table is highlighted
+  // The opened resource: 'detail' replaces the list with the credential view
+  // (formatted contents, source and verification side by side); 'source' is
+  // the read-only source-only view used in the Trash and dids collections
   const [viewing, setViewing] = useState<{
     resource: ResourceSummary;
     vc: string;
-    mode: 'verify' | 'source';
+    mode: 'detail' | 'source';
   } | null>(null);
+  // Credential titles for the list rows, keyed by `${collectionId}/${resourceId}`,
+  // fetched in the background after the listing loads
+  const [titles, setTitles] = useState<Record<string, string>>({});
   const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
@@ -140,7 +152,29 @@ export default function FileBrowserPage() {
         return;
       }
       const resourceList = await s.client.space(s.spaceId).collection(collection.id).list();
-      setResources(resourceList?.items ?? []);
+      const items = resourceList?.items ?? [];
+      setResources(items);
+
+      // Fetch the bodies in the background to show credential titles in the
+      // list; entries are keyed by collection so a stale fetch after
+      // switching collections is harmless.
+      void Promise.all(
+        items.map(async (item): Promise<[string, string] | null> => {
+          try {
+            const data = await s.client.space(s.spaceId).collection(collection.id).resource(item.id).get();
+            const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data;
+            const credential = credentialFrom(parsed);
+            return credential ? [`${collection.id}/${item.id}`, credentialName(credential)] : null;
+          } catch {
+            return null;
+          }
+        })
+      ).then((entries) => {
+        const found = entries.filter((e): e is [string, string] => e !== null);
+        if (found.length) {
+          setTitles((current) => ({ ...current, ...Object.fromEntries(found) }));
+        }
+      });
     } catch (err) {
       handleError(err);
     } finally {
@@ -149,8 +183,9 @@ export default function FileBrowserPage() {
   }, [navigate, handleError, session]);
 
   // Retrieves a resource through the WAS client (a signed request) and shows
-  // it below the browser: in the verifier, or in the read-only source viewer.
-  const openResource = useCallback(async (resource: ResourceSummary, mode: 'verify' | 'source') => {
+  // it: in the credential detail view (contents, source and verification), or
+  // in the read-only source-only viewer (Trash and dids).
+  const openResource = useCallback(async (resource: ResourceSummary, mode: 'detail' | 'source') => {
     if (!selected) {
       return;
     }
@@ -171,9 +206,9 @@ export default function FileBrowserPage() {
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc, mode });
-      if (mode === 'verify') {
+      if (mode === 'detail') {
         verifierRef.current?.verify(vc);
-        verifierRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
       handleError(err);
@@ -256,6 +291,39 @@ export default function FileBrowserPage() {
     } catch {
       return viewing.vc;
     }
+  }, [viewing]);
+
+  // The formatted summary shown at the top of the credential detail view
+  const viewingSummary = useMemo(() => {
+    if (!viewing) {
+      return null;
+    }
+    let credential: CredentialLike | null = null;
+    try {
+      credential = credentialFrom(JSON.parse(viewing.vc));
+    } catch {
+      return null;
+    }
+    if (!credential) {
+      return null;
+    }
+    const subject = credential.credentialSubject as
+      | { name?: unknown; hasCredential?: unknown; achievement?: unknown }
+      | undefined;
+    const achievement = [subject?.hasCredential ?? subject?.achievement ?? []].flat()[0] as
+      | { description?: unknown }
+      | undefined;
+    const description = (credential as { description?: unknown }).description ?? achievement?.description;
+    const issuerUrl = (credential.issuer as { url?: unknown } | undefined)?.url;
+    return {
+      title: credentialName(credential),
+      issuer: issuerName(credential),
+      issuerUrl: typeof issuerUrl === 'string' ? issuerUrl : null,
+      recipient: typeof subject?.name === 'string' ? subject.name : null,
+      issued: credentialIssuance(credential),
+      expires: credentialExpiration(credential),
+      description: typeof description === 'string' ? description : null,
+    };
   }, [viewing]);
 
   // item.url is a path on the WAS server; the share sheet wants it absolute
@@ -553,8 +621,9 @@ export default function FileBrowserPage() {
           </div>
         )}
 
-        {/* Resources in the selected collection */}
-        {!loading && !error && selected && resources.length > 0 && (
+        {/* Resources in the selected collection (hidden while a credential's
+            detail view is open) */}
+        {!loading && !error && selected && resources.length > 0 && viewing?.mode !== 'detail' && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wide">
@@ -564,7 +633,9 @@ export default function FileBrowserPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {resources.map((item) => (
+                {resources.map((item) => {
+                  const title = titles[`${selected.id}/${item.id}`];
+                  return (
                   <tr
                     key={item.id}
                     className={viewing?.resource.id === item.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}
@@ -572,33 +643,32 @@ export default function FileBrowserPage() {
                     <td className="px-4 py-3">
                       <span className="flex items-center gap-2">
                         {FILE_ICON}
-                        <span className="text-gray-700">{item.name ?? item.id}</span>
+                        <span>
+                          <span className="block text-gray-700">{title ?? item.name ?? item.id}</span>
+                          {title && (
+                            <span className="block text-xs text-gray-400">{item.name ?? item.id}</span>
+                          )}
+                        </span>
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
-                        {/* Trash holds deleted items and dids holds signing
-                            keys - neither is a credential to verify or share */}
+                        {/* A credential opens into the detail view; Trash and
+                            dids keep their own source/restore/delete actions */}
                         {!['Trash', 'dids'].includes(selected.id) && (
                           <button
-                            onClick={() => openResource(item, 'verify')}
+                            onClick={() => openResource(item, 'detail')}
                             className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
                           >
-                            Verify
+                            Open
                           </button>
                         )}
-                        <button
-                          onClick={() => openResource(item, 'source')}
-                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                        >
-                          View Source
-                        </button>
-                        {!['Trash', 'dids'].includes(selected.id) && (
+                        {['Trash', 'dids'].includes(selected.id) && (
                           <button
-                            onClick={() => setShareTarget(item)}
+                            onClick={() => openResource(item, 'source')}
                             className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
                           >
-                            Share
+                            View Source
                           </button>
                         )}
                         {selected.id === 'Trash' && (
@@ -614,45 +684,141 @@ export default function FileBrowserPage() {
                             Restore
                           </button>
                         )}
-                        <button
-                          onClick={() => setDeleteTarget(item)}
-                          className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                        >
-                          Delete
-                        </button>
+                        {['Trash', 'dids'].includes(selected.id) && (
+                          <button
+                            onClick={() => setDeleteTarget(item)}
+                            className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
-        {/* Credential verifier: mounted once, below the browser. Clicking a
-            resource hands its retrieved content to verify() and highlights
-            the row above. Hidden with CSS rather than unmounted -- the
-            component misbehaves when remounted -- and shown only on the
-            collection page once a credential has been selected. */}
-        <section
-          className={`mt-8 ${selected && viewing?.mode === 'verify' ? '' : 'hidden'}`}
-          aria-label="Credential verification"
-        >
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">
+        {/* Credential detail view: header + formatted summary above, source
+            and verification side by side, Share/Delete at the bottom. The
+            veri-good element is mounted once and kept in a fixed slot of an
+            always-rendered wrapper (keyed, with a placeholder occupying the
+            sibling slot) because the component misbehaves when remounted; it
+            is hidden with CSS outside detail mode. */}
+        {selected && viewing?.mode === 'detail' && (
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-800">
+                {viewingSummary?.title ?? viewing.resource.name ?? viewing.resource.id}
+              </h2>
+              <p className="text-xs text-gray-400">{viewing.resource.name ?? viewing.resource.id}</p>
+            </div>
+            <button
+              onClick={() => setViewing(null)}
+              className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+            >
+              Back to list
+            </button>
+          </div>
+        )}
+
+        {selected && viewing?.mode === 'detail' && viewingSummary && (
+          <div className="mb-6 bg-white rounded-xl border border-gray-200 p-5">
+            <dl className="grid gap-x-8 gap-y-2 sm:grid-cols-2 text-sm">
+              {viewingSummary.recipient && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Issued to</dt>
+                  <dd className="text-gray-800">{viewingSummary.recipient}</dd>
+                </div>
+              )}
+              {viewingSummary.issuer && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Issuer</dt>
+                  <dd className="text-gray-800">
+                    {viewingSummary.issuer}
+                    {viewingSummary.issuerUrl && (
+                      <>
+                        {' '}
+                        <a
+                          href={viewingSummary.issuerUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-600 hover:text-indigo-700 text-xs"
+                        >
+                          {viewingSummary.issuerUrl}
+                        </a>
+                      </>
+                    )}
+                  </dd>
+                </div>
+              )}
+              {viewingSummary.issued && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Issued</dt>
+                  <dd className="text-gray-800">{viewingSummary.issued.toLocaleDateString()}</dd>
+                </div>
+              )}
+              {viewingSummary.expires && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Expires</dt>
+                  <dd className="text-gray-800">{viewingSummary.expires.toLocaleDateString()}</dd>
+                </div>
+              )}
+              {viewingSummary.description && (
+                <div className="sm:col-span-2">
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Description</dt>
+                  <dd className="text-gray-800">{viewingSummary.description}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        )}
+
+        <div className={viewing?.mode === 'detail' ? 'grid gap-6 items-start lg:grid-cols-2' : ''}>
+          {selected && viewing?.mode === 'detail' ? (
+            <section key="source" aria-label="Credential source">
+              <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
+                Credential Source
+              </h2>
+              <JSONInput text={viewingSource} readOnly />
+            </section>
+          ) : (
+            <span key="source" className="hidden" />
+          )}
+          <section
+            key="verifier"
+            className={selected && viewing?.mode === 'detail' ? '' : 'hidden'}
+            aria-label="Credential verification"
+          >
+            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
               Credential Verification
             </h2>
-            {viewing && (
-              <span className="text-sm text-gray-600">
-                {viewing.resource.name ?? viewing.resource.id}
-              </span>
-            )}
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <veri-good ref={handleVerifierRef} />
-          </div>
-        </section>
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <veri-good ref={handleVerifierRef} />
+            </div>
+          </section>
+        </div>
 
-        {/* Read-only source viewer, in the same spot as the verifier */}
+        {selected && viewing?.mode === 'detail' && (
+          <div className="mt-6 flex gap-2">
+            <button
+              onClick={() => setShareTarget(viewing.resource)}
+              className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+            >
+              Share
+            </button>
+            <button
+              onClick={() => setDeleteTarget(viewing.resource)}
+              className="border border-red-200 hover:bg-red-50 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        )}
+
+        {/* Read-only source-only viewer (Trash and dids), below the list */}
         {selected && viewing?.mode === 'source' && (
           <section className="mt-8" aria-label="Credential source">
             <div className="flex items-baseline justify-between mb-3">
