@@ -7,6 +7,7 @@ import {
   linkedinAddToProfileUrl,
   type CredentialLike,
 } from '../lib/linkedin';
+import { verifyForSharing, type ShareVerification } from '../lib/verify';
 
 interface ShareCredentialModalProps {
   resourceName: string;
@@ -49,6 +50,10 @@ export default function ShareCredentialModal({
   // button is clicked
   const [linkedin, setLinkedin] = useState<{ credential: CredentialLike; warnings: string[] } | null>(null);
   const [linkedinBusy, setLinkedinBusy] = useState(false);
+  // Pre-share verification of the credential (verifier-core), run when the
+  // modal opens; null when the resource is not a credential
+  const [verification, setVerification] = useState<'checking' | ShareVerification | null>(null);
+  const [loadedCredential, setLoadedCredential] = useState<CredentialLike | null>(null);
 
   // Opens VerifierPlus on the public credential URL; the vc parameter is
   // passed unencoded, matching how VerifierPlus reads it from the fragment
@@ -68,6 +73,33 @@ export default function ShareCredentialModal({
           setLinkState('private');
         }
       });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Verify the credential when the modal opens, so every share path (link,
+  // QR, LinkedIn, device) carries the warning. Non-credential resources get
+  // no verification and no warning.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const credential = credentialFrom(await onLoadCredential());
+        if (!credential || cancelled) {
+          return;
+        }
+        setLoadedCredential(credential);
+        setVerification('checking');
+        const result = await verifyForSharing(credential);
+        if (!cancelled) {
+          setVerification(result);
+        }
+      } catch {
+        // Could not load the body: nothing to verify, nothing to warn about
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -169,12 +201,15 @@ export default function ShareCredentialModal({
     setLinkError('');
     setNotice('');
     try {
-      const credential = credentialFrom(await onLoadCredential());
+      const credential = loadedCredential ?? credentialFrom(await onLoadCredential());
       if (!credential) {
         setNotice('This resource does not look like a verifiable credential.');
         return;
       }
       const warnings: string[] = [];
+      if (typeof verification === 'object' && verification && !verification.ok) {
+        warnings.push(`This credential does not fully verify: ${verification.problems.join('; ')}.`);
+      }
       const expires = credentialExpiration(credential);
       if (expires && expires.getTime() < Date.now()) {
         warnings.push('This credential has expired.');
@@ -254,6 +289,14 @@ export default function ShareCredentialModal({
           </button>
         </div>
         <p className="text-sm text-gray-500 mb-4">{resourceName}</p>
+
+        {typeof verification === 'object' && verification && !verification.ok && (
+          <p role="alert" className="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            Warning: this credential does not fully verify —{' '}
+            {verification.problems.join('; ')}. You can still share it, but
+            whoever receives it may not accept it.
+          </p>
+        )}
 
         <div className="space-y-2">
           {linkState === 'checking' && (
