@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import {
+  credentialFrom,
+  credentialExpiration,
+  issuerName,
+  linkedinAddToProfileUrl,
+  type CredentialLike,
+} from '../lib/linkedin';
 
 interface ShareCredentialModalProps {
   resourceName: string;
@@ -12,10 +19,11 @@ interface ShareCredentialModalProps {
   onCreatePublicLink: () => Promise<string>;
   // Removes public access, so the link stops resolving
   onUnshare: () => Promise<void>;
+  // Fetches the stored resource body (envelope or bare credential), for the
+  // fields LinkedIn's add-to-profile form is filled from
+  onLoadCredential: () => Promise<unknown>;
   onClose: () => void;
 }
-
-const STUB_OPTIONS = ['Add to LinkedIn'];
 
 interface QrState {
   target: 'verifier' | 'public';
@@ -26,7 +34,7 @@ interface QrState {
 }
 
 export default function ShareCredentialModal({
-  resourceName, resourceUrl, onCheckPublic, onCreatePublicLink, onUnshare, onClose,
+  resourceName, resourceUrl, onCheckPublic, onCreatePublicLink, onUnshare, onLoadCredential, onClose,
 }: ShareCredentialModalProps) {
   const [notice, setNotice] = useState('');
   const [linkState, setLinkState] = useState<'checking' | 'private' | 'public'>('checking');
@@ -37,6 +45,10 @@ export default function ShareCredentialModal({
   const [confirmingUnshare, setConfirmingUnshare] = useState(false);
   const [qr, setQr] = useState<QrState | null>(null);
   const [qrBusy, setQrBusy] = useState(false);
+  // The credential loaded for the LinkedIn confirm step; null until the
+  // button is clicked
+  const [linkedin, setLinkedin] = useState<{ credential: CredentialLike; warnings: string[] } | null>(null);
+  const [linkedinBusy, setLinkedinBusy] = useState(false);
 
   // Opens VerifierPlus on the public credential URL; the vc parameter is
   // passed unencoded, matching how VerifierPlus reads it from the fragment
@@ -150,6 +162,65 @@ export default function ShareCredentialModal({
       // clipboard unavailable; the link is selectable in the input
     }
   }
+  // First click on Add to LinkedIn: load the credential and show the confirm
+  // step, with warnings (expired, unnamed issuer) the user may proceed past.
+  async function startLinkedin() {
+    setLinkedinBusy(true);
+    setLinkError('');
+    setNotice('');
+    try {
+      const credential = credentialFrom(await onLoadCredential());
+      if (!credential) {
+        setNotice('This resource does not look like a verifiable credential.');
+        return;
+      }
+      const warnings: string[] = [];
+      const expires = credentialExpiration(credential);
+      if (expires && expires.getTime() < Date.now()) {
+        warnings.push('This credential has expired.');
+      }
+      if (!issuerName(credential)) {
+        warnings.push(
+          "This credential does not name its issuer, so LinkedIn's issuing organization field will be left blank."
+        );
+      }
+      setLinkedin({ credential, warnings });
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not load the credential.');
+    } finally {
+      setLinkedinBusy(false);
+    }
+  }
+
+  // Confirmed: make the credential public when it is not already (LinkedIn's
+  // certUrl must resolve for reviewers), then open the pre-filled
+  // add-to-profile form in a new tab.
+  async function addToLinkedin() {
+    if (!linkedin) {
+      return;
+    }
+    setLinkedinBusy(true);
+    setLinkError('');
+    try {
+      let url = publicLink;
+      if (linkState !== 'public') {
+        url = await onCreatePublicLink();
+        setPublicLink(url);
+        setLinkState('public');
+      }
+      const linkedinUrl = linkedinAddToProfileUrl({
+        credential: linkedin.credential,
+        certUrl: `https://verifierplus.org/#verify?vc=${url}`,
+      });
+      window.open(linkedinUrl, '_blank', 'noopener');
+      setLinkedin(null);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not add to LinkedIn.');
+    } finally {
+      setLinkedinBusy(false);
+    }
+  }
+
   // The device share sheet (email, message, AirDrop, ...) exists only where
   // the Web Share API does
   const canDeviceShare = typeof navigator.share === 'function';
@@ -328,15 +399,55 @@ export default function ShareCredentialModal({
               )}
             </div>
           )}
-          {STUB_OPTIONS.map((option) => (
+          {!linkedin ? (
             <button
-              key={option}
-              onClick={() => setNotice(`${option} is coming soon.`)}
-              className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
+              onClick={startLinkedin}
+              disabled={linkedinBusy || linkState === 'checking'}
+              className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
             >
-              {option}
+              {linkedinBusy ? 'Working…' : 'Add to LinkedIn'}
             </button>
-          ))}
+          ) : (
+            <div className="border-2 border-indigo-200 bg-indigo-50 rounded-lg p-3 space-y-3">
+              <p className="text-sm text-gray-700">
+                This will add the credential to your LinkedIn profile
+                {linkState !== 'public' && ' after creating a public link'}.{' '}
+                <a
+                  href="https://lcw.app/faq.html#add-to-linkedin"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-600 hover:text-indigo-700 underline"
+                >
+                  What does this mean?
+                </a>
+              </p>
+              {linkedin.warnings.map((warning) => (
+                <p
+                  key={warning}
+                  role="alert"
+                  className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+                >
+                  Warning: {warning}
+                </p>
+              ))}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setLinkedin(null)}
+                  disabled={linkedinBusy}
+                  className="flex-1 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={addToLinkedin}
+                  disabled={linkedinBusy}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  {linkedinBusy ? 'Working…' : 'Add to LinkedIn'}
+                </button>
+              </div>
+            </div>
+          )}
           {canDeviceShare && (
             <button
               onClick={deviceShare}

@@ -742,6 +742,23 @@ export default function FileBrowserPage() {
             // Reverts the resource to capability-only access
             await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).clearPolicy();
           }}
+          onLoadCredential={async () => {
+            const s = await session;
+            if (!s) {
+              throw new Error('Your session has expired. Sign in again.');
+            }
+            // The stored body (a presentation envelope or a bare credential),
+            // for the fields LinkedIn's add-to-profile form is filled from
+            const data = await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).get();
+            if (data instanceof Blob) {
+              try {
+                return JSON.parse(await data.text());
+              } catch {
+                return null;
+              }
+            }
+            return data;
+          }}
           onClose={() => setShareTarget(null)}
         />
       )}
