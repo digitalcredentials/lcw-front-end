@@ -91,26 +91,35 @@ test('opens the batch issuer screen', async ({ page }) => {
   }
 });
 
-test('shares a credential to LinkedIn', async ({ page, context }) => {
+test('shares a credential to LinkedIn', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     await page.getByRole('row').filter({ hasText: 'LCWExperience' })
       .getByRole('button', { name: 'Share' }).click();
+    // Record the URL at the moment the page calls window.open, instead of
+    // opening a real popup: reading popup.url() after waitForEvent('page')
+    // races LinkedIn's redirect to its login wall and fails intermittently.
+    await page.evaluate(() => {
+      (window as unknown as { __openedUrl?: string }).__openedUrl = undefined;
+      window.open = ((url: string | URL) => {
+        (window as unknown as { __openedUrl?: string }).__openedUrl = String(url);
+        return null;
+      }) as typeof window.open;
+    });
     await page.getByRole('button', { name: 'Add to LinkedIn' }).click();
     // The confirm step; its button carries the same label as the opener.
-    const popupPromise = context.waitForEvent('page');
     await page.getByRole('dialog').getByRole('button', { name: 'Add to LinkedIn' }).last().click();
-    const popup = await popupPromise;
-    // LinkedIn itself will render a login wall; only the URL we built is
-    // asserted. waitForEvent resolves with the initial URL before redirects.
-    const url = new URL(popup.url());
+    await expect
+      .poll(async () => page.evaluate(() => (window as unknown as { __openedUrl?: string }).__openedUrl))
+      .toBeTruthy();
+    const opened = await page.evaluate(() => (window as unknown as { __openedUrl?: string }).__openedUrl);
+    const url = new URL(opened!);
     expect(`${url.origin}${url.pathname}`).toBe('https://www.linkedin.com/profile/add');
     expect(url.searchParams.get('startTask')).toBe('CERTIFICATION_NAME');
     expect(url.searchParams.get('name')).toBeTruthy();
     expect(url.searchParams.get('certUrl')).toContain('verifierplus.org');
-    await popup.close();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
