@@ -45,7 +45,6 @@ export default function FileBrowserPage() {
   // The client signs with the key pair that authenticated at login, against
   // the space URL the login API returned.
   const session = useMemo(() => getSessionWASClient(), []);
-  const [spaceName, setSpaceName] = useState('');
   const [collections, setCollections] = useState<CollectionSummary[]>([]);
   const [selected, setSelected] = useState<CollectionSummary | null>(null);
   const [resources, setResources] = useState<ResourceSummary[]>([]);
@@ -114,12 +113,7 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      const space = s.client.space(s.spaceId);
-      const [description, collectionList] = await Promise.all([
-        space.describe(),
-        space.collections(),
-      ]);
-      setSpaceName(description?.name ?? s.spaceId);
+      const collectionList = await s.client.space(s.spaceId).collections();
       setCollections(collectionList?.items ?? []);
     } catch (err) {
       handleError(err);
@@ -407,7 +401,14 @@ export default function FileBrowserPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <span className="text-lg font-semibold text-gray-800">{spaceName}</span>
+        <span>
+          <span className="block text-lg font-semibold text-gray-800 leading-tight">
+            Digital Credentials Commons
+          </span>
+          <span className="block text-sm text-gray-500 leading-tight">
+            Learner Credential Wallet
+          </span>
+        </span>
         <div className="flex items-center gap-4">
           <Link
             to="/batches"
