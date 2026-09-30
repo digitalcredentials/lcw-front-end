@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient } from '../lib/was';
-import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
+import AppShell from '../components/AppShell';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -539,110 +539,11 @@ export default function FileBrowserPage() {
     }
   }
 
-  // 'unknown' until the CHAPI permission is queried; then reflects reality
-  const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
-  const [walletBusy, setWalletBusy] = useState(false);
-  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
-
-  useEffect(() => {
-    isWalletEnabled()
-      .then((enabled) => setWalletState(enabled ? 'enabled' : 'disabled'))
-      .catch(() => setWalletState('disabled'));
-  }, []);
-
-  async function enableBrowserWallet() {
-    setWalletBusy(true);
-    try {
-      await registerWallet();
-      setWalletState('enabled');
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  async function disableBrowserWallet() {
-    setWalletBusy(true);
-    setWalletMenuOpen(false);
-    try {
-      await unregisterWallet();
-      setWalletState('disabled');
-    } catch (err) {
-      handleError(err);
-    } finally {
-      setWalletBusy(false);
-    }
-  }
-
-  function handleSignOut() {
-    clearToken();
-    navigate('/login', { replace: true });
-  }
-
   const isEmpty = selected ? resources.length === 0 : collections.length === 0;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <span>
-          <span className="block text-lg font-semibold text-gray-800 leading-tight">
-            Digital Credentials Commons
-          </span>
-          <span className="block text-sm text-gray-500 leading-tight">
-            Learner Credential Wallet
-          </span>
-        </span>
-        <div className="flex items-center gap-4">
-          <Link
-            to="/batches"
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            title="Issue batches of credentials from a CSV"
-          >
-            Batch issuer
-          </Link>
-          {walletState === 'enabled' ? (
-            <div className="relative">
-              <button
-                onClick={() => setWalletMenuOpen((o) => !o)}
-                disabled={walletBusy}
-                className="text-sm text-green-700 hover:text-green-800 transition-colors"
-                title="This wallet is registered with your browser (CHAPI). Click to manage."
-              >
-                {walletBusy ? 'Working…' : 'Browser wallet is enabled ✓'}
-              </button>
-              {walletMenuOpen && (
-                <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-md z-10">
-                  <button
-                    onClick={disableBrowserWallet}
-                    className="w-full text-left text-sm text-red-600 hover:bg-red-50 rounded-lg px-3 py-2"
-                  >
-                    Disable browser wallet
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <button
-              onClick={enableBrowserWallet}
-              disabled={walletBusy || walletState === 'unknown'}
-              className="text-sm text-gray-500 hover:text-gray-700 disabled:text-gray-400 transition-colors"
-              title="Register this wallet with your browser so issuer sites can offer it (CHAPI)"
-            >
-              {walletBusy ? 'Working…' : 'Enable browser wallet'}
-            </button>
-          )}
-          <button
-            onClick={handleSignOut}
-            className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-4 py-8">
+    <AppShell>
+      <div>
         {/* Breadcrumb and collection actions */}
         <div className="flex items-center justify-between mb-4">
           <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
@@ -981,7 +882,7 @@ export default function FileBrowserPage() {
             <JSONInput text={viewingSource} readOnly />
           </section>
         )}
-      </main>
+      </div>
 
       {uploadOpen && (
         <UploadCredentialModal
@@ -1263,6 +1164,6 @@ export default function FileBrowserPage() {
           onClose={() => setShareTarget(null)}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
