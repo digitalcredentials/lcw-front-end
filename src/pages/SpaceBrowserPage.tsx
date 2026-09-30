@@ -64,6 +64,9 @@ export default function FileBrowserPage() {
   const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<ResourceSummary | null>(null);
+  const [restoreCollectionId, setRestoreCollectionId] = useState('');
+  const [restoring, setRestoring] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [creatingCollection, setCreatingCollection] = useState(false);
@@ -210,6 +213,42 @@ export default function FileBrowserPage() {
       handleError(err);
     } finally {
       setDeleting(false);
+    }
+  }, [navigate, handleError, session, selected, loadResources]);
+
+  // Moves a credential out of Trash into the chosen collection: copy the
+  // stored body over, then delete the Trash copy (a DELETE inside Trash is
+  // permanent on the server, so this is a move, not another soft delete).
+  const restoreCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
+    if (!selected || !targetCollectionId) {
+      return;
+    }
+    setRestoring(true);
+    setError('');
+
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const space = s.client.space(s.spaceId);
+      const data = await space.collection(selected.id).resource(resource.id).get();
+      if (data === null) {
+        throw new Error('The credential could not be read from Trash.');
+      }
+      const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
+      await space.collection(targetCollectionId).put(resource.id, body as ResourceData);
+      await space.collection(selected.id).resource(resource.id).delete();
+      setRestoreTarget(null);
+      setViewing((v) => (v?.resource.id === resource.id ? null : v));
+      await loadResources(selected);
+    } catch (err) {
+      setRestoreTarget(null);
+      handleError(err);
+    } finally {
+      setRestoring(false);
     }
   }, [navigate, handleError, session, selected, loadResources]);
 
@@ -537,24 +576,43 @@ export default function FileBrowserPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => openResource(item, 'verify')}
-                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                        >
-                          Verify
-                        </button>
+                        {/* Trash holds deleted items and dids holds signing
+                            keys - neither is a credential to verify or share */}
+                        {!['Trash', 'dids'].includes(selected.id) && (
+                          <button
+                            onClick={() => openResource(item, 'verify')}
+                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                          >
+                            Verify
+                          </button>
+                        )}
                         <button
                           onClick={() => openResource(item, 'source')}
                           className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
                         >
                           View Source
                         </button>
-                        <button
-                          onClick={() => setShareTarget(item)}
-                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                        >
-                          Share
-                        </button>
+                        {!['Trash', 'dids'].includes(selected.id) && (
+                          <button
+                            onClick={() => setShareTarget(item)}
+                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                          >
+                            Share
+                          </button>
+                        )}
+                        {selected.id === 'Trash' && (
+                          <button
+                            onClick={() => {
+                              setRestoreTarget(item);
+                              setRestoreCollectionId(
+                                collections.find((c) => !['Trash', 'dids'].includes(c.id))?.id ?? ''
+                              );
+                            }}
+                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                          >
+                            Restore
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteTarget(item)}
                           className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
@@ -690,10 +748,20 @@ export default function FileBrowserPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-lg font-semibold text-gray-800 mb-2">Delete Credential</h2>
-            <p className="text-sm text-gray-600 mb-5">
-              Move <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span> to
-              the Trash collection?
-            </p>
+            {/* Inside Trash the server deletes permanently; elsewhere it is a
+                soft delete into Trash */}
+            {selected?.id === 'Trash' ? (
+              <p className="text-sm text-gray-600 mb-5">
+                Permanently delete{' '}
+                <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span>?
+                This cannot be undone.
+              </p>
+            ) : (
+              <p className="text-sm text-gray-600 mb-5">
+                Move <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span> to
+                the Trash collection?
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setDeleteTarget(null)}
@@ -707,6 +775,55 @@ export default function FileBrowserPage() {
                 className="bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
               >
                 {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore from Trash: pick the collection the credential moves into */}
+      {restoreTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setRestoreTarget(null)}
+        >
+          <div
+            role="dialog"
+            aria-label="Restore Credential"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">Restore Credential</h2>
+            <p className="text-sm text-gray-600 mb-3">
+              Move <span className="font-medium text-gray-800">{restoreTarget.name ?? restoreTarget.id}</span> out
+              of Trash into:
+            </p>
+            <label htmlFor="restore-collection" className="sr-only">Collection to restore into</label>
+            <select
+              id="restore-collection"
+              value={restoreCollectionId}
+              onChange={(e) => setRestoreCollectionId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
+            >
+              {collections
+                .filter((c) => !['Trash', 'dids'].includes(c.id))
+                .map((c) => (
+                  <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
+                ))}
+            </select>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setRestoreTarget(null)}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => restoreCredential(restoreTarget, restoreCollectionId)}
+                disabled={restoring || !restoreCollectionId}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {restoring ? 'Restoring…' : 'Restore'}
               </button>
             </div>
           </div>
