@@ -8,6 +8,7 @@ import { isAuthenticated } from '../lib/auth';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
+import { verifyForSharing } from '../lib/verify';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -57,6 +58,9 @@ export default function ChapiPage() {
   const requestRef = useRef<ParsedPresentationRequest | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sharing, setSharing] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  // Verification failures for the current selection; the user may share anyway
+  const [shareWarnings, setShareWarnings] = useState<{ name: string; problems: string[] }[] | null>(null);
   const activatedRef = useRef(false);
 
   useEffect(() => {
@@ -194,6 +198,8 @@ export default function ChapiPage() {
   }
 
   function toggleSelected(key: string) {
+    // A changed selection invalidates any verification warnings shown for it
+    setShareWarnings(null);
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(key)) {
@@ -205,18 +211,49 @@ export default function ChapiPage() {
     });
   }
 
-  // Share the selection: build the response presentation (signed as the
-  // holder when the request asked for DIDAuthentication with a challenge and
-  // the holder key is stored; unsigned otherwise) and hand it to the mediator.
+  function selectedCredentials(): WalletCredential[] {
+    if (phase.step !== 'pick') {
+      return [];
+    }
+    return phase.matches.filter(({ collectionId, resourceId }) =>
+      selected.has(`${collectionId}/${resourceId}`)
+    );
+  }
+
+  // First step of sharing: verify every selected credential (verifier-core,
+  // the same checks VerifierPlus runs). Failures show a warning the user may
+  // share past; nothing is sent until then.
   async function share() {
     if (phase.step !== 'pick' || !requestRef.current || selected.size === 0) {
       return;
     }
+    setVerifying(true);
+    try {
+      const chosen = selectedCredentials();
+      const results = await Promise.all(chosen.map(({ credential }) => verifyForSharing(credential)));
+      const warnings = chosen.flatMap(({ credential }, index) =>
+        results[index].ok ? [] : [{ name: credentialName(credential), problems: results[index].problems }]
+      );
+      if (warnings.length) {
+        setShareWarnings(warnings);
+        return;
+      }
+    } finally {
+      setVerifying(false);
+    }
+    await send();
+  }
+
+  // Build the response presentation (signed as the holder when the request
+  // asked for DIDAuthentication with a challenge and the holder key is
+  // stored; unsigned otherwise) and hand it to the mediator.
+  async function send() {
+    if (!requestRef.current) {
+      return;
+    }
     setSharing(true);
     try {
-      const chosen = phase.matches
-        .filter(({ collectionId, resourceId }) => selected.has(`${collectionId}/${resourceId}`))
-        .map(({ credential }) => credential);
+      const chosen = selectedCredentials().map(({ credential }) => credential);
       const vp = await presentationFor({
         credentials: chosen,
         didAuth: requestRef.current.didAuth,
@@ -381,18 +418,52 @@ export default function ChapiPage() {
                     );
                   })}
                 </ul>
-                <div className="flex gap-2">
-                  <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
-                    Cancel
-                  </button>
-                  <button
-                    onClick={share}
-                    disabled={sharing || selected.size === 0}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
-                  >
-                    {sharing ? 'Sharing…' : `Share ${selected.size || ''} Selected`.replace('  ', ' ')}
-                  </button>
-                </div>
+                {shareWarnings ? (
+                  <div role="alert" className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 space-y-3">
+                    <p className="text-sm font-semibold text-amber-800">
+                      Some selected credentials do not fully verify:
+                    </p>
+                    <ul className="space-y-1">
+                      {shareWarnings.map(({ name, problems }) => (
+                        <li key={name} className="text-xs text-amber-800">
+                          <span className="font-medium">{name}</span>: {problems.join('; ')}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-amber-800">
+                      Whoever receives them may not accept them. Share anyway?
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShareWarnings(null)}
+                        disabled={sharing}
+                        className="flex-1 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={send}
+                        disabled={sharing}
+                        className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+                      >
+                        {sharing ? 'Sharing…' : 'Share Anyway'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
+                      Cancel
+                    </button>
+                    <button
+                      onClick={share}
+                      disabled={sharing || verifying || selected.size === 0}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+                    >
+                      {verifying ? 'Verifying…' : sharing ? 'Sharing…' : `Share ${selected.size || ''} Selected`.replace('  ', ' ')}
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
