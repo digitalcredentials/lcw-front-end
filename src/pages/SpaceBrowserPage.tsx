@@ -97,6 +97,10 @@ export default function FileBrowserPage() {
   // Collection descriptions for the cards, keyed by collection id, fetched in
   // the background from each collection's description document
   const [collectionDescriptions, setCollectionDescriptions] = useState<Record<string, string>>({});
+  const [editDescriptionOpen, setEditDescriptionOpen] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descriptionError, setDescriptionError] = useState('');
   const [newCollectionName, setNewCollectionName] = useState('');
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [newCollectionError, setNewCollectionError] = useState('');
@@ -454,6 +458,61 @@ export default function FileBrowserPage() {
     }
   }, [navigate, session, newCollectionName, newCollectionDescription, loadCollections]);
 
+  // Writes the open collection's description: read the current description
+  // document, merge the new text in, and PUT the whole document back (the WAS
+  // update-or-create by id operation) — a raw request because the client's
+  // configure() helper strips fields outside its writable set. Merging keeps
+  // whatever else the document carries (e.g. the batch collections' special
+  // flag).
+  const saveCollectionDescription = useCallback(async () => {
+    if (!selected) {
+      return;
+    }
+    setSavingDescription(true);
+    setDescriptionError('');
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const existing = (await s.client.space(s.spaceId).collection(selected.id).describe()) ?? {};
+      const description = descriptionDraft.trim();
+      const document = {
+        ...existing,
+        type: [ (existing as { type?: unknown }).type ?? [] ].flat().includes('Collection')
+          ? (existing as { type?: unknown }).type
+          : ['Collection'],
+        name: (existing as { name?: unknown }).name ?? selected.name ?? selected.id,
+      } as Record<string, unknown>;
+      if (description) {
+        document.description = description;
+      } else {
+        delete document.description;
+      }
+      await s.client.request({
+        path: `/space/${s.spaceId}/${selected.id}`,
+        method: 'PUT',
+        json: document,
+      });
+      setCollectionDescriptions((current) => {
+        const next = { ...current };
+        if (description) {
+          next[selected.id] = description;
+        } else {
+          delete next[selected.id];
+        }
+        return next;
+      });
+      setEditDescriptionOpen(false);
+    } catch (err) {
+      setDescriptionError(err instanceof Error ? err.message : 'Could not save the description.');
+    } finally {
+      setSavingDescription(false);
+    }
+  }, [navigate, session, selected, descriptionDraft]);
+
   useEffect(() => {
     loadCollections();
   }, [loadCollections]);
@@ -617,6 +676,28 @@ export default function FileBrowserPage() {
             </button>
           )}
         </div>
+
+        {/* The open collection's description, with an edit affordance (system
+            collections excluded) */}
+        {selected && viewing?.mode !== 'detail' && (
+          <div className="mb-4 -mt-1 flex items-baseline gap-3">
+            {collectionDescriptions[selected.id] && (
+              <p className="text-sm text-gray-500">{collectionDescriptions[selected.id]}</p>
+            )}
+            {!['Trash', 'dids'].includes(selected.id) && (
+              <button
+                onClick={() => {
+                  setDescriptionDraft(collectionDescriptions[selected.id] ?? '');
+                  setDescriptionError('');
+                  setEditDescriptionOpen(true);
+                }}
+                className="text-xs text-indigo-600 hover:text-indigo-700 shrink-0"
+              >
+                {collectionDescriptions[selected.id] ? 'Edit description' : 'Add description'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* States */}
         {loading && (
@@ -901,6 +982,60 @@ export default function FileBrowserPage() {
       )}
 
       {/* Name and create a new collection */}
+      {/* Edit the open collection's description */}
+      {editDescriptionOpen && selected && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setEditDescriptionOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-label="Collection Description"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">
+              Description for {selected.name ?? selected.id}
+            </h2>
+            <form
+              onSubmit={(e) => { e.preventDefault(); saveCollectionDescription(); }}
+              className="space-y-4"
+            >
+              <textarea
+                autoFocus
+                rows={3}
+                value={descriptionDraft}
+                onChange={(e) => setDescriptionDraft(e.target.value)}
+                placeholder="What this collection holds"
+                aria-label="Collection description"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              />
+              {descriptionError && (
+                <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  {descriptionError}
+                </p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditDescriptionOpen(false)}
+                  className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingDescription}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  {savingDescription ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {newCollectionOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
