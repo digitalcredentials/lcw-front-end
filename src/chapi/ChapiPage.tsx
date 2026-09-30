@@ -42,9 +42,13 @@ function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | und
   return service?.serviceEndpoint;
 }
 
+// Sentinel select value: the user wants to type a new collection name.
+const NEW_COLLECTION = '__new__';
+
 export default function ChapiPage() {
   const [phase, setPhase] = useState<Phase>({ step: 'starting' });
   const [collectionId, setCollectionId] = useState('');
+  const [newCollectionName, setNewCollectionName] = useState('');
   const [saving, setSaving] = useState(false);
   // Resolves the get() hook's promise, handing the issued credential back to
   // the mediator (and closing the popup).
@@ -106,9 +110,8 @@ export default function ChapiPage() {
                 const list = session ? await session.client.space(session.spaceId).collections() : null;
                 const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids'].includes(c.id));
                 setPhase({ step: 'choose', claim, collections });
-                if (collections[0]) {
-                  setCollectionId(collections[0].id);
-                }
+                // With no collections yet, start on the new-collection input
+                setCollectionId(collections[0]?.id ?? NEW_COLLECTION);
               } catch (err) {
                 setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
               }
@@ -127,16 +130,37 @@ export default function ChapiPage() {
     }
     setSaving(true);
     try {
+      let targetId = collectionId;
+      if (collectionId === NEW_COLLECTION) {
+        // Create the collection first, the same way the space browser does:
+        // the id is the name with whitespace dashed (it becomes a path
+        // segment), and force acknowledges that configure() cannot read a
+        // description that does not exist yet.
+        const name = newCollectionName.trim();
+        if (!name) {
+          return;
+        }
+        const session = await getSessionWASClient();
+        if (!session) {
+          setPhase({ step: 'not-signed-in' });
+          return;
+        }
+        targetId = name.replace(/\s+/g, '-');
+        await session.client.space(session.spaceId).collection(targetId).configure({
+          name,
+          force: true,
+        });
+      }
       const credentialName = (claimRef.current.credential.name as string) ?? 'credential';
       const resourceName = `${credentialName.replace(/\s+/g, '-')}-${Date.now()}.json`;
-      await saveCredential(collectionId, resourceName, claimRef.current.envelope);
+      await saveCredential(targetId, resourceName, claimRef.current.envelope);
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
         dataType: 'VerifiablePresentation',
         data: claimRef.current.envelope,
       });
-      setPhase({ step: 'saved', name: resourceName, collection: collectionId });
+      setPhase({ step: 'saved', name: resourceName, collection: targetId });
     } catch (err) {
       setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
     } finally {
@@ -238,7 +262,7 @@ export default function ChapiPage() {
               <label htmlFor="collection" className="block text-sm font-medium text-gray-700 mb-1">
                 Save to collection
               </label>
-              {phase.collections.length > 0 ? (
+              {phase.collections.length > 0 && (
                 <select
                   id="collection"
                   value={collectionId}
@@ -248,11 +272,18 @@ export default function ChapiPage() {
                   {phase.collections.map((c) => (
                     <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
                   ))}
+                  <option value={NEW_COLLECTION}>New collection…</option>
                 </select>
-              ) : (
-                <p className="text-sm text-gray-500">
-                  Your space has no collections yet — create one in the wallet first.
-                </p>
+              )}
+              {collectionId === NEW_COLLECTION && (
+                <input
+                  type="text"
+                  value={newCollectionName}
+                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  placeholder="New collection name"
+                  aria-label="New collection name"
+                  className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
               )}
             </div>
             <div className="flex gap-2">
@@ -261,7 +292,7 @@ export default function ChapiPage() {
               </button>
               <button
                 onClick={save}
-                disabled={saving || !collectionId}
+                disabled={saving || !collectionId || (collectionId === NEW_COLLECTION && !newCollectionName.trim())}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
               >
                 {saving ? 'Saving…' : 'Save'}
