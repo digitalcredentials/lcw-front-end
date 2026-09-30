@@ -16,11 +16,28 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState('');
 
-  useEffect(() => {
+  // Queried at mount AND every time Settings opens: the mount-time query can
+  // race the CHAPI mediator's setup and mis-report, so opening the menu
+  // re-checks the real permission state.
+  function refreshWalletState() {
     isWalletEnabled()
       .then((enabled) => setWalletState(enabled ? 'enabled' : 'disabled'))
-      .catch(() => setWalletState('disabled'));
+      .catch(() => setWalletState('unknown'));
+  }
+
+  useEffect(() => {
+    refreshWalletState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function toggleSettings() {
+    setSettingsOpen((open) => {
+      if (!open) {
+        refreshWalletState();
+      }
+      return !open;
+    });
+  }
 
   async function toggleBrowserWallet() {
     setWalletBusy(true);
@@ -80,7 +97,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             Batch Issuer
           </Link>
           <button
-            onClick={() => setSettingsOpen((open) => !open)}
+            onClick={toggleSettings}
             aria-expanded={settingsOpen}
             className={itemClass(false)}
           >
@@ -88,20 +105,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </button>
           {settingsOpen && (
             <div className="ml-3 border-l border-gray-200 pl-3 space-y-1">
+              <p className="px-3 text-xs uppercase tracking-wide">
+                <span className="text-gray-400">Browser wallet: </span>
+                {walletState === 'enabled' && (
+                  <span className="font-semibold text-green-700">Enabled</span>
+                )}
+                {walletState === 'disabled' && (
+                  <span className="font-semibold text-red-600">Disabled</span>
+                )}
+                {walletState === 'unknown' && (
+                  <span className="font-semibold text-gray-400">Checking…</span>
+                )}
+              </p>
               {walletState === 'enabled' ? (
-                <>
-                  <p className="px-3 text-xs text-green-700">
-                    Browser wallet is enabled ✓
-                  </p>
-                  <button
-                    onClick={toggleBrowserWallet}
-                    disabled={walletBusy}
-                    title="Remove this wallet's registration with your browser (CHAPI)"
-                    className="block w-full text-left rounded-lg px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors"
-                  >
-                    {walletBusy ? 'Working…' : 'Disable browser wallet'}
-                  </button>
-                </>
+                <button
+                  onClick={toggleBrowserWallet}
+                  disabled={walletBusy}
+                  title="Remove this wallet's registration with your browser (CHAPI)"
+                  className="block w-full text-left rounded-lg px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors"
+                >
+                  {walletBusy ? 'Working…' : 'Disable browser wallet'}
+                </button>
               ) : (
                 <button
                   onClick={toggleBrowserWallet}
