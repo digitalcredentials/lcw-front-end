@@ -16,19 +16,55 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState('');
 
+  // Shown when the wallet opens while the browser wallet is not enabled; at
+  // most once per tab session
+  const [enablePromptOpen, setEnablePromptOpen] = useState(false);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [promptError, setPromptError] = useState('');
+
   // Queried at mount AND every time Settings opens: the mount-time query can
   // race the CHAPI mediator's setup and mis-report, so opening the menu
   // re-checks the real permission state.
   function refreshWalletState() {
-    isWalletEnabled()
-      .then((enabled) => setWalletState(enabled ? 'enabled' : 'disabled'))
-      .catch(() => setWalletState('unknown'));
+    return isWalletEnabled()
+      .then((enabled) => {
+        setWalletState(enabled ? 'enabled' : 'disabled');
+        return enabled;
+      })
+      .catch(() => {
+        setWalletState('unknown');
+        return null;
+      });
   }
 
   useEffect(() => {
-    refreshWalletState();
+    refreshWalletState().then((enabled) => {
+      // Only a definitive "not enabled" prompts; a failed query does not
+      if (enabled === false && !sessionStorage.getItem('lcw_wallet_prompt_dismissed')) {
+        setEnablePromptOpen(true);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function dismissEnablePrompt() {
+    sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
+    setEnablePromptOpen(false);
+  }
+
+  async function enableFromPrompt() {
+    setPromptBusy(true);
+    setPromptError('');
+    try {
+      await registerWallet();
+      setWalletState('enabled');
+      dismissEnablePrompt();
+    } catch (err) {
+      setPromptError(err instanceof Error ? err.message : 'Could not enable the browser wallet.');
+    } finally {
+      setPromptBusy(false);
+    }
+  }
 
   function toggleSettings() {
     setSettingsOpen((open) => {
@@ -153,6 +189,57 @@ export default function AppShell({ children }: { children: ReactNode }) {
       <main className="flex-1 min-w-0">
         <div className="max-w-4xl mx-auto px-4 py-8">{children}</div>
       </main>
+
+      {/* Shown once per tab session when the browser wallet is not enabled */}
+      {enablePromptOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={dismissEnablePrompt}
+        >
+          <div
+            role="dialog"
+            aria-label="Enable Browser Wallet"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">
+              Enable your browser wallet?
+            </h2>
+            <p className="text-sm text-gray-600 mb-3">
+              Your browser wallet is not enabled. Enabling it registers this
+              wallet with your browser, so that when an issuer offers you a
+              credential or a verifier asks for one, your browser can hand the
+              request to this wallet.
+            </p>
+            <p className="text-sm text-gray-600 mb-5">
+              Without it, claiming and sharing credentials through other
+              websites will not work. You can enable or disable it at any time
+              under Settings.
+            </p>
+            {promptError && (
+              <p role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {promptError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={dismissEnablePrompt}
+                disabled={promptBusy}
+                className="border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Not now
+              </button>
+              <button
+                onClick={enableFromPrompt}
+                disabled={promptBusy}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {promptBusy ? 'Working…' : 'Enable browser wallet'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

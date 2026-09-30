@@ -37,6 +37,10 @@ function capture(page: Page): string[] {
 }
 
 async function logIn(page: Page) {
+  // The test browser never has the CHAPI wallet enabled, so suppress the
+  // enable-browser-wallet prompt (same flag its "Not now" button sets) or its
+  // overlay would intercept the tests' clicks.
+  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await page.goto(`${DEPLOYED_URL}/`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
