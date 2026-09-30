@@ -90,3 +90,30 @@ test('opens the batch issuer screen', async ({ page }) => {
     }
   }
 });
+
+test('shares a credential to LinkedIn', async ({ page, context }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+      .getByRole('button', { name: 'Share' }).click();
+    await page.getByRole('button', { name: 'Add to LinkedIn' }).click();
+    // The confirm step; its button carries the same label as the opener.
+    const popupPromise = context.waitForEvent('page');
+    await page.getByRole('dialog').getByRole('button', { name: 'Add to LinkedIn' }).last().click();
+    const popup = await popupPromise;
+    // LinkedIn itself will render a login wall; only the URL we built is
+    // asserted. waitForEvent resolves with the initial URL before redirects.
+    const url = new URL(popup.url());
+    expect(`${url.origin}${url.pathname}`).toBe('https://www.linkedin.com/profile/add');
+    expect(url.searchParams.get('startTask')).toBe('CERTIFICATION_NAME');
+    expect(url.searchParams.get('name')).toBeTruthy();
+    expect(url.searchParams.get('certUrl')).toContain('verifierplus.org');
+    await popup.close();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
