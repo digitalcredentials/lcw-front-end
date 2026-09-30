@@ -645,117 +645,101 @@ export default function FileBrowserPage() {
           </div>
         )}
 
-        {/* Resources in the selected collection (hidden while a credential's
-            detail view is open) */}
+        {/* Resources in the selected collection, as cards (hidden while a
+            credential's detail view is open). File names are not shown; a
+            resource without a credential title (a signing key, a non-VC
+            upload) falls back to its file name as the card title. */}
         {!loading && !error && selected && resources.length > 0 && viewing?.mode !== 'detail' && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wide">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Name</th>
-                  <th className="px-4 py-3 text-left font-medium">Issuer</th>
-                  <th className="px-4 py-3 text-left font-medium">Issued</th>
-                  <th className="px-4 py-3 text-left font-medium">Expires</th>
-                  <th className="px-4 py-3 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {resources.map((item) => {
-                  const summary = summaries[`${selected.id}/${item.id}`];
-                  return (
-                  <tr
-                    key={item.id}
-                    className={viewing?.resource.id === item.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}
-                  >
-                    <td className="px-4 py-3">
-                      <span className="flex items-center gap-2">
-                        {summary?.logo ? (
-                          <img
-                            src={summary.logo}
-                            alt=""
-                            className="h-8 w-8 shrink-0 rounded object-contain"
-                          />
-                        ) : (
-                          FILE_ICON
-                        )}
-                        <span>
-                          <span className="block text-gray-700">{summary?.title ?? item.name ?? item.id}</span>
-                          {summary && (
-                            <span className="block text-xs text-gray-400">{item.name ?? item.id}</span>
-                          )}
-                        </span>
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {summary?.issuer ? (
-                        <span className="flex items-center gap-2 text-gray-600">
-                          {summary.issuerLogo && (
-                            <img
-                              src={summary.issuerLogo}
-                              alt=""
-                              className="h-5 w-5 shrink-0 rounded object-contain"
-                            />
-                          )}
-                          {summary.issuer}
-                        </span>
-                      ) : (
-                        <span className="text-gray-300">—</span>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {resources.map((item) => {
+              const summary = summaries[`${selected.id}/${item.id}`];
+              return (
+                <div
+                  key={item.id}
+                  data-resource-id={item.id}
+                  className={`flex flex-col gap-3 rounded-xl border p-4 ${
+                    viewing?.resource.id === item.id
+                      ? 'border-indigo-300 bg-indigo-50'
+                      : 'border-gray-200 bg-white'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    {summary?.logo ? (
+                      <img
+                        src={summary.logo}
+                        alt=""
+                        className="h-12 w-12 shrink-0 rounded object-contain"
+                      />
+                    ) : (
+                      <span className="mt-1 shrink-0">{FILE_ICON}</span>
+                    )}
+                    <span className="font-medium text-gray-800">
+                      {summary?.title ?? item.name ?? item.id}
+                    </span>
+                  </div>
+                  {summary?.issuer && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      {summary.issuerLogo && (
+                        <img
+                          src={summary.issuerLogo}
+                          alt=""
+                          className="h-5 w-5 shrink-0 rounded object-contain"
+                        />
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {summary?.issued ?? <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {summary?.expires ?? <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        {/* A credential opens into the detail view; Trash and
-                            dids keep their own source/restore/delete actions */}
-                        {!['Trash', 'dids'].includes(selected.id) && (
-                          <button
-                            onClick={() => openResource(item, 'detail')}
-                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                          >
-                            Open
-                          </button>
-                        )}
-                        {['Trash', 'dids'].includes(selected.id) && (
-                          <button
-                            onClick={() => openResource(item, 'source')}
-                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                          >
-                            View Source
-                          </button>
-                        )}
-                        {selected.id === 'Trash' && (
-                          <button
-                            onClick={() => {
-                              setRestoreTarget(item);
-                              setRestoreCollectionId(
-                                collections.find((c) => !['Trash', 'dids'].includes(c.id))?.id ?? ''
-                              );
-                            }}
-                            className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                          >
-                            Restore
-                          </button>
-                        )}
-                        {['Trash', 'dids'].includes(selected.id) && (
-                          <button
-                            onClick={() => setDeleteTarget(item)}
-                            className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      {summary.issuer}
+                    </div>
+                  )}
+                  {(summary?.issued || summary?.expires) && (
+                    <p className="text-xs text-gray-500">
+                      {summary.issued && <>Issued {summary.issued}</>}
+                      {summary.issued && summary.expires && ' · '}
+                      {summary.expires && <>Expires {summary.expires}</>}
+                    </p>
+                  )}
+                  <div className="mt-auto flex items-center gap-2 pt-1">
+                    {/* A credential opens into the detail view; Trash and
+                        dids keep their own source/restore/delete actions */}
+                    {!['Trash', 'dids'].includes(selected.id) && (
+                      <button
+                        onClick={() => openResource(item, 'detail')}
+                        className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                      >
+                        Open
+                      </button>
+                    )}
+                    {['Trash', 'dids'].includes(selected.id) && (
+                      <button
+                        onClick={() => openResource(item, 'source')}
+                        className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                      >
+                        View Source
+                      </button>
+                    )}
+                    {selected.id === 'Trash' && (
+                      <button
+                        onClick={() => {
+                          setRestoreTarget(item);
+                          setRestoreCollectionId(
+                            collections.find((c) => !['Trash', 'dids'].includes(c.id))?.id ?? ''
+                          );
+                        }}
+                        className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                      >
+                        Restore
+                      </button>
+                    )}
+                    {['Trash', 'dids'].includes(selected.id) && (
+                      <button
+                        onClick={() => setDeleteTarget(item)}
+                        className="border border-red-200 hover:bg-red-50 text-red-600 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
         {/* Credential detail view: header + formatted summary above, source
@@ -766,12 +750,9 @@ export default function FileBrowserPage() {
             is hidden with CSS outside detail mode. */}
         {selected && viewing?.mode === 'detail' && (
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-800">
-                {viewingSummary?.title ?? viewing.resource.name ?? viewing.resource.id}
-              </h2>
-              <p className="text-xs text-gray-400">{viewing.resource.name ?? viewing.resource.id}</p>
-            </div>
+            <h2 className="text-lg font-semibold text-gray-800">
+              {viewingSummary?.title ?? viewing.resource.name ?? viewing.resource.id}
+            </h2>
             <button
               onClick={() => setViewing(null)}
               className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
