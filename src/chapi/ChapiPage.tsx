@@ -5,12 +5,18 @@ import type { CollectionSummary } from '@interop/was-client';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient } from '../lib/was';
 import { isAuthenticated } from '../lib/auth';
+import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
+import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
+import { credentialName, issuerName } from '../lib/linkedin';
 
-// The window CHAPI opens when this wallet is chosen. It activates a credential
-// handler, runs the issuer's exchange when a request arrives, and asks which
-// collection to save the issued credential into. The handler's get() hook
-// returns a promise that resolves once the user saves, which keeps the
-// mediator popup open until then.
+// The window CHAPI opens when this wallet is chosen. Two kinds of request
+// arrive at the get() hook: an issuer's exchange (interact.service endpoint —
+// the claim flow, which asks which collection to save the issued credential
+// into), and a verifier's presentation request (a QueryByExample asking this
+// wallet FOR credentials — the consent + picker flow, which returns the
+// user's selection as a presentation). The hook returns a promise that
+// resolves once the user acts, which keeps the mediator popup open until
+// then.
 
 type GetResponse = { type: 'response'; dataType: string; data: unknown };
 
@@ -20,6 +26,12 @@ type Phase =
   | { step: 'claiming' }
   | { step: 'choose'; claim: ClaimResult; collections: CollectionSummary[] }
   | { step: 'saved'; name: string; collection: string }
+  // The verifier-request flow: consent first (naming the requester up front),
+  // then a picker over the credentials that match the request
+  | { step: 'consent'; origin: string; reasons: string[] }
+  | { step: 'loading-credentials' }
+  | { step: 'pick'; matches: WalletCredential[] }
+  | { step: 'shared' }
   | { step: 'error'; message: string };
 
 function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | undefined {
@@ -38,6 +50,9 @@ export default function ChapiPage() {
   // the mediator (and closing the popup).
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
   const claimRef = useRef<ClaimResult | null>(null);
+  const requestRef = useRef<ParsedPresentationRequest | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sharing, setSharing] = useState(false);
   const activatedRef = useRef(false);
 
   useEffect(() => {
@@ -51,16 +66,32 @@ export default function ChapiPage() {
       await WebCredentialHandler.activateHandler({
         async get({ event }: { event: {
           credentialRequestOptions?: { web?: { VerifiablePresentation?: Record<string, unknown> } };
+          credentialRequestOrigin?: string;
         } }) {
           return new Promise<GetResponse>((resolve) => {
             resolveRef.current = resolve;
             (async () => {
               try {
+                const vpr = event.credentialRequestOptions?.web?.VerifiablePresentation;
+
+                // A verifier asking FOR credentials: consent comes first, and
+                // it says up front who is asking and that credentials are
+                // being requested (the mobile wallet's prompt does not).
+                const request = parsePresentationRequest(vpr);
+                if (request) {
+                  requestRef.current = request;
+                  setPhase({
+                    step: 'consent',
+                    origin: event.credentialRequestOrigin ?? '',
+                    reasons: request.reasons,
+                  });
+                  return;
+                }
+
                 if (!isAuthenticated() || !(await getSessionWASClient())) {
                   setPhase({ step: 'not-signed-in' });
                   return;
                 }
-                const vpr = event.credentialRequestOptions?.web?.VerifiablePresentation;
                 const exchangeUrl = exchangeUrlFrom(vpr);
                 if (!exchangeUrl) {
                   setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
@@ -113,9 +144,68 @@ export default function ChapiPage() {
     }
   }
 
-  // Closing the window makes the mediator return null to the issuer page.
+  // Closing the window makes the mediator return null to the requesting page.
   function cancel() {
     window.close();
+  }
+
+  // Consent given: gate on sign-in, then offer the credentials that match the
+  // request's examples.
+  async function continueRequest() {
+    if (!isAuthenticated() || !(await getSessionWASClient())) {
+      setPhase({ step: 'not-signed-in' });
+      return;
+    }
+    setPhase({ step: 'loading-credentials' });
+    try {
+      const request = requestRef.current;
+      const all = await loadWalletCredentials();
+      const matches = request ? all.filter(({ credential }) => matchesAnyExample(credential, request)) : [];
+      // A single match starts selected; a list starts empty for an explicit choice
+      setSelected(new Set(matches.length === 1 ? [`${matches[0].collectionId}/${matches[0].resourceId}`] : []));
+      setPhase({ step: 'pick', matches });
+    } catch (err) {
+      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not load your credentials.' });
+    }
+  }
+
+  function toggleSelected(key: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  // Share the selection: build the response presentation (signed as the
+  // holder when the request asked for DIDAuthentication with a challenge and
+  // the holder key is stored; unsigned otherwise) and hand it to the mediator.
+  async function share() {
+    if (phase.step !== 'pick' || !requestRef.current || selected.size === 0) {
+      return;
+    }
+    setSharing(true);
+    try {
+      const chosen = phase.matches
+        .filter(({ collectionId, resourceId }) => selected.has(`${collectionId}/${resourceId}`))
+        .map(({ credential }) => credential);
+      const vp = await presentationFor({
+        credentials: chosen,
+        didAuth: requestRef.current.didAuth,
+        challenge: requestRef.current.challenge,
+        domain: requestRef.current.domain,
+      });
+      resolveRef.current?.({ type: 'response', dataType: 'VerifiablePresentation', data: vp });
+      setPhase({ step: 'shared' });
+    } catch (err) {
+      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Sharing failed.' });
+    } finally {
+      setSharing(false);
+    }
   }
 
   return (
@@ -128,7 +218,7 @@ export default function ChapiPage() {
         {phase.step === 'not-signed-in' && (
           <div>
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              You&#39;re not signed in. Open the wallet in another tab, sign in, then retry the claim.
+              You&#39;re not signed in. Open the wallet in another tab, sign in, then retry.
             </p>
             <button onClick={cancel} className="mt-4 w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
               Close
@@ -184,6 +274,103 @@ export default function ChapiPage() {
           <div>
             <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
               Saved {phase.name} to {phase.collection}. You can close this window.
+            </p>
+            <button onClick={() => window.close()} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
+              Done
+            </button>
+          </div>
+        )}
+
+        {phase.step === 'consent' && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              <span className="font-semibold text-gray-900">{phase.origin || 'A website'}</span>{' '}
+              is requesting credentials from your wallet.
+            </p>
+            {phase.reasons.map((reason) => (
+              <p key={reason} className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                Reason given: “{reason}”
+              </p>
+            ))}
+            <p className="text-sm text-gray-500">
+              If you continue, you will choose which credentials to share. Nothing
+              is shared until you confirm your selection.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
+                Decline
+              </button>
+              <button onClick={continueRequest} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
+                Continue
+              </button>
+            </div>
+          </div>
+        )}
+
+        {phase.step === 'loading-credentials' && (
+          <p className="text-sm text-gray-500">Finding credentials that match the request…</p>
+        )}
+
+        {phase.step === 'pick' && (
+          <div className="space-y-4">
+            {phase.matches.length === 0 ? (
+              <>
+                <p className="text-sm text-gray-600">
+                  None of your credentials match this request.
+                </p>
+                <button onClick={cancel} className="w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
+                  Close
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-gray-600">Select credentials to share.</p>
+                <ul className="space-y-2 max-h-64 overflow-y-auto">
+                  {phase.matches.map(({ collectionId, resourceId, credential }) => {
+                    const key = `${collectionId}/${resourceId}`;
+                    return (
+                      <li key={key}>
+                        <label className="flex items-start gap-3 border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(key)}
+                            onChange={() => toggleSelected(key)}
+                            className="mt-1"
+                          />
+                          <span>
+                            <span className="block text-sm font-medium text-gray-800">
+                              {credentialName(credential)}
+                            </span>
+                            <span className="block text-xs text-gray-500">
+                              {issuerName(credential) ?? 'Unnamed issuer'} · {collectionId}
+                            </span>
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="flex gap-2">
+                  <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={share}
+                    disabled={sharing || selected.size === 0}
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+                  >
+                    {sharing ? 'Sharing…' : `Share ${selected.size || ''} Selected`.replace('  ', ' ')}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {phase.step === 'shared' && (
+          <div>
+            <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              Credentials shared. You can close this window.
             </p>
             <button onClick={() => window.close()} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
               Done
