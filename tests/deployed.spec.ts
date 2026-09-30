@@ -45,6 +45,9 @@ async function logIn(page: Page) {
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in' }).click();
+  // Login lands on the spaces card view; every test works inside the demo
+  // account's (single) space
+  await page.locator('[data-space-url]').first().click();
 }
 
 test('logs in and lists the space collections', async ({ page }) => {

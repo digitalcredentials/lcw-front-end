@@ -123,7 +123,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Main">
           <Link to="/files" className={itemClass(pathname === '/files')}>
-            My Space
+            My Spaces
           </Link>
           <Link
             to="/batches"

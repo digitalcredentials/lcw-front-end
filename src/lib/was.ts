@@ -41,3 +41,22 @@ export async function getSessionWASClient(): Promise<{ client: WasClient; spaceI
   })
   return { client, spaceId: parsed.spaceId }
 }
+
+// Builds a WAS client for a specific space (multi-space support): the stored
+// session key signs, the server URL and space id come from the given space
+// URL. Returns null when there is no complete session.
+export async function getSessionWASClientFor(
+  spaceUrl: string
+): Promise<{ client: WasClient; spaceId: string } | null> {
+  const storedKeyPair = getSessionKey()
+  const parsed = parseSpaceUrl(spaceUrl)
+  if (!storedKeyPair || !parsed) {
+    return null
+  }
+  const keyPair = await Ed25519VerificationKey.from(storedKeyPair)
+  const client = await WasClient.fromSigner({
+    serverUrl: parsed.serverUrl,
+    signer: keyPair.signer()
+  })
+  return { client, spaceId: parsed.spaceId }
+}
