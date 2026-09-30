@@ -93,6 +93,10 @@ export default function FileBrowserPage() {
   const [restoreCollectionId, setRestoreCollectionId] = useState('');
   const [restoring, setRestoring] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
+  const [newCollectionDescription, setNewCollectionDescription] = useState('');
+  // Collection descriptions for the cards, keyed by collection id, fetched in
+  // the background from each collection's description document
+  const [collectionDescriptions, setCollectionDescriptions] = useState<Record<string, string>>({});
   const [newCollectionName, setNewCollectionName] = useState('');
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [newCollectionError, setNewCollectionError] = useState('');
@@ -140,7 +144,27 @@ export default function FileBrowserPage() {
         return;
       }
       const collectionList = await s.client.space(s.spaceId).collections();
-      setCollections(collectionList?.items ?? []);
+      const items = collectionList?.items ?? [];
+      setCollections(items);
+
+      // Fetch each collection's description document in the background for
+      // the card blurbs (the listing itself carries no description)
+      void Promise.all(
+        items.map(async (item): Promise<[string, string] | null> => {
+          try {
+            const desc = await s.client.space(s.spaceId).collection(item.id).describe();
+            const text = (desc as { description?: unknown } | null)?.description;
+            return typeof text === 'string' && text.trim() ? [item.id, text] : null;
+          } catch {
+            return null;
+          }
+        })
+      ).then((entries) => {
+        const found = entries.filter((e): e is [string, string] => e !== null);
+        if (found.length) {
+          setCollectionDescriptions((current) => ({ ...current, ...Object.fromEntries(found) }));
+        }
+      });
     } catch (err) {
       handleError(err);
     } finally {
@@ -406,19 +430,29 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      await s.client.space(s.spaceId).collection(name.replace(/\s+/g, '-')).configure({
-        name,
-        force: true
+      // A raw PUT of the full description document (the WAS update-or-create
+      // by id operation): the client's configure() helper strips fields it
+      // does not know, and `description` is not among its writable fields.
+      const description = newCollectionDescription.trim();
+      await s.client.request({
+        path: `/space/${s.spaceId}/${name.replace(/\s+/g, '-')}`,
+        method: 'PUT',
+        json: {
+          type: ['Collection'],
+          name,
+          ...(description && { description }),
+        },
       });
       setNewCollectionOpen(false);
       setNewCollectionName('');
+      setNewCollectionDescription('');
       await loadCollections();
     } catch (err) {
       setNewCollectionError(err instanceof Error ? err.message : 'Could not create the collection.');
     } finally {
       setCreatingCollection(false);
     }
-  }, [navigate, session, newCollectionName, loadCollections]);
+  }, [navigate, session, newCollectionName, newCollectionDescription, loadCollections]);
 
   useEffect(() => {
     loadCollections();
@@ -611,37 +645,22 @@ export default function FileBrowserPage() {
 
         {/* Collections */}
         {!loading && !error && !selected && collections.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wide">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Name</th>
-                  <th className="px-4 py-3 text-right font-medium hidden md:table-cell">URL</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {collections.map((item) => (
-                  <tr
-                    key={item.id}
-                    onClick={() => openCollection(item)}
-                    className="hover:bg-gray-50 cursor-pointer"
-                  >
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); openCollection(item); }}
-                        className="flex items-center gap-2 text-left"
-                      >
-                        {FOLDER_ICON}
-                        <span className="text-gray-700 hover:underline">{item.name ?? item.id}</span>
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-400 hidden md:table-cell">
-                      {item.url}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {collections.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => openCollection(item)}
+                className="flex flex-col items-start gap-2 rounded-xl border border-gray-200 bg-white p-4 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  {FOLDER_ICON}
+                  <span className="font-medium text-gray-800">{item.name ?? item.id}</span>
+                </span>
+                {collectionDescriptions[item.id] && (
+                  <span className="text-sm text-gray-500">{collectionDescriptions[item.id]}</span>
+                )}
+              </button>
+            ))}
           </div>
         )}
 
@@ -909,6 +928,20 @@ export default function FileBrowserPage() {
                   value={newCollectionName}
                   onChange={(e) => setNewCollectionName(e.target.value)}
                   placeholder="e.g. Diplomas"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="collection-description" className="block text-sm font-medium text-gray-700 mb-1">
+                  Description <span className="font-normal text-gray-400">(optional)</span>
+                </label>
+                <textarea
+                  id="collection-description"
+                  rows={2}
+                  value={newCollectionDescription}
+                  onChange={(e) => setNewCollectionDescription(e.target.value)}
+                  placeholder="What this collection holds"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 />
               </div>
