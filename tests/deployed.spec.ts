@@ -63,8 +63,11 @@ test('verifies a credential from the deployed space', async ({ page }) => {
   await logIn(page);
   try {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    // Open replaces the per-row Verify/View Source/Share/Delete buttons: the
+    // detail view shows the summary, source, and verification side by side
     await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-      .getByRole('button', { name: 'Verify' }).click();
+      .getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByText('Credential Source')).toBeVisible();
     await expect(page.getByText('Signature is valid.')).toBeVisible();
     await expect(page.getByText('Has not been revoked')).toBeVisible();
   } finally {
@@ -98,8 +101,10 @@ test('shares a credential to LinkedIn', async ({ page }) => {
   await logIn(page);
   try {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    // Sharing now goes through the credential detail view's bottom buttons
     await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-      .getByRole('button', { name: 'Share' }).click();
+      .getByRole('button', { name: 'Open' }).click();
+    await page.getByRole('button', { name: 'Share', exact: true }).click();
     // Record the URL at the moment the page calls window.open, instead of
     // opening a real popup: reading popup.url() after waitForEvent('page')
     // races LinkedIn's redirect to its login wall and fails intermittently.
