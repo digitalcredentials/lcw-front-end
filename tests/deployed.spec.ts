@@ -47,7 +47,9 @@ test('logs in and lists the space collections', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
-    await expect(page.getByText('Verifiable Credentials Collection')).toBeVisible();
+    // The header is the static product title now, not the space's name
+    await expect(page.getByText('Digital Credentials Commons')).toBeVisible();
+    await expect(page.getByText('Learner Credential Wallet').first()).toBeVisible();
     await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
   } finally {
     if (noise.length) {
