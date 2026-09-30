@@ -15,8 +15,21 @@ import {
   issuerName,
   credentialIssuance,
   credentialExpiration,
+  credentialImage,
+  issuerImage,
   type CredentialLike,
 } from '../lib/linkedin';
+
+// The per-row summary extracted from a resource's body in the background,
+// shown in the list alongside the file name.
+interface RowSummary {
+  title: string;
+  logo: string | null;
+  issuer: string | null;
+  issuerLogo: string | null;
+  issued: string | null;
+  expires: string | null;
+}
 
 // Issuers whose credentials the verifier accepts, keyed by DID
 const ISSUER_DIDS = {
@@ -69,9 +82,10 @@ export default function FileBrowserPage() {
     vc: string;
     mode: 'detail' | 'source';
   } | null>(null);
-  // Credential titles for the list rows, keyed by `${collectionId}/${resourceId}`,
-  // fetched in the background after the listing loads
-  const [titles, setTitles] = useState<Record<string, string>>({});
+  // Credential summaries for the list rows, keyed by
+  // `${collectionId}/${resourceId}`, fetched in the background after the
+  // listing loads
+  const [summaries, setSummaries] = useState<Record<string, RowSummary>>({});
   const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
@@ -155,24 +169,34 @@ export default function FileBrowserPage() {
       const items = resourceList?.items ?? [];
       setResources(items);
 
-      // Fetch the bodies in the background to show credential titles in the
+      // Fetch the bodies in the background to show credential details in the
       // list; entries are keyed by collection so a stale fetch after
       // switching collections is harmless.
       void Promise.all(
-        items.map(async (item): Promise<[string, string] | null> => {
+        items.map(async (item): Promise<[string, RowSummary] | null> => {
           try {
             const data = await s.client.space(s.spaceId).collection(collection.id).resource(item.id).get();
             const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data;
             const credential = credentialFrom(parsed);
-            return credential ? [`${collection.id}/${item.id}`, credentialName(credential)] : null;
+            if (!credential) {
+              return null;
+            }
+            return [`${collection.id}/${item.id}`, {
+              title: credentialName(credential),
+              logo: credentialImage(credential),
+              issuer: issuerName(credential),
+              issuerLogo: issuerImage(credential),
+              issued: credentialIssuance(credential)?.toLocaleDateString() ?? null,
+              expires: credentialExpiration(credential)?.toLocaleDateString() ?? null,
+            }];
           } catch {
             return null;
           }
         })
       ).then((entries) => {
-        const found = entries.filter((e): e is [string, string] => e !== null);
+        const found = entries.filter((e): e is [string, RowSummary] => e !== null);
         if (found.length) {
-          setTitles((current) => ({ ...current, ...Object.fromEntries(found) }));
+          setSummaries((current) => ({ ...current, ...Object.fromEntries(found) }));
         }
       });
     } catch (err) {
@@ -629,12 +653,15 @@ export default function FileBrowserPage() {
               <thead className="bg-gray-50 text-gray-500 uppercase text-xs tracking-wide">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Name</th>
+                  <th className="px-4 py-3 text-left font-medium">Issuer</th>
+                  <th className="px-4 py-3 text-left font-medium">Issued</th>
+                  <th className="px-4 py-3 text-left font-medium">Expires</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {resources.map((item) => {
-                  const title = titles[`${selected.id}/${item.id}`];
+                  const summary = summaries[`${selected.id}/${item.id}`];
                   return (
                   <tr
                     key={item.id}
@@ -642,14 +669,44 @@ export default function FileBrowserPage() {
                   >
                     <td className="px-4 py-3">
                       <span className="flex items-center gap-2">
-                        {FILE_ICON}
+                        {summary?.logo ? (
+                          <img
+                            src={summary.logo}
+                            alt=""
+                            className="h-8 w-8 shrink-0 rounded object-contain"
+                          />
+                        ) : (
+                          FILE_ICON
+                        )}
                         <span>
-                          <span className="block text-gray-700">{title ?? item.name ?? item.id}</span>
-                          {title && (
+                          <span className="block text-gray-700">{summary?.title ?? item.name ?? item.id}</span>
+                          {summary && (
                             <span className="block text-xs text-gray-400">{item.name ?? item.id}</span>
                           )}
                         </span>
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {summary?.issuer ? (
+                        <span className="flex items-center gap-2 text-gray-600">
+                          {summary.issuerLogo && (
+                            <img
+                              src={summary.issuerLogo}
+                              alt=""
+                              className="h-5 w-5 shrink-0 rounded object-contain"
+                            />
+                          )}
+                          {summary.issuer}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {summary?.issued ?? <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {summary?.expires ?? <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">

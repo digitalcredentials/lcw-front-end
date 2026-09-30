@@ -86,6 +86,39 @@ export function credentialName(credential: CredentialLike): string {
   return typeof name === 'string' && name.trim() ? name.trim() : 'Verifiable Credential';
 }
 
+// An image reference is either a URL string or an object with an id.
+function imageUrl(image: unknown): string | null {
+  if (typeof image === 'string' && image.trim()) {
+    return image;
+  }
+  if (typeof image === 'object' && image !== null) {
+    const id = (image as { id?: unknown }).id;
+    if (typeof id === 'string' && id.trim()) {
+      return id;
+    }
+  }
+  return null;
+}
+
+// The credential's own image: the achievement's (Open Badges), else the
+// credential-level image.
+export function credentialImage(credential: CredentialLike): string | null {
+  const subject = credential.credentialSubject;
+  const eoc = [subject?.hasCredential ?? subject?.achievement ?? []].flat()[0] as
+    | { image?: unknown }
+    | undefined;
+  return imageUrl(eoc?.image) ?? imageUrl((credential as { image?: unknown }).image);
+}
+
+// The issuer's logo, when the issuer is an object carrying an image.
+export function issuerImage(credential: CredentialLike): string | null {
+  const issuer = credential.issuer;
+  if (typeof issuer === 'object' && issuer !== null) {
+    return imageUrl((issuer as { image?: unknown }).image);
+  }
+  return null;
+}
+
 export function linkedinAddToProfileUrl({
   credential,
   certUrl,
