@@ -65,7 +65,8 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     // Open replaces the per-row Verify/View Source/Share/Delete buttons: the
     // detail view shows the summary, source, and verification side by side
-    await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    // Cards no longer show file names; the card carries its resource id
+    await page.locator('[data-resource-id*="LCWExperience"]')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
     await expect(page.getByText('Signature is valid.')).toBeVisible();
@@ -102,7 +103,8 @@ test('shares a credential to LinkedIn', async ({ page }) => {
   try {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     // Sharing now goes through the credential detail view's bottom buttons
-    await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    // Cards no longer show file names; the card carries its resource id
+    await page.locator('[data-resource-id*="LCWExperience"]')
       .getByRole('button', { name: 'Open' }).click();
     await page.getByRole('button', { name: 'Share', exact: true }).click();
     // Record the URL at the moment the page calls window.open, instead of
