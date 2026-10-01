@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken, setSpaceUrl, setSessionKey } from '../lib/auth';
+import { setToken, setSpaceUrl, setSessionKey, setEmail as storeEmail } from '../lib/auth';
 import { login } from '../lib/login';
 
 export default function LoginPage() {
@@ -19,6 +19,7 @@ export default function LoginPage() {
       const { result, keyPair } = await login(email, password);
 
       setToken(result.controller);
+      storeEmail(result.email);
       if (result.space) {
         setSpaceUrl(result.space);
       }
