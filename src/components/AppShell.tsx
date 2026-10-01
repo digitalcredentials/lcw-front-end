@@ -4,7 +4,7 @@ import { clearToken } from '../lib/auth';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 
 // The signed-in layout: the product title and navigation run down a left
-// sidebar (My Space, Batch Issuer, Settings — which holds the browser-wallet
+// sidebar (My Spaces, Credential Issuer, Settings — which holds the browser-wallet
 // registration — and Sign Out at the bottom); pages render into the main
 // column.
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -130,7 +130,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             className={itemClass(pathname === '/batches')}
             title="Issue batches of credentials from a CSV"
           >
-            Batch Issuer
+            Credential Issuer
           </Link>
           <button
             onClick={toggleSettings}
