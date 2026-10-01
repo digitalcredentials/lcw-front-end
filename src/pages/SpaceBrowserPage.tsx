@@ -922,7 +922,8 @@ export default function FileBrowserPage() {
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                     space.type === 'batch' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'
                   }`}>
-                    {space.type}
+                    {/* The registry type 'credential' reads better plural */}
+                    {space.type === 'credential' ? 'credentials' : space.type}
                   </span>
                 </span>
                 {spaceDetails[space.url]?.description && (
