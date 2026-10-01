@@ -1,0 +1,9 @@
+{
+  "name": "Learner Credential Wallet (Sandbox)",
+  "short_name": "LCW Sandbox",
+  "icons": [],
+  "credential_handler": {
+    "url": "/chapi.html",
+    "enabledTypes": ["VerifiablePresentation"]
+  }
+}

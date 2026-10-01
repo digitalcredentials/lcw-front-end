@@ -11,25 +11,36 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:claim": "node tests/scripts/claim-wire.mjs"
   },
   "dependencies": {
+    "@digitalcredentials/batch-issuer-ui": "file:../batch-issuer-ui",
     "@digitalcredentials/veri-good": "^0.0.0-beta.7",
+    "@digitalcredentials/verifier-core": "^1.0.0-beta.10",
+    "@digitalcredentials/vpqr": "^2.2.1",
     "@interop/did-method-key": "^7.3.5",
     "@interop/ed25519-signature": "^7.2.1",
     "@interop/ed25519-verification-key": "^8.0.4",
     "@interop/ezcap": "^7.4.3",
+    "@interop/jsonld-signatures": "^11.8.5",
+    "@interop/security-document-loader": "^10.1.2",
     "@interop/was-client": "^0.41.0",
     "@tailwindcss/vite": "^4.3.3",
+    "credential-handler-polyfill": "^4.1.0",
+    "qr-scanner": "^1.4.2",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
     "tailwindcss": "^4.3.3",
-    "vanilla-jsoneditor": "^3.13.0"
+    "vanilla-jsoneditor": "^3.13.0",
+    "web-credential-handler": "^3.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",

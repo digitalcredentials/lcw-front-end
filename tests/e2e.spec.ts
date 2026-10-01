@@ -1,6 +1,7 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import QRCode from 'qrcode';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -134,8 +135,8 @@ const FIXTURE_PATH = new URL('./fixtures/PlaywrightUpload.json', import.meta.url
 
 async function openUploadModal(page: Page) {
   // Upload Credential appears only on the collection page
-  await page.getByRole('button', { name: 'Upload Credential' }).click();
-  return page.getByRole('dialog', { name: 'Upload Credential' });
+  await page.getByRole('button', { name: 'Add Credential' }).click();
+  return page.getByRole('dialog', { name: 'Add Credential' });
 }
 
 test('uploads a credential from a picked file', async ({ page }) => {
@@ -151,7 +152,7 @@ test('uploads a credential from a picked file', async ({ page }) => {
   // editable) and the JSON fills the editor
   await expect(modal.getByLabel('Name')).toHaveValue('PlaywrightUpload.json');
   await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   // the refreshed list contains the uploaded credential, and it verifies
   const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
@@ -167,7 +168,7 @@ test('uploads a credential from pasted JSON under a chosen name', async ({ page 
 
   await modal.locator('.cm-content').fill(readFileSync(FIXTURE_PATH, 'utf8'));
   await modal.getByLabel('Name').fill('PastedUpload.json');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   await expect(page.getByRole('row').filter({ hasText: 'PastedUpload' })).toBeVisible();
 });
@@ -185,9 +186,66 @@ test('uploads a credential dropped onto the drop zone', async ({ page }) => {
   await modal.getByTestId('credential-drop-zone').dispatchEvent('drop', { dataTransfer });
 
   await expect(modal.getByLabel('Name')).toHaveValue('DraggedUpload.json');
-  await modal.getByRole('button', { name: 'Upload', exact: true }).click();
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
   await expect(page.getByRole('row').filter({ hasText: 'DraggedUpload' })).toBeVisible();
+});
+
+// A QR image can carry the credential JSON itself, a URL that serves it, or a
+// CBOR-LD-encoded presentation (the VP1- format the LCW mobile wallet uses)
+async function stageQrImage(modal: Locator, content: string) {
+  const buffer = await QRCode.toBuffer(content, { width: 480, margin: 2 });
+  await modal.locator('input[type=file]').setInputFiles({
+    name: 'credential-qr.png', mimeType: 'image/png', buffer,
+  });
+}
+
+test('adds a credential scanned from a QR image containing JSON', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(modal, JSON.stringify({
+    '@context': 'https://www.w3.org/2018/credentials/v1',
+    type: 'VerifiableCredential',
+    credentialSubject: { id: 'did:example:embedded-json-qr' },
+  }));
+
+  // scanning stages the decoded credential with a generated, editable name
+  await expect(modal.locator('.cm-content')).toContainText('did:example:embedded-json-qr');
+  await expect(modal.getByLabel('Name')).toHaveValue(/^scanned-/);
+  await modal.getByLabel('Name').fill('ScannedUpload.json');
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'ScannedUpload' })).toBeVisible();
+});
+
+test('stages a credential from a QR image containing a URL', async ({ page }) => {
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(
+    modal,
+    'https://digitalcredentials.github.io/vc-test-fixtures/verifiableCredentials/v1/bothSignatureTypes/didKey/fourRegistry-noStatus-noExpiry.json'
+  );
+
+  // the URL is fetched and its credential staged
+  await expect(modal.locator('.cm-content')).toContainText('VerifiableCredential');
+});
+
+test('stages a credential from a CBOR-LD (VP1) QR image', async ({ page }) => {
+  // Pre-encoded with @digitalcredentials/vpqr: a presentation holding one
+  // credential whose subject is did:example:qr-test-subject
+  const vp1 = 'VP1-B3ECQDIYACEMHIGDODB6KKAARDB2BQ3AYQKQRQ4DYDNSGSZB2MV4GC3LQNRSTU4LSFV2GK43UFVZXKYTKMVRXIGEIDJVLDRIADCGIEGIEAFMCF3IBKVK44ICANKL4FEWA54S6YF4GITMGJYFVIA55GT4QJZGYAM7V6GHA';
+  await logIn(page);
+  await openUniversityCollection(page);
+  const modal = await openUploadModal(page);
+
+  await stageQrImage(modal, vp1);
+
+  await expect(modal.locator('.cm-content')).toContainText('did:example:qr-test-subject');
+  await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
 });
 
 test('flags invalid JSON and blocks the upload', async ({ page }) => {
@@ -201,11 +259,11 @@ test('flags invalid JSON and blocks the upload', async ({ page }) => {
   // the editor highlights the parse error dynamically, and the upload is
   // blocked until the JSON parses
   await expect(modal.locator('.cm-lint-marker-error').first()).toBeVisible();
-  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeDisabled();
+  await expect(modal.getByRole('button', { name: 'Add', exact: true })).toBeDisabled();
 
   // repairing the JSON re-enables the upload
   await modal.locator('.cm-content').fill('{"type": ["VerifiablePresentation"]}');
-  await expect(modal.getByRole('button', { name: 'Upload', exact: true })).toBeEnabled();
+  await expect(modal.getByRole('button', { name: 'Add', exact: true })).toBeEnabled();
 });
 
 test('shows a credential source in the read-only editor', async ({ page }) => {
@@ -234,6 +292,10 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   const link = await modal.getByLabel('Public link').inputValue();
   expect(link).toContain('/UniversityOfToronto/LCWExperience.json');
 
+  // ...along with a companion link that verifies it on VerifierPlus
+  await expect(modal.getByLabel('VerifierPlus link'))
+    .toHaveValue(`https://verifierplus.org/#verify?vc=${link}`);
+
   // the link works without any authorization
   const res = await page.request.get(link);
   expect(res.status()).toBe(200);
@@ -243,7 +305,37 @@ test('creates a public link that serves the credential unsigned', async ({ page 
   const sibling = link.replace('LCWExperience.json', 'Bachelors.json');
   expect((await page.request.get(sibling)).status()).not.toBe(200);
 
-  // clean up the policy so the next run starts private
+  // reopening the dialog shows the existing link, not Create Public Link
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toHaveCount(0);
+  await expect(modal).toContainText('The links will stop working');
+
+  // a QR code on an already-public credential doesn't revoke access on close
+  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
+  await expect(modal.getByRole('img', { name: /QR code/ })).toBeVisible();
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await expect(modal).toBeHidden();
+  expect((await page.request.get(link)).status()).toBe(200);
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+
+  // unsharing asks for confirmation first; backing out changes nothing
+  await modal.getByRole('button', { name: 'Unshare' }).click();
+  await expect(modal).toContainText('Remove public access?');
+  await modal.getByRole('button', { name: 'Keep sharing' }).click();
+  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+
+  // confirming kills the link and restores the Create option
+  await modal.getByRole('button', { name: 'Unshare' }).click();
+  await modal.getByRole('button', { name: 'Yes, unshare' }).click();
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
+  expect((await page.request.get(link)).status()).not.toBe(200);
+
+  // safety net in case an earlier expectation aborted before the UI unshare
   execSync(
     'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
     { stdio: 'ignore' }
@@ -259,13 +351,52 @@ test('offers the share options', async ({ page }) => {
 
   const modal = page.getByRole('dialog', { name: 'Share Credential' });
   await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
-  await expect(modal.getByRole('button', { name: 'Add to LinkedIn' })).toBeVisible();
-  // (Create Public Link is real; the remaining options are stubs)
-  await expect(modal.getByRole('button', { name: 'QR code' })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'QR code', exact: true })).toBeVisible();
 
-  // the options are stubs for now
-  await modal.getByRole('button', { name: 'QR code' }).click();
-  await expect(modal.getByRole('status')).toHaveText('QR code is coming soon.');
+  // LinkedIn is still a stub
+  await modal.getByRole('button', { name: 'Add to LinkedIn' }).click();
+  await expect(modal.getByRole('status')).toHaveText('Add to LinkedIn is coming soon.');
+});
+
+test('shows a QR code and shares only while it is visible', async ({ page }) => {
+  const link = 'http://localhost:3000/space/dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/UniversityOfToronto/LCWExperience.json';
+  await logIn(page);
+  await openUniversityCollection(page);
+
+  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
+    .getByRole('button', { name: 'Share' }).click();
+  const modal = page.getByRole('dialog', { name: 'Share Credential' });
+
+  // the credential starts private
+  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
+  expect((await page.request.get(link)).status()).not.toBe(200);
+
+  // the QR appears (VerifierPlus target first) and warns about the
+  // temporary public access it needed
+  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
+  const qrImage = modal.getByRole('img', { name: /QR code/ });
+  await expect(qrImage).toBeVisible();
+  expect(await qrImage.getAttribute('src')).toMatch(/^data:image\//);
+  await expect(modal).toContainText('temporarily public');
+  expect((await page.request.get(link)).status()).toBe(200);
+
+  // the toggle switches the encoded target
+  const verifierSrc = await qrImage.getAttribute('src');
+  await modal.getByRole('button', { name: 'Raw credential' }).click();
+  expect(await qrImage.getAttribute('src')).not.toBe(verifierSrc);
+
+  // closing the dialog reverts the temporary public access
+  await modal.getByRole('button', { name: 'Close' }).click();
+  await expect(modal).toBeHidden();
+  await expect(async () => {
+    expect((await page.request.get(link)).status()).not.toBe(200);
+  }).toPass({ timeout: 10000 });
+
+  // safety net in case an earlier expectation aborted before the revert
+  execSync(
+    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
+    { stdio: 'ignore' }
+  );
 });
 
 test('deletes a credential into the Trash collection', async ({ page }) => {

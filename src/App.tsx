@@ -2,6 +2,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import FileBrowserPage from './pages/SpaceBrowserPage'
+import BatchIssuerPage from './pages/BatchIssuerPage'
 import RequireAuth from './components/RequireAuth'
 import './App.css'
 
@@ -16,6 +17,14 @@ function App() {
           element={
             <RequireAuth>
               <FileBrowserPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/batches"
+          element={
+            <RequireAuth>
+              <BatchIssuerPage />
             </RequireAuth>
           }
         />

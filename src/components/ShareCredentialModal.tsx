@@ -1,45 +1,261 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import QRCode from 'qrcode';
+import {
+  credentialFrom,
+  credentialExpiration,
+  issuerName,
+  linkedinAddToProfileUrl,
+  type CredentialLike,
+} from '../lib/linkedin';
+import { verifyForSharing, type ShareVerification } from '../lib/verify';
 
 interface ShareCredentialModalProps {
   resourceName: string;
   // Absolute URL of the credential in the space, offered to the device share
   // sheet and returned as the public link
   resourceUrl: string;
+  // Whether the credential is already world-readable
+  onCheckPublic: () => Promise<boolean>;
   // Marks the credential world-readable and resolves to its public URL
   onCreatePublicLink: () => Promise<string>;
+  // Removes public access, so the link stops resolving
+  onUnshare: () => Promise<void>;
+  // Fetches the stored resource body (envelope or bare credential), for the
+  // fields LinkedIn's add-to-profile form is filled from
+  onLoadCredential: () => Promise<unknown>;
   onClose: () => void;
 }
 
-const STUB_OPTIONS = ['Add to LinkedIn', 'QR code'];
+interface QrState {
+  target: 'verifier' | 'public';
+  // True when the credential was private and was made public just for the QR:
+  // hiding the QR (or closing the dialog) reverts it
+  temporary: boolean;
+  images: { verifier: string; public: string };
+}
 
-export default function ShareCredentialModal({ resourceName, resourceUrl, onCreatePublicLink, onClose }: ShareCredentialModalProps) {
+export default function ShareCredentialModal({
+  resourceName, resourceUrl, onCheckPublic, onCreatePublicLink, onUnshare, onLoadCredential, onClose,
+}: ShareCredentialModalProps) {
   const [notice, setNotice] = useState('');
-  const [publicLink, setPublicLink] = useState('');
-  const [creatingLink, setCreatingLink] = useState(false);
+  const [linkState, setLinkState] = useState<'checking' | 'private' | 'public'>('checking');
+  const [publicLink, setPublicLink] = useState(resourceUrl);
+  const [busy, setBusy] = useState(false);
   const [linkError, setLinkError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'public' | 'verifier' | null>(null);
+  const [confirmingUnshare, setConfirmingUnshare] = useState(false);
+  const [qr, setQr] = useState<QrState | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  // The credential loaded for the LinkedIn confirm step; null until the
+  // button is clicked
+  const [linkedin, setLinkedin] = useState<{ credential: CredentialLike; warnings: string[] } | null>(null);
+  const [linkedinBusy, setLinkedinBusy] = useState(false);
+  // Pre-share verification of the credential (verifier-core), run when the
+  // modal opens; null when the resource is not a credential
+  const [verification, setVerification] = useState<'checking' | ShareVerification | null>(null);
+  const [loadedCredential, setLoadedCredential] = useState<CredentialLike | null>(null);
+
+  // Opens VerifierPlus on the public credential URL; the vc parameter is
+  // passed unencoded, matching how VerifierPlus reads it from the fragment
+  const verifierLink = `https://verifierplus.org/#verify?vc=${publicLink}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    onCheckPublic()
+      .then((isPublic) => {
+        if (!cancelled) {
+          setLinkState(isPublic ? 'public' : 'private');
+        }
+      })
+      .catch(() => {
+        // If the check fails, offer to create: setPublic is idempotent
+        if (!cancelled) {
+          setLinkState('private');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Verify the credential when the modal opens, so every share path (link,
+  // QR, LinkedIn, device) carries the warning. Non-credential resources get
+  // no verification and no warning.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const credential = credentialFrom(await onLoadCredential());
+        if (!credential || cancelled) {
+          return;
+        }
+        setLoadedCredential(credential);
+        setVerification('checking');
+        const result = await verifyForSharing(credential);
+        if (!cancelled) {
+          setVerification(result);
+        }
+      } catch {
+        // Could not load the body: nothing to verify, nothing to warn about
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function createPublicLink() {
-    setCreatingLink(true);
+    setBusy(true);
     setLinkError('');
+    setNotice('');
     try {
       setPublicLink(await onCreatePublicLink());
+      setLinkState('public');
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : 'Could not create the public link.');
     } finally {
-      setCreatingLink(false);
+      setBusy(false);
     }
   }
 
-  async function copyLink() {
+  async function unshare() {
+    setBusy(true);
+    setLinkError('');
     try {
-      await navigator.clipboard.writeText(publicLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await onUnshare();
+      setLinkState('private');
+      setConfirmingUnshare(false);
+      // A showing QR encodes links that no longer resolve
+      setQr(null);
+      setNotice('Public access removed. The links no longer work.');
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not remove public access.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function showQr() {
+    setQrBusy(true);
+    setLinkError('');
+    setNotice('');
+    try {
+      let url = publicLink;
+      const temporary = linkState !== 'public';
+      if (temporary) {
+        url = await onCreatePublicLink();
+        setPublicLink(url);
+      }
+      const options = { width: 240, margin: 1 };
+      const images = {
+        public: await QRCode.toDataURL(url, options),
+        verifier: await QRCode.toDataURL(`https://verifierplus.org/#verify?vc=${url}`, options),
+      };
+      setQr({ target: 'verifier', temporary, images });
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not create the QR code.');
+    } finally {
+      setQrBusy(false);
+    }
+  }
+
+  async function hideQr() {
+    if (!qr) {
+      return;
+    }
+    setQr(null);
+    // Revert temporary public access -- unless Create Public Link was clicked
+    // while the QR was showing, which made the sharing durable
+    if (qr.temporary && linkState !== 'public') {
+      setQrBusy(true);
+      try {
+        await onUnshare();
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : 'Could not remove the temporary public access.');
+      } finally {
+        setQrBusy(false);
+      }
+    }
+  }
+
+  async function close() {
+    await hideQr();
+    onClose();
+  }
+
+  async function copyLink(which: 'public' | 'verifier') {
+    try {
+      await navigator.clipboard.writeText(which === 'public' ? publicLink : verifierLink);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
     } catch {
       // clipboard unavailable; the link is selectable in the input
     }
   }
+  // First click on Add to LinkedIn: load the credential and show the confirm
+  // step, with warnings (expired, unnamed issuer) the user may proceed past.
+  async function startLinkedin() {
+    setLinkedinBusy(true);
+    setLinkError('');
+    setNotice('');
+    try {
+      const credential = loadedCredential ?? credentialFrom(await onLoadCredential());
+      if (!credential) {
+        setNotice('This resource does not look like a verifiable credential.');
+        return;
+      }
+      const warnings: string[] = [];
+      if (typeof verification === 'object' && verification && !verification.ok) {
+        warnings.push(`This credential does not fully verify: ${verification.problems.join('; ')}.`);
+      }
+      const expires = credentialExpiration(credential);
+      if (expires && expires.getTime() < Date.now()) {
+        warnings.push('This credential has expired.');
+      }
+      if (!issuerName(credential)) {
+        warnings.push(
+          "This credential does not name its issuer, so LinkedIn's issuing organization field will be left blank."
+        );
+      }
+      setLinkedin({ credential, warnings });
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not load the credential.');
+    } finally {
+      setLinkedinBusy(false);
+    }
+  }
+
+  // Confirmed: make the credential public when it is not already (LinkedIn's
+  // certUrl must resolve for reviewers), then open the pre-filled
+  // add-to-profile form in a new tab.
+  async function addToLinkedin() {
+    if (!linkedin) {
+      return;
+    }
+    setLinkedinBusy(true);
+    setLinkError('');
+    try {
+      let url = publicLink;
+      if (linkState !== 'public') {
+        url = await onCreatePublicLink();
+        setPublicLink(url);
+        setLinkState('public');
+      }
+      const linkedinUrl = linkedinAddToProfileUrl({
+        credential: linkedin.credential,
+        certUrl: `https://verifierplus.org/#verify?vc=${url}`,
+      });
+      window.open(linkedinUrl, '_blank', 'noopener');
+      setLinkedin(null);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : 'Could not add to LinkedIn.');
+    } finally {
+      setLinkedinBusy(false);
+    }
+  }
+
   // The device share sheet (email, message, AirDrop, ...) exists only where
   // the Web Share API does
   const canDeviceShare = typeof navigator.share === 'function';
@@ -55,7 +271,7 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         role="dialog"
@@ -66,7 +282,7 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-lg font-semibold text-gray-800">Share Credential</h2>
           <button
-            onClick={onClose}
+            onClick={close}
             className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
           >
             Close
@@ -74,35 +290,109 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
         </div>
         <p className="text-sm text-gray-500 mb-4">{resourceName}</p>
 
+        {typeof verification === 'object' && verification && !verification.ok && (
+          <p role="alert" className="mb-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            Warning: this credential does not fully verify —{' '}
+            {verification.problems.join('; ')}. You can still share it, but
+            whoever receives it may not accept it.
+          </p>
+        )}
+
         <div className="space-y-2">
-          {!publicLink ? (
+          {linkState === 'checking' && (
+            <p className="text-sm text-gray-400 border border-gray-200 rounded-lg px-4 py-2.5">
+              Checking public access…
+            </p>
+          )}
+          {linkState === 'private' && (
             <button
               onClick={createPublicLink}
-              disabled={creatingLink}
+              disabled={busy}
               className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
             >
-              {creatingLink ? 'Creating public link…' : 'Create Public Link'}
+              {busy ? 'Creating public link…' : 'Create Public Link'}
             </button>
-          ) : (
+          )}
+          {linkState === 'public' && (
             <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <label htmlFor="public-link" className="block text-xs font-medium text-gray-700">
+                Public link to raw credential source code:
+              </label>
               <div className="flex gap-2">
                 <input
                   readOnly
+                  id="public-link"
                   aria-label="Public link"
                   value={publicLink}
                   onFocus={(e) => e.target.select()}
                   className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 bg-gray-50"
                 />
                 <button
-                  onClick={copyLink}
+                  onClick={() => copyLink('public')}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-md px-3 transition-colors"
                 >
-                  {copied ? 'Copied!' : 'Copy'}
+                  {copied === 'public' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-              <p className="text-xs text-gray-500">
-                Anyone with this link can view this credential.
-              </p>
+              <label htmlFor="verifierplus-link" className="block text-xs font-medium text-gray-700 pt-1">
+                Public link to verified human readable version:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  id="verifierplus-link"
+                  aria-label="VerifierPlus link"
+                  value={verifierLink}
+                  onFocus={(e) => e.target.select()}
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-700 bg-gray-50"
+                />
+                <button
+                  onClick={() => copyLink('verifier')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs rounded-md px-3 transition-colors"
+                >
+                  {copied === 'verifier' ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+              {!confirmingUnshare ? (
+                <>
+                  <button
+                    onClick={() => setConfirmingUnshare(true)}
+                    className="w-full text-left border border-red-200 hover:bg-red-50 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                  >
+                    Unshare
+                  </button>
+                  <p className="text-xs text-gray-500">
+                    Unsharing removes public access. The links will stop working
+                    for anyone who tries to use them.
+                  </p>
+                </>
+              ) : (
+                <div role="alert" className="bg-red-50 border-2 border-red-300 rounded-lg p-3 space-y-3">
+                  <p className="text-sm font-semibold text-red-700">
+                    Remove public access?
+                  </p>
+                  <p className="text-sm text-red-700">
+                    The links above will stop working for anyone who tries to
+                    use them — including anyone you have already sent them to.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmingUnshare(false)}
+                      disabled={busy}
+                      className="flex-1 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                    >
+                      Keep sharing
+                    </button>
+                    <button
+                      onClick={unshare}
+                      disabled={busy}
+                      className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                    >
+                      {busy ? 'Removing…' : 'Yes, unshare'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {linkError && (
@@ -110,15 +400,97 @@ export default function ShareCredentialModal({ resourceName, resourceUrl, onCrea
               {linkError}
             </p>
           )}
-          {STUB_OPTIONS.map((option) => (
+          <button
+            onClick={() => (qr ? hideQr() : showQr())}
+            disabled={qrBusy || linkState === 'checking'}
+            className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
+          >
+            {qrBusy ? 'Working…' : qr ? 'Hide QR code' : 'QR code'}
+          </button>
+          {qr && (
+            <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <div className="flex gap-1" role="group" aria-label="QR code target">
+                {([
+                  ['verifier', 'Verified page'],
+                  ['public', 'Raw credential'],
+                ] as const).map(([target, label]) => (
+                  <button
+                    key={target}
+                    onClick={() => setQr({ ...qr, target })}
+                    aria-pressed={qr.target === target}
+                    className={`flex-1 text-xs font-medium rounded-md px-2 py-1.5 transition-colors ${
+                      qr.target === target
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <img
+                src={qr.images[qr.target]}
+                alt={`QR code for the ${qr.target === 'verifier' ? 'verified page' : 'raw credential'} link`}
+                className="mx-auto w-60 h-60"
+              />
+              {qr.temporary && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  This credential is temporarily public while the QR code is
+                  showing. Hiding it or closing this dialog makes the
+                  credential private again.
+                </p>
+              )}
+            </div>
+          )}
+          {!linkedin ? (
             <button
-              key={option}
-              onClick={() => setNotice(`${option} is coming soon.`)}
-              className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
+              onClick={startLinkedin}
+              disabled={linkedinBusy || linkState === 'checking'}
+              className="w-full text-left bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5 transition-colors"
             >
-              {option}
+              {linkedinBusy ? 'Working…' : 'Add to LinkedIn'}
             </button>
-          ))}
+          ) : (
+            <div className="border-2 border-indigo-200 bg-indigo-50 rounded-lg p-3 space-y-3">
+              <p className="text-sm text-gray-700">
+                This will add the credential to your LinkedIn profile
+                {linkState !== 'public' && ' after creating a public link'}.{' '}
+                <a
+                  href="https://lcw.app/faq.html#add-to-linkedin"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-600 hover:text-indigo-700 underline"
+                >
+                  What does this mean?
+                </a>
+              </p>
+              {linkedin.warnings.map((warning) => (
+                <p
+                  key={warning}
+                  role="alert"
+                  className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+                >
+                  Warning: {warning}
+                </p>
+              ))}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setLinkedin(null)}
+                  disabled={linkedinBusy}
+                  className="flex-1 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={addToLinkedin}
+                  disabled={linkedinBusy}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+                >
+                  {linkedinBusy ? 'Working…' : 'Add to LinkedIn'}
+                </button>
+              </div>
+            </div>
+          )}
           {canDeviceShare && (
             <button
               onClick={deviceShare}
