@@ -113,6 +113,9 @@ export default function FileBrowserPage() {
   const [restoreTarget, setRestoreTarget] = useState<ResourceSummary | null>(null);
   const [restoreCollectionId, setRestoreCollectionId] = useState('');
   const [restoring, setRestoring] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<ResourceSummary | null>(null);
+  const [moveCollectionId, setMoveCollectionId] = useState('');
+  const [moving, setMoving] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
   const [newCollectionDescription, setNewCollectionDescription] = useState('');
   // Collection descriptions for the cards, keyed by collection id, fetched in
@@ -355,6 +358,44 @@ export default function FileBrowserPage() {
       handleError(err);
     } finally {
       setRestoring(false);
+    }
+  }, [navigate, handleError, session, selected, loadResources]);
+
+  // Moves a credential into another collection: copy the stored body over,
+  // delete the original (the server soft-deletes it into Trash), then delete
+  // the Trash copy (a DELETE inside Trash is permanent), so the move leaves
+  // nothing behind.
+  const moveCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
+    if (!selected || !targetCollectionId) {
+      return;
+    }
+    setMoving(true);
+    setError('');
+
+    try {
+      const s = await session;
+      if (!s) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
+      }
+      const space = s.client.space(s.spaceId);
+      const data = await space.collection(selected.id).resource(resource.id).get();
+      if (data === null) {
+        throw new Error('The credential could not be read.');
+      }
+      const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
+      await space.collection(targetCollectionId).put(resource.id, body as ResourceData);
+      await space.collection(selected.id).resource(resource.id).delete();
+      await space.collection('Trash').resource(resource.id).delete();
+      setMoveTarget(null);
+      setViewing((v) => (v?.resource.id === resource.id ? null : v));
+      await loadResources(selected);
+    } catch (err) {
+      setMoveTarget(null);
+      handleError(err);
+    } finally {
+      setMoving(false);
     }
   }, [navigate, handleError, session, selected, loadResources]);
 
@@ -974,12 +1015,25 @@ export default function FileBrowserPage() {
                     {/* A credential opens into the detail view; Trash and
                         dids keep their own source/restore/delete actions */}
                     {!['Trash', 'dids'].includes(selected.id) && (
-                      <button
-                        onClick={() => openResource(item, 'detail')}
-                        className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
-                      >
-                        Open
-                      </button>
+                      <>
+                        <button
+                          onClick={() => openResource(item, 'detail')}
+                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          Open
+                        </button>
+                        <button
+                          onClick={() => {
+                            setMoveTarget(item);
+                            setMoveCollectionId(
+                              collections.find((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))?.id ?? ''
+                            );
+                          }}
+                          className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
+                        >
+                          Move
+                        </button>
+                      </>
                     )}
                     {['Trash', 'dids'].includes(selected.id) && (
                       <button
@@ -1033,6 +1087,17 @@ export default function FileBrowserPage() {
                 className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
               >
                 Share
+              </button>
+              <button
+                onClick={() => {
+                  setMoveTarget(viewing.resource);
+                  setMoveCollectionId(
+                    collections.find((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))?.id ?? ''
+                  );
+                }}
+                className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Move
               </button>
               <button
                 onClick={() => setDeleteTarget(viewing.resource)}
@@ -1506,6 +1571,64 @@ export default function FileBrowserPage() {
                 className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
               >
                 {restoring ? 'Restoring…' : 'Restore'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move to another collection: pick the destination */}
+      {moveTarget && selected && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setMoveTarget(null)}
+        >
+          <div
+            role="dialog"
+            aria-label="Move Credential"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">Move Credential</h2>
+            {collections.some((c) => ![selected.id, 'Trash', 'dids'].includes(c.id)) ? (
+              <>
+                <p className="text-sm text-gray-600 mb-3">
+                  Move <span className="font-medium text-gray-800">
+                    {summaries[`${selected.id}/${moveTarget.id}`]?.title ?? moveTarget.name ?? moveTarget.id}
+                  </span> into:
+                </p>
+                <label htmlFor="move-collection" className="sr-only">Collection to move into</label>
+                <select
+                  id="move-collection"
+                  value={moveCollectionId}
+                  onChange={(e) => setMoveCollectionId(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
+                >
+                  {collections
+                    .filter((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
+                    ))}
+                </select>
+              </>
+            ) : (
+              <p className="text-sm text-gray-600 mb-5">
+                There is no other collection to move it into. Create one first.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setMoveTarget(null)}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => moveCredential(moveTarget, moveCollectionId)}
+                disabled={moving || !moveCollectionId}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                {moving ? 'Moving…' : 'Move'}
               </button>
             </div>
           </div>
