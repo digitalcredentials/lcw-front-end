@@ -69,9 +69,11 @@ export default function FileBrowserPage() {
   // The space whose collections are open; null shows the spaces card view
   const [activeSpace, setActiveSpace] = useState<SpaceInfo | null>(null);
   const [spaces, setSpaces] = useState<SpaceInfo[] | null>(null);
-  // Space descriptions for the cards and the open-space line, keyed by space
-  // URL, fetched in the background from each space's description document
-  const [spaceDescriptions, setSpaceDescriptions] = useState<Record<string, string>>({});
+  // Space names and descriptions for the cards and the open-space views,
+  // keyed by space URL, fetched in the background from each space's WAS
+  // description document — the single home for a space's display data (the
+  // registry carries no name)
+  const [spaceDetails, setSpaceDetails] = useState<Record<string, { name?: string; description?: string }>>({});
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDescription, setNewSpaceDescription] = useState('');
@@ -530,7 +532,7 @@ export default function FileBrowserPage() {
         const document = {
           ...existing,
           type: ['Space'],
-          name: (existing as { name?: unknown }).name ?? activeSpace.name ?? s.spaceId,
+          name: (existing as { name?: unknown }).name ?? spaceDetails[activeSpace.url]?.name ?? s.spaceId,
         } as Record<string, unknown>;
         if (description) {
           document.description = description;
@@ -542,14 +544,14 @@ export default function FileBrowserPage() {
           method: 'PUT',
           json: document,
         });
-        setSpaceDescriptions((current) => {
-          const next = { ...current };
+        setSpaceDetails((current) => {
+          const entry = { ...current[activeSpace.url] };
           if (description) {
-            next[activeSpace.url] = description;
+            entry.description = description;
           } else {
-            delete next[activeSpace.url];
+            delete entry.description;
           }
-          return next;
+          return { ...current, [activeSpace.url]: entry };
         });
       }
       setEditDescriptionOpen(false);
@@ -558,7 +560,7 @@ export default function FileBrowserPage() {
     } finally {
       setSavingDescription(false);
     }
-  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft]);
+  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, spaceDetails]);
 
   // The spaces list: the account's registered spaces from the back end, with
   // each space's description fetched in the background from its WAS
@@ -570,20 +572,27 @@ export default function FileBrowserPage() {
       const list = await listSpaces();
       setSpaces(list);
       void Promise.all(
-        list.map(async (space): Promise<[string, string] | null> => {
+        list.map(async (space): Promise<[string, { name?: string; description?: string }] | null> => {
           try {
             const s = await getSessionWASClientFor(space.url);
-            const desc = s ? await s.client.space(s.spaceId).describe() : null;
-            const text = (desc as { description?: unknown } | null)?.description;
-            return typeof text === 'string' && text.trim() ? [space.url, text] : null;
+            const desc = (await (s ? s.client.space(s.spaceId).describe() : null)) as
+              | { name?: unknown; description?: unknown }
+              | null;
+            if (!desc) {
+              return null;
+            }
+            return [space.url, {
+              ...(typeof desc.name === 'string' && desc.name.trim() && { name: desc.name }),
+              ...(typeof desc.description === 'string' && desc.description.trim() && { description: desc.description }),
+            }];
           } catch {
             return null;
           }
         })
       ).then((entries) => {
-        const found = entries.filter((e): e is [string, string] => e !== null);
+        const found = entries.filter((e): e is [string, { name?: string; description?: string }] => e !== null);
         if (found.length) {
-          setSpaceDescriptions((current) => ({ ...current, ...Object.fromEntries(found) }));
+          setSpaceDetails((current) => ({ ...current, ...Object.fromEntries(found) }));
         }
       });
     } catch (err) {
@@ -640,9 +649,12 @@ export default function FileBrowserPage() {
             method: 'PUT',
             json: { type: ['Space'], name, description },
           });
-          setSpaceDescriptions((current) => ({ ...current, [spaceUrl]: description }));
         }
       }
+      setSpaceDetails((current) => ({
+        ...current,
+        [spaceUrl]: { name, ...(description && { description }) },
+      }));
       setNewSpaceOpen(false);
       setNewSpaceName('');
       setNewSpaceDescription('');
@@ -705,7 +717,7 @@ export default function FileBrowserPage() {
                     ? 'text-gray-500 hover:text-gray-700 transition-colors'
                     : 'text-gray-800 font-medium cursor-default'}
                 >
-                  {activeSpace.name ?? activeSpace.url}
+                  {spaceDetails[activeSpace.url]?.name ?? '…'}
                 </button>
               </>
             )}
@@ -745,17 +757,17 @@ export default function FileBrowserPage() {
         {activeSpace && !selected && (
           <div className="mb-4 -mt-1">
             <span className="text-base text-gray-600">
-              {spaceDescriptions[activeSpace.url] ?? ''}
+              {spaceDetails[activeSpace.url]?.description ?? ''}
             </span>
             <button
               onClick={() => {
-                setDescriptionDraft(spaceDescriptions[activeSpace.url] ?? '');
+                setDescriptionDraft(spaceDetails[activeSpace.url]?.description ?? '');
                 setDescriptionError('');
                 setDescriptionTarget('space');
                 setEditDescriptionOpen(true);
               }}
-              aria-label={spaceDescriptions[activeSpace.url] ? 'Edit space description' : 'Add space description'}
-              title={spaceDescriptions[activeSpace.url] ? 'Edit space description' : 'Add space description'}
+              aria-label={spaceDetails[activeSpace.url]?.description ? 'Edit space description' : 'Add space description'}
+              title={spaceDetails[activeSpace.url]?.description ? 'Edit space description' : 'Add space description'}
               className="relative -top-1.5 ml-1.5 inline-flex text-gray-400 hover:text-indigo-600 transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5" aria-hidden="true">
@@ -846,7 +858,7 @@ export default function FileBrowserPage() {
                       spaces, so neither the name nor the badge leaves the
                       card */}
                   <span className="min-w-0 break-words font-medium text-gray-800">
-                    {space.name ?? space.url}
+                    {spaceDetails[space.url]?.name ?? '…'}
                   </span>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                     space.type === 'batch' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'
@@ -854,9 +866,9 @@ export default function FileBrowserPage() {
                     {space.type}
                   </span>
                 </span>
-                {spaceDescriptions[space.url] && (
+                {spaceDetails[space.url]?.description && (
                   <span className="w-full break-words text-sm text-gray-500">
-                    {spaceDescriptions[space.url]}
+                    {spaceDetails[space.url].description}
                   </span>
                 )}
               </button>
@@ -1141,7 +1153,7 @@ export default function FileBrowserPage() {
             <h2 className="text-lg font-semibold text-gray-800 mb-4">
               Description for {descriptionTarget === 'collection'
                 ? (selected?.name ?? selected?.id)
-                : (activeSpace?.name ?? 'this space')}
+                : (activeSpace ? spaceDetails[activeSpace.url]?.name ?? 'this space' : 'this space')}
             </h2>
             <form
               onSubmit={(e) => { e.preventDefault(); saveDescription(); }}
