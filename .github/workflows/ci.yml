@@ -16,13 +16,35 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: lcw-front-end
     steps:
+      # package.json links @digitalcredentials/batch-issuer-ui as
+      # file:../batch-issuer-ui, so the two repos are checked out side by side
+      # and the panel is built before this repo's install can resolve it. It
+      # tracks batch-issuer-ui's default branch, as a local sibling checkout
+      # would.
       - uses: actions/checkout@v6
+        with:
+          path: lcw-front-end
+
+      - uses: actions/checkout@v6
+        with:
+          repository: digitalcredentials/batch-issuer-ui
+          path: batch-issuer-ui
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
+          cache-dependency-path: |
+            lcw-front-end/package-lock.json
+            batch-issuer-ui/package-lock.json
+
+      - name: Build batch-issuer-ui
+        working-directory: batch-issuer-ui
+        run: npm ci && npm run build
 
       - name: Install dependencies
         run: npm ci
