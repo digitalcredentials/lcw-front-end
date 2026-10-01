@@ -864,20 +864,25 @@ export default function FileBrowserPage() {
           </div>
         )}
 
+        {/* auto-rows-fr sizes every grid row to the tallest card, and the
+            description is clamped to two lines, so cards with and without
+            descriptions end up the same size */}
         {!loading && !error && activeSpace && !selected && collections.length > 0 && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid auto-rows-fr gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {collections.map((item) => (
               <button
                 key={item.id}
                 onClick={() => openCollection(item)}
-                className="flex flex-col items-start gap-2 rounded-xl border border-gray-200 bg-white p-4 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
+                className="flex min-h-24 flex-col items-start gap-2 rounded-xl border border-gray-200 bg-white p-4 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
               >
                 <span className="flex items-center gap-2">
                   {FOLDER_ICON}
                   <span className="font-medium text-gray-800">{item.name ?? item.id}</span>
                 </span>
                 {collectionDescriptions[item.id] && (
-                  <span className="text-sm text-gray-500">{collectionDescriptions[item.id]}</span>
+                  <span className="line-clamp-2 text-sm text-gray-500">
+                    {collectionDescriptions[item.id]}
+                  </span>
                 )}
               </button>
             ))}
