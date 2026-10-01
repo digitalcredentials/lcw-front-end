@@ -17,19 +17,31 @@ function removeFromSpace(key: string) {
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
 // - the was-server-aws sam local API on :3000 (the space)
-// - the demo account registered in the wallet-test DynamoDB table, with the
-//   LCWExperience and Bachelors credentials in its UniversityOfToronto
-//   collection
+// - the demo account registered in the wallet-test DynamoDB table, and its
+//   space in the wallet-spaces registry, with the LCWExperience and Bachelors
+//   credentials in its UniversityOfToronto collection
 // The Vite dev server is started automatically (or reused if already up).
 
 const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
+// The registry name registration gives an account's credential space
+const DEMO_SPACE_NAME = `${DEMO_EMAIL}'s Space`;
 
 async function logIn(page: Page) {
+  // The browser-wallet prompt opens once per tab session while the wallet is
+  // not enabled, which in a fresh test browser it never is, and it covers the
+  // page whenever it lands
+  await page.addLocatorHandler(
+    page.getByRole('dialog', { name: 'Enable Browser Wallet' }),
+    () => page.getByRole('button', { name: 'Not now' }).click()
+  );
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in' }).click();
+  // Sign-in lands on the spaces list; every test here works inside the demo
+  // space
+  await page.getByRole('button', { name: DEMO_SPACE_NAME }).click();
 }
 
 async function openUniversityCollection(page: Page) {
@@ -77,7 +89,7 @@ test('rejects registration when passwords do not match', async ({ page }) => {
 
 test('logs in and lists the space collections', async ({ page }) => {
   await logIn(page);
-  await expect(page.getByText('Verifiable Credentials Collection')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toContainText(DEMO_SPACE_NAME);
   await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
 });
 

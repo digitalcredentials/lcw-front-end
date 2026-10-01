@@ -1,7 +1,7 @@
 // Seeds the local stack's AWS substitutes (DynamoDB Local + MinIO) with the
 // demo account and space the front end and the e2e tests expect.
 //
-// Idempotent: re-running overwrites the same table item and object keys.
+// Idempotent: re-running overwrites the same table items and object keys.
 // See AGENTS.md ("Local stack") for how this fits the three-repo setup.
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -27,9 +27,15 @@ const S3_ENDPOINT = process.env.LOCAL_S3_URL ?? "http://localhost:9000";
 const REGION = "us-east-1";
 
 // The account the front end's e2e tests log in as. The DID is not stored: it
-// is derived from the passphrase, so the table always agrees with whatever the
+// is derived from the passphrase, so the tables always agree with whatever the
 // login page derives.
+//
+// Two tables, as lcw-back-end's template defines them: the accounts table is
+// identity only (email -> did), and the spaces registry holds one row per
+// space, keyed by its URL. Login reads both; the WAS authorizer reads only the
+// registry.
 const TABLE_NAME = "wallet-test";
+const SPACES_TABLE_NAME = "wallet-spaces";
 const DEMO_EMAIL = "jc.chartrand@gmail.com";
 const DEMO_PASSPHRASE = "my-secret-seed-that-is-long-enou";
 
@@ -43,10 +49,10 @@ const COLLECTION_ID = "UniversityOfToronto";
 //
 //   SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' npm run seed
 //
-// It gets its own space rather than sharing the demo one: the authorizer finds
-// an account by scanning for an exact spaceURL match and takes the first hit,
-// so two accounts on one space would resolve to whichever row came back first
-// and verify against the wrong DID.
+// It gets its own space rather than sharing the demo one: the registry is keyed
+// by space URL, so a space has exactly one controller row, and registering a
+// second account on the demo space would overwrite the demo's row and hand the
+// space to the other DID.
 const SEED_EMAIL = process.env.SEED_EMAIL;
 const SEED_PASSPHRASE = process.env.SEED_PASSPHRASE;
 // Deliberately not defaulted to DEMO_PASSPHRASE. That passphrase is committed
@@ -64,7 +70,7 @@ if (Boolean(SEED_EMAIL) !== Boolean(SEED_PASSPHRASE)) {
 }
 
 // 2. Seeding the demo email as the "extra" account would overwrite the demo
-// row's did and spaceURL and silently break every e2e test.
+// account's did and silently break every e2e test.
 if (SEED_EMAIL && SEED_EMAIL.toLowerCase() === DEMO_EMAIL.toLowerCase()) {
   console.error(`SEED_EMAIL is the demo account (${DEMO_EMAIL}).`);
   console.error("Seeding it again with a different passphrase would replace the");
@@ -78,8 +84,8 @@ if (SEED_EMAIL && SEED_EMAIL.toLowerCase() === DEMO_EMAIL.toLowerCase()) {
 const spaceIdForEmail = (email) =>
   `dcc-was-local-${createHash("sha256").update(email).digest("hex").slice(0, 12)}`;
 
-// The authorizer matches the request's space URL against this value exactly,
-// so it must be the local was-server-aws origin, not the deployed one.
+// The authorizer looks the request's space URL up as the registry key, so it
+// must be the local was-server-aws origin, exactly, not the deployed one.
 const spaceUrlFor = (spaceId) => `http://localhost:3000/space/${spaceId}`;
 
 const credentials = { accessKeyId: "localtest", secretAccessKey: "localtest" };
@@ -178,21 +184,38 @@ async function signBachelorsCredential() {
   return { "@context": ["https://www.w3.org/ns/credentials/v2"], type: ["VerifiablePresentation"], verifiableCredential: [signed] };
 }
 
-async function ensureTable() {
+async function ensureTable(definition) {
+  const { TableName } = definition;
   try {
-    await ddb.send(new DescribeTableCommand({ TableName: TABLE_NAME }));
-    console.log(`  table ${TABLE_NAME} already exists`);
+    await ddb.send(new DescribeTableCommand({ TableName }));
+    console.log(`  table ${TableName} already exists`);
   } catch (err) {
     if (err.name !== "ResourceNotFoundException") throw err;
-    await ddb.send(new CreateTableCommand({
-      TableName: TABLE_NAME,
-      AttributeDefinitions: [{ AttributeName: "email", AttributeType: "S" }],
-      KeySchema: [{ AttributeName: "email", KeyType: "HASH" }],
-      BillingMode: "PAY_PER_REQUEST",
-    }));
-    console.log(`  created table ${TABLE_NAME}`);
+    await ddb.send(new CreateTableCommand({ ...definition, BillingMode: "PAY_PER_REQUEST" }));
+    console.log(`  created table ${TableName}`);
   }
 }
+
+// Both mirror WalletTestTable and WalletSpacesTable in lcw-back-end's
+// template.yaml. Login lists an account's spaces through the by-email index.
+const ACCOUNTS_TABLE = {
+  TableName: TABLE_NAME,
+  AttributeDefinitions: [{ AttributeName: "email", AttributeType: "S" }],
+  KeySchema: [{ AttributeName: "email", KeyType: "HASH" }],
+};
+const SPACES_TABLE = {
+  TableName: SPACES_TABLE_NAME,
+  AttributeDefinitions: [
+    { AttributeName: "spaceURL", AttributeType: "S" },
+    { AttributeName: "email", AttributeType: "S" },
+  ],
+  KeySchema: [{ AttributeName: "spaceURL", KeyType: "HASH" }],
+  GlobalSecondaryIndexes: [{
+    IndexName: "by-email",
+    KeySchema: [{ AttributeName: "email", KeyType: "HASH" }],
+    Projection: { ProjectionType: "ALL" },
+  }],
+};
 
 async function ensureBucket(bucket) {
   try {
@@ -224,16 +247,31 @@ async function seedAccount({ email, passphrase, spaceId }) {
   const key = await deriveKeyPair(passphrase);
   console.log(`\n  ${email} -> ${key.controller}`);
 
+  const createdAt = { S: new Date().toISOString() };
+
+  // The same two rows registration writes (CreateAccount, then RegisterSpace
+  // in lcw-back-end's state machine). PutItem replaces the whole item, so an
+  // account row seeded before the registry existed loses its old spaceURL.
   await ddb.send(new PutItemCommand({
     TableName: TABLE_NAME,
     Item: {
       email: { S: email },
       did: { S: key.controller },
-      spaceURL: { S: spaceUrl },
-      CreatedAt: { S: new Date().toISOString() },
+      CreatedAt: createdAt,
     },
   }));
-  console.log(`  registered with spaceURL ${spaceUrl}`);
+  await ddb.send(new PutItemCommand({
+    TableName: SPACES_TABLE_NAME,
+    Item: {
+      spaceURL: { S: spaceUrl },
+      email: { S: email },
+      did: { S: key.controller },
+      type: { S: "credential" },
+      name: { S: `${email}'s Space` },
+      CreatedAt: createdAt,
+    },
+  }));
+  console.log(`  registered with credential space ${spaceUrl}`);
 
   await ensureBucket(spaceId);
 
@@ -262,7 +300,8 @@ async function seedAccount({ email, passphrase, spaceId }) {
 }
 
 console.log("Seeding the LCW local stack");
-await ensureTable();
+await ensureTable(ACCOUNTS_TABLE);
+await ensureTable(SPACES_TABLE);
 
 // The demo account is always seeded: the e2e tests hard-code its email and
 // space id.

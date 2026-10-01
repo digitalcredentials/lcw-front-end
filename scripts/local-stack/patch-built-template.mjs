@@ -36,7 +36,6 @@ const VARS = {
   AWS_ACCESS_KEY_ID: "localtest",
   AWS_SECRET_ACCESS_KEY: "localtest",
   AWS_REGION: "us-east-1",
-  TABLE_NAME: "wallet-test",
 };
 
 const indentOf = (line) => line.length - line.trimStart().length;

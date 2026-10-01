@@ -2,7 +2,7 @@
 
 Notes for agents and developers working on the Learner Credential Wallet front
 end. `README.md` covers the app itself; this file covers running the whole
-wallet locally, which spans three repos.
+wallet locally, which spans three services.
 
 ## The three repos
 
@@ -12,8 +12,20 @@ out as siblings:
 | Repo | Role | Local port |
 | --- | --- | --- |
 | `lcw-front-end` (this one) | React + Vite UI | 5173 |
-| `lcw-back-end` | the login API (`POST /login`) and registration flow | 3001 |
-| `was-server-aws` | Wallet Attached Storage — the account's space | 3000 |
+| `lcw-back-end` | the login API (`POST /login`), the spaces API (`/spaces`) and registration flow | 3001 |
+| `was-server-aws` | Wallet Attached Storage — the account's spaces | 3000 |
+
+The front end also needs a fourth sibling, though not as a service:
+`package.json` links `@digitalcredentials/batch-issuer-ui` as
+`file:../batch-issuer-ui`, so `npm install` fails without it. Clone it next to
+the others and build it once:
+
+```bash
+git clone https://github.com/digitalcredentials/batch-issuer-ui.git
+cd batch-issuer-ui && npm ci && npm run build
+```
+
+Rebuild it after pulling changes to it; this repo uses its built `dist/`.
 
 How a login flows through them:
 
@@ -23,22 +35,26 @@ How a login flows through them:
 2. It signs a zCap invocation of **lcw-back-end**'s `POST /login`. That Lambda
    looks the email up in the `wallet-test` DynamoDB table and verifies the
    signature against the DID registered there. On success it returns the
-   account's `spaceURL`.
-3. The UI then talks to **was-server-aws** at that `spaceURL`, signing every
-   request with the same key. A Lambda authorizer re-resolves the space's
-   controller DID from the *same* `wallet-test` table and rejects anything not
-   signed by it.
+   account's spaces, read from the `wallet-spaces` registry table.
+3. The UI lists those spaces (through `GET /spaces`, the same zCap scheme), and
+   talks to **was-server-aws** at the chosen space's URL, signing every request
+   with the same key. A Lambda authorizer looks that URL up in the *same*
+   `wallet-spaces` registry, takes the controller DID registered for it, and
+   rejects anything not signed by it.
 
-So both back ends read one shared accounts table, and the space's contents live
-in S3 — one bucket per space, named for the space id.
+So there are two shared tables: `wallet-test` is identity only (email → DID),
+and `wallet-spaces` holds one row per space, keyed by its URL. Both back ends
+read the registry. The space's contents live in S3 — one bucket per space,
+named for the space id.
 
 ## Local stack
 
 `sam local` runs the two back ends, but their Lambdas talk to **real** AWS by
-default: the shared `wallet-test` DynamoDB table and real S3 buckets. Rather
-than depend on DCC AWS credentials, the local stack substitutes both:
+default: the shared `wallet-test` and `wallet-spaces` DynamoDB tables and real
+S3 buckets. Rather than depend on DCC AWS credentials, the local stack
+substitutes both:
 
-- **DynamoDB Local** (`amazon/dynamodb-local`) on `:8000` for the accounts table
+- **DynamoDB Local** (`amazon/dynamodb-local`) on `:8000` for both tables
 - **MinIO** (`minio/minio`) on `:9000` for the space's S3 bucket (console `:9001`)
 
 Both run on a Docker network named `lcw-local`, which the `sam local` Lambda
@@ -107,10 +123,9 @@ SEED_EMAIL=you@example.org SEED_PASSPHRASE='your passphrase' node scripts/local-
 
 That registers your email alongside the demo account and gives it **its own**
 space, seeded with the same two credentials. It gets its own space rather than
-sharing the demo one on purpose: the authorizer finds an account by scanning the
-table for an exact `spaceURL` match and takes the first hit, so two accounts
-pointing at one space would resolve to whichever row came back first and verify
-against the wrong DID.
+sharing the demo one on purpose: the registry is keyed by space URL, so a space
+has exactly one controller row, and registering a second account on the demo
+space would overwrite the demo's row and hand the space to the other DID.
 
 The demo account is always seeded too, because the e2e tests hard-code its email
 and space id — so don't replace it, and keep running the suite as the demo user.
@@ -126,12 +141,15 @@ instead. Registering on the deployed sandbox is a separate thing and does work.
 
 `scripts/local-stack/seed.mjs` writes, idempotently:
 
-- the `wallet-test` table, and the demo account in it — its `did` is *derived*
-  from the passphrase rather than stored, so the table always agrees with
-  whatever the login page derives
-- the account's `spaceURL` as `http://localhost:3000/space/<space id>`. The
-  authorizer matches this **by exact string**, so a sandbox account (whose
-  `spaceURL` points at the deployed WAS) will not drive the local space
+- the `wallet-test` and `wallet-spaces` tables, with the same keys and
+  `by-email` index as `lcw-back-end`'s template
+- the demo account in `wallet-test` — its `did` is *derived* from the
+  passphrase rather than stored, so the tables always agree with whatever the
+  login page derives
+- its space in `wallet-spaces`, as registration would: type `credential`,
+  named `<email>'s Space`, at `http://localhost:3000/space/<space id>`. The
+  authorizer looks this URL up **as the exact key**, so a sandbox account
+  (whose space URL points at the deployed WAS) will not drive the local space
 - the space's S3 bucket, named for the space id
   `dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c`, which the e2e tests hard-code
 - the space and `UniversityOfToronto` collection descriptions, plus the
@@ -170,12 +188,15 @@ deployable `template.yaml` stays untouched. **Re-run it after every
 nothing until you `sam build` again (and then re-patch). A stale build is the
 most likely reason a change appears to have no effect.
 
-**3. The login function's `TABLE_NAME` is a `!Ref`.** Outside CloudFormation
-`sam local` resolves it to the literal logical id `WalletTestTable`, so the
-Lambda queries a table that does not exist. `lcw-back-end/env.json` overrides
-it back to `wallet-test`, which is why that API needs `--env-vars env.json`.
-Function-level values beat the `Globals` injection, so this override cannot
-live in the patch.
+**3. `lcw-back-end`'s table names are `!Ref`s.** Outside CloudFormation
+`sam local` resolves `TABLE_NAME` and `SPACES_TABLE_NAME` to the literal
+logical ids `WalletTestTable` and `WalletSpacesTable`, so the Lambdas query
+tables that do not exist. `lcw-back-end/env.json` overrides them back to
+`wallet-test` and `wallet-spaces` for the login and spaces functions (and
+points the spaces function's `SPACE_URL_BASE` at the local WAS), which is why
+that API needs `--env-vars env.json`. Function-level values beat the `Globals`
+injection, so these overrides cannot live in the patch. `up.sh` merges them into
+`env.json` on every run, keeping any other keys you have added.
 
 **4. Never run `up.sh` while `sam local` is running.** `up.sh` runs `sam build`,
 which deletes and recreates `.aws-sam/build`. A running `sam local start-api`
@@ -195,9 +216,9 @@ two different namespaces — the table is created, and the Lambda still reports
 
 ### The one source change the local stack required
 
-Every S3 client in `was-server-aws` — the seven resource handlers, plus
-`src/policies/app.mjs` and `src/authorizer/publicRead.mjs` from the
-access-control work — is constructed as:
+Every S3 client in `was-server-aws` — each handler under `src/collections`,
+`src/resources` and `src/spaces`, plus `src/policies/app.mjs` and
+`src/authorizer/publicRead.mjs` — is constructed as:
 
 ```js
 const s3 = new S3Client(
@@ -215,9 +236,14 @@ This change is not committed upstream, so a fresh checkout of `was-server-aws`
 does not have it and **anything new that reaches S3 needs it applied too**.
 `up.sh` checks every file constructing an `S3Client` before it builds, and stops
 with the list if any lacks it — otherwise the stack comes up, prints `Ready`,
-and hangs on the first space request. A handler that misses it does not fail loudly: the request
-simply hangs until the caller times out, because `bucket.lcw-minio` never
-resolves.
+and hangs on the first space request. A handler that misses it does not fail
+loudly: the request simply hangs until the caller times out, because
+`bucket.lcw-minio` never resolves.
+
+`lcw-back-end`'s spaces function (`src/lcw-spaces`) builds its own S3 client
+without this, and `up.sh` does not check it. Listing spaces never touches S3,
+so sign-in and browsing work, but **New Space** and deleting a batch space hang
+against the local stack until it gets the same change.
 
 ## Tests
 
@@ -238,7 +264,7 @@ AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
 
 `AWS_SESSION_TOKEN=` is not decoration. If you have a live SSO or assume-role
 session in the shell, its token is inherited, MinIO rejects it with
-`InvalidTokenId`, and the two tests that clean up after themselves fail with
+`InvalidTokenId`, and the tests that clean up after themselves fail with
 nothing pointing at the cause. Clearing it is what makes the static
 `localtest` credentials take effect.
 
@@ -259,9 +285,23 @@ it the suite takes about a minute rather than five.
 The other two suites need no local stack:
 
 ```bash
-cd ../was-server-aws && npm test    # 34 in-process handler, authorizer and policy tests
+cd ../was-server-aws && npm test    # 38 in-process handler, authorizer and policy tests
 cd ../lcw-back-end/src/lcw-login && npm test
 ```
+
+### Known gap: most credential tests predate the card view
+
+The e2e suite was last updated before `main` moved collections and credentials
+from tables to cards, with a credential's actions (Verify, Share, View Source,
+Delete) behind **Open**. The 13 tests that find a collection or credential by
+`getByRole('row')` fail against any stack, local or deployed, until they are
+rewritten for the cards. The 8 that cover sign-in, registration errors, the
+collections list and staging a credential pass. `logIn` already handles the
+newer sign-in flow: it dismisses the browser-wallet prompt and opens the demo
+space.
+
+A failing test also skips its own cleanup, so after a failed run reset the
+space (below) before trusting the next one.
 
 ### Known gap: `Bachelors.json` is not from a trusted issuer
 

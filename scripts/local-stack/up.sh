@@ -106,24 +106,35 @@ echo "==> sam build + patch (lcw-back-end)"
 (cd "$BE_REPO" && sam build >/dev/null)
 node "$HERE/patch-built-template.mjs" "$BE_REPO/.aws-sam/build/template.yaml"
 
-# The login function's TABLE_NAME is a !Ref, which sam local resolves to the
-# literal logical id, so it needs this override file.
-# Checked for content, not just existence: an env.json that exists but lacks
-# LcwLoginFunction.TABLE_NAME leaves the Lambda querying the literal logical id
-# and every login failing with ResourceNotFoundException.
-if [ ! -f "$BE_REPO/env.json" ]; then
-  echo '{ "LcwLoginFunction": { "TABLE_NAME": "wallet-test" } }' > "$BE_REPO/env.json"
-  echo "wrote $BE_REPO/env.json"
-elif ! node -e '
-  const j = require(process.argv[1]);
-  process.exit(j?.LcwLoginFunction?.TABLE_NAME ? 0 : 1);
-' "$BE_REPO/env.json" 2>/dev/null; then
-  echo "$BE_REPO/env.json exists but has no LcwLoginFunction.TABLE_NAME." >&2
-  echo "sam local would resolve TABLE_NAME to the literal logical id and every" >&2
-  echo "login would fail. Add it, or delete the file and re-run:" >&2
-  echo '  { "LcwLoginFunction": { "TABLE_NAME": "wallet-test" } }' >&2
-  exit 1
-fi
+# lcw-back-end's table names are !Refs, which sam local resolves to the literal
+# logical ids (WalletTestTable, WalletSpacesTable), so the Lambdas would query
+# tables that do not exist. Function-level values beat the Globals injection,
+# so these overrides come from env.json instead. The spaces function also
+# builds new space URLs from SPACE_URL_BASE, which must be the local WAS.
+#
+# Merged rather than written once: an env.json from before the spaces registry
+# lacks the SPACES_TABLE_NAME overrides, and login then fails with "Failed to
+# look up spaces." Keys this does not manage are kept.
+echo "==> env.json (lcw-back-end)"
+node -e '
+  const fs = require("fs");
+  const path = process.argv[1];
+  const tables = { TABLE_NAME: "wallet-test", SPACES_TABLE_NAME: "wallet-spaces" };
+  const required = {
+    LcwLoginFunction: tables,
+    LcwSpacesFunction: { ...tables, SPACE_URL_BASE: "http://localhost:3000/space" },
+  };
+  const current = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {};
+  const merged = { ...current };
+  for (const [fn, vars] of Object.entries(required)) {
+    merged[fn] = { ...current[fn], ...vars };
+  }
+  const text = JSON.stringify(merged, null, 2) + "\n";
+  if (!fs.existsSync(path) || fs.readFileSync(path, "utf8") !== text) {
+    fs.writeFileSync(path, text);
+    console.log(`wrote ${path}`);
+  }
+' "$BE_REPO/env.json"
 
 echo "==> seeding the demo account and space"
 # Not `|| true`: if this fails, seed.mjs dies later with an opaque
@@ -140,7 +151,7 @@ Ready. Now start the three foreground processes, each in its own terminal:
   cd $WAS_REPO && sam local start-api --port 3000 --region us-east-1 \\
     --docker-network lcw-local --warm-containers EAGER
 
-  # 2. lcw-back-end (the login API) on :3001
+  # 2. lcw-back-end (login and /spaces) on :3001
   cd $BE_REPO && sam local start-api --port 3001 --region us-east-1 \\
     --env-vars env.json --docker-network lcw-local --warm-containers EAGER
 
