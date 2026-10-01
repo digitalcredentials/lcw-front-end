@@ -46,8 +46,9 @@ async function logIn(page: Page) {
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // Login lands on the spaces card view; every test works inside the demo
-  // account's (single) space
-  await page.locator('[data-space-url]').first().click();
+  // account's credential space (a batch space's card opens a batch-view or
+  // space-view prompt instead of the space)
+  await page.locator('[data-space-type="credential"]').first().click();
 }
 
 test('logs in and lists the space collections', async ({ page }) => {
