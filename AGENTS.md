@@ -25,7 +25,10 @@ git clone https://github.com/digitalcredentials/batch-issuer-ui.git
 cd batch-issuer-ui && npm ci && npm run build
 ```
 
-Rebuild it after pulling changes to it; this repo uses its built `dist/`.
+Rebuild it after pulling changes to it; this repo uses its built `dist/`. CI
+pins it to one commit (the `ref` in `.github/workflows/ci.yml`); if your
+checkout's dependencies differ from that commit's, `npm ci` here fails until
+`package-lock.json` is refreshed against it.
 
 How a login flows through them:
 
@@ -85,11 +88,13 @@ shape, written from the directory that holds all three repos as siblings:
 
 ```bash
 # the space, on :3000
-cd was-server-aws && sam local start-api --port 3000 --region us-east-1 \
+cd was-server-aws && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
+  sam local start-api --port 3000 --region us-east-1 \
   --docker-network lcw-local --warm-containers EAGER
 
-# the login API, on :3001
-cd lcw-back-end && sam local start-api --port 3001 --region us-east-1 \
+# the login and spaces API, on :3001
+cd lcw-back-end && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
+  sam local start-api --port 3001 --region us-east-1 \
   --env-vars env.json --docker-network lcw-local --warm-containers EAGER
 
 # the front end, on :5173
@@ -98,6 +103,13 @@ cd lcw-front-end && npm run dev
 
 Each path is relative to the repos' shared parent, not to
 `scripts/local-stack` where you ran `up.sh`.
+
+Keep the credentials on both `sam` commands. `sam local` passes the shell's own
+AWS credentials into the Lambda containers, and they beat the `localtest` values
+the template patch sets, so from a shell holding real credentials (exported
+keys, or a live SSO or assume-role session) every S3 call fails with
+`InvalidAccessKeyId` or `InvalidTokenId` and the space returns 500. Setting
+them on the command makes `localtest` the credentials `sam` resolves.
 
 Sign in at http://localhost:5173:
 

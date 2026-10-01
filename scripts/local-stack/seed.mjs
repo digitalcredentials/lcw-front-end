@@ -135,9 +135,9 @@ async function documentLoader(url) {
 
 // The second credential the e2e tests verify. No signed fixture for it exists
 // in the repo, so it is signed here with a deterministic throwaway issuer key
-// (a fixed seed, so the issuer DID is stable across runs). It is not one of the
-// front end's trusted issuer DIDs, which is why the tests assert only that its
-// signature is valid.
+// (a fixed seed, so the issuer DID is stable across runs). Its signature is
+// valid, but its issuer is not one of the front end's trusted issuer DIDs, so
+// the verifier reports "Not a known issuer." -- see the known gap in AGENTS.md.
 async function signBachelorsCredential() {
   const issuerKey = await deriveKeyPair("lcw-local-stack-demo-issuer");
   const credential = {

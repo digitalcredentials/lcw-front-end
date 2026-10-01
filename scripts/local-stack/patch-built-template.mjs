@@ -30,6 +30,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 const MARKER = "lcw-local-stack: injected environment";
 
 // The overrides. Order is stable so a patched template diffs cleanly.
+//
+// The credentials here only hold when sam local resolves none of its own: it
+// passes the shell's AWS credentials into the containers over these, which is
+// why the start-api commands up.sh prints set localtest on the command too.
 const VARS = {
   AWS_ENDPOINT_URL_DYNAMODB: "http://lcw-dynamodb:8000",
   AWS_ENDPOINT_URL_S3: "http://lcw-minio:9000",

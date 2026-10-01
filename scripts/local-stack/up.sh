@@ -145,14 +145,19 @@ node "$HERE/seed.mjs"
 FE_REPO="$(cd "$HERE/../.." && pwd)"
 cat <<NEXT
 
-Ready. Now start the three foreground processes, each in its own terminal:
+Ready. Now start the three foreground processes, each in its own terminal.
+The credentials on each sam command are not optional: sam local hands the
+shell's own AWS credentials to the Lambdas over the template's localtest ones,
+and MinIO rejects anything else.
 
   # 1. was-server-aws (the space) on :3000
-  cd $WAS_REPO && sam local start-api --port 3000 --region us-east-1 \\
+  cd $WAS_REPO && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \\
+    sam local start-api --port 3000 --region us-east-1 \\
     --docker-network lcw-local --warm-containers EAGER
 
   # 2. lcw-back-end (login and /spaces) on :3001
-  cd $BE_REPO && sam local start-api --port 3001 --region us-east-1 \\
+  cd $BE_REPO && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \\
+    sam local start-api --port 3001 --region us-east-1 \\
     --env-vars env.json --docker-network lcw-local --warm-containers EAGER
 
   # 3. the front end on :5173
