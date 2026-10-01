@@ -741,12 +741,16 @@ export default function FileBrowserPage() {
             )}
           </nav>
           {selected ? (
-            <button
-              onClick={() => { setUploadError(''); setUploadOpen(true); }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-            >
-              Add Credential
-            </button>
+            // Hidden while a credential's detail view is open; the detail
+            // header carries that view's actions
+            viewing?.mode !== 'detail' && (
+              <button
+                onClick={() => { setUploadError(''); setUploadOpen(true); }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Add Credential
+              </button>
+            )
           ) : activeSpace ? (
             <button
               onClick={() => { setNewCollectionError(''); setNewCollectionName(''); setNewCollectionOpen(true); }}
@@ -1023,12 +1027,26 @@ export default function FileBrowserPage() {
             <h2 className="text-lg font-semibold text-gray-800">
               {viewingSummary?.title ?? viewing.resource.name ?? viewing.resource.id}
             </h2>
-            <button
-              onClick={() => setViewing(null)}
-              className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-            >
-              Back to list
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShareTarget(viewing.resource)}
+                className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Share
+              </button>
+              <button
+                onClick={() => setDeleteTarget(viewing.resource)}
+                className="border border-red-200 hover:bg-red-50 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setViewing(null)}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Back to list
+              </button>
+            </div>
           </div>
         )}
 
@@ -1108,23 +1126,6 @@ export default function FileBrowserPage() {
             </div>
           </section>
         </div>
-
-        {selected && viewing?.mode === 'detail' && (
-          <div className="mt-6 flex gap-2">
-            <button
-              onClick={() => setShareTarget(viewing.resource)}
-              className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-            >
-              Share
-            </button>
-            <button
-              onClick={() => setDeleteTarget(viewing.resource)}
-              className="border border-red-200 hover:bg-red-50 text-red-600 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-            >
-              Delete
-            </button>
-          </div>
-        )}
 
         {/* Read-only source-only viewer (Trash and dids), below the list */}
         {selected && viewing?.mode === 'source' && (
