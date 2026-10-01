@@ -840,8 +840,14 @@ export default function FileBrowserPage() {
                 onClick={() => openSpace(space)}
                 className="flex flex-col items-start gap-2 rounded-xl border border-gray-200 bg-white p-4 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
               >
-                <span className="flex w-full items-center justify-between gap-2">
-                  <span className="font-medium text-gray-800">{space.name ?? space.url}</span>
+                <span className="flex w-full items-start justify-between gap-2">
+                  {/* min-w-0 lets the name shrink inside the flex row, and
+                      break-words wraps names (or URL fallbacks) with no
+                      spaces, so neither the name nor the badge leaves the
+                      card */}
+                  <span className="min-w-0 break-words font-medium text-gray-800">
+                    {space.name ?? space.url}
+                  </span>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                     space.type === 'batch' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'
                   }`}>
@@ -849,7 +855,9 @@ export default function FileBrowserPage() {
                   </span>
                 </span>
                 {spaceDescriptions[space.url] && (
-                  <span className="text-sm text-gray-500">{spaceDescriptions[space.url]}</span>
+                  <span className="w-full break-words text-sm text-gray-500">
+                    {spaceDescriptions[space.url]}
+                  </span>
                 )}
               </button>
             ))}
