@@ -118,6 +118,9 @@ export default function FileBrowserPage() {
   const [editDescriptionOpen, setEditDescriptionOpen] = useState(false);
   const [descriptionTarget, setDescriptionTarget] = useState<'collection' | 'space'>('collection');
   const [descriptionDraft, setDescriptionDraft] = useState('');
+  // The space name edited alongside the description (spaces only; collection
+  // ids are path segments, so collections are not renamed here)
+  const [nameDraft, setNameDraft] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
   const [descriptionError, setDescriptionError] = useState('');
   const [newCollectionName, setNewCollectionName] = useState('');
@@ -527,12 +530,18 @@ export default function FileBrowserPage() {
         });
       } else if (activeSpace) {
         // The space's description document (metadata/description.json),
-        // written whole; the server stamps the derived fields.
+        // written whole; the server stamps the derived fields. The edited
+        // name is written too — the description document is the only home
+        // for a space's name.
         const existing = (await s.client.space(s.spaceId).describe()) ?? {};
+        const name = nameDraft.trim()
+          || ((existing as { name?: unknown }).name as string | undefined)
+          || spaceDetails[activeSpace.url]?.name
+          || s.spaceId;
         const document = {
           ...existing,
           type: ['Space'],
-          name: (existing as { name?: unknown }).name ?? spaceDetails[activeSpace.url]?.name ?? s.spaceId,
+          name,
         } as Record<string, unknown>;
         if (description) {
           document.description = description;
@@ -545,7 +554,7 @@ export default function FileBrowserPage() {
           json: document,
         });
         setSpaceDetails((current) => {
-          const entry = { ...current[activeSpace.url] };
+          const entry = { ...current[activeSpace.url], name };
           if (description) {
             entry.description = description;
           } else {
@@ -560,7 +569,7 @@ export default function FileBrowserPage() {
     } finally {
       setSavingDescription(false);
     }
-  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, spaceDetails]);
+  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails]);
 
   // The spaces list: the account's registered spaces from the back end, with
   // each space's description fetched in the background from its WAS
@@ -761,13 +770,14 @@ export default function FileBrowserPage() {
             </span>
             <button
               onClick={() => {
+                setNameDraft(spaceDetails[activeSpace.url]?.name ?? '');
                 setDescriptionDraft(spaceDetails[activeSpace.url]?.description ?? '');
                 setDescriptionError('');
                 setDescriptionTarget('space');
                 setEditDescriptionOpen(true);
               }}
-              aria-label={spaceDetails[activeSpace.url]?.description ? 'Edit space description' : 'Add space description'}
-              title={spaceDetails[activeSpace.url]?.description ? 'Edit space description' : 'Add space description'}
+              aria-label="Edit space name and description"
+              title="Edit space name and description"
               className="relative -top-1.5 ml-1.5 inline-flex text-gray-400 hover:text-indigo-600 transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5" aria-hidden="true">
@@ -1137,8 +1147,8 @@ export default function FileBrowserPage() {
         />
       )}
 
-      {/* Name and create a new collection */}
-      {/* Edit the open collection's description */}
+      {/* Edit the open collection's description, or the open space's name and
+          description */}
       {editDescriptionOpen && (descriptionTarget === 'collection' ? selected : activeSpace) && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
@@ -1146,26 +1156,44 @@ export default function FileBrowserPage() {
         >
           <div
             role="dialog"
-            aria-label="Collection Description"
+            aria-label={descriptionTarget === 'collection' ? 'Collection Description' : 'Edit Space'}
             className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-lg font-semibold text-gray-800 mb-4">
-              Description for {descriptionTarget === 'collection'
-                ? (selected?.name ?? selected?.id)
-                : (activeSpace ? spaceDetails[activeSpace.url]?.name ?? 'this space' : 'this space')}
+              {descriptionTarget === 'collection'
+                ? `Description for ${selected?.name ?? selected?.id}`
+                : 'Edit Space'}
             </h2>
             <form
               onSubmit={(e) => { e.preventDefault(); saveDescription(); }}
               className="space-y-4"
             >
+              {/* Spaces are renamed here; the name lives in the space's
+                  description document, so the save writes both fields */}
+              {descriptionTarget === 'space' && (
+                <div>
+                  <label htmlFor="edit-space-name" className="block text-sm font-medium text-gray-700 mb-1">
+                    Name
+                  </label>
+                  <input
+                    id="edit-space-name"
+                    type="text"
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    placeholder="e.g. Professional credentials"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
+                </div>
+              )}
               <textarea
-                autoFocus
+                autoFocus={descriptionTarget === 'collection'}
                 rows={3}
                 value={descriptionDraft}
                 onChange={(e) => setDescriptionDraft(e.target.value)}
-                placeholder="What this collection holds"
-                aria-label="Collection description"
+                placeholder={descriptionTarget === 'collection' ? 'What this collection holds' : 'What this space holds'}
+                aria-label={descriptionTarget === 'collection' ? 'Collection description' : 'Space description'}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
               {descriptionError && (
@@ -1183,7 +1211,7 @@ export default function FileBrowserPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={savingDescription}
+                  disabled={savingDescription || (descriptionTarget === 'space' && !nameDraft.trim())}
                   className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
                 >
                   {savingDescription ? 'Saving…' : 'Save'}
