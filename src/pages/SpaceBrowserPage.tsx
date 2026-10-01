@@ -74,6 +74,9 @@ export default function FileBrowserPage() {
   // description document — the single home for a space's display data (the
   // registry carries no name)
   const [spaceDetails, setSpaceDetails] = useState<Record<string, { name?: string; description?: string }>>({});
+  // A clicked batch space, held while the user chooses between the batch
+  // view (the batch issuer, opened on that batch) and the standard space view
+  const [batchPrompt, setBatchPrompt] = useState<SpaceInfo | null>(null);
   const [newSpaceOpen, setNewSpaceOpen] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDescription, setNewSpaceDescription] = useState('');
@@ -859,7 +862,8 @@ export default function FileBrowserPage() {
               <button
                 key={space.url}
                 data-space-url={space.url}
-                onClick={() => openSpace(space)}
+                data-space-type={space.type}
+                onClick={() => (space.type === 'batch' ? setBatchPrompt(space) : openSpace(space))}
                 className="flex flex-col items-start gap-2 rounded-xl border border-gray-200 bg-white p-4 text-left hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
               >
                 <span className="flex w-full items-start justify-between gap-2">
@@ -1218,6 +1222,55 @@ export default function FileBrowserPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* A batch space holds a credential batch, so ask whether to open it in
+          the batch issuer (on that batch) or in the standard space view */}
+      {batchPrompt && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
+          onClick={() => setBatchPrompt(null)}
+        >
+          <div
+            role="dialog"
+            aria-label="Open Batch Space"
+            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">
+              Open {spaceDetails[batchPrompt.url]?.name ?? 'this space'}
+            </h2>
+            <p className="text-sm text-gray-600 mb-5">
+              This space holds a credential batch. Open it in the batch view to
+              edit the batch and notify recipients, or open the standard space
+              view to browse its stored files.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBatchPrompt(null)}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const space = batchPrompt;
+                  setBatchPrompt(null);
+                  openSpace(space);
+                }}
+                className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Space View
+              </button>
+              <button
+                onClick={() => navigate('/batches', { state: { spaceUrl: batchPrompt.url } })}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+              >
+                Batch View
+              </button>
+            </div>
           </div>
         </div>
       )}
