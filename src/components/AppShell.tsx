@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clearToken, getEmail } from '../lib/auth';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
+import LoadingLabel from './LoadingLabel';
 
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Spaces, Credential Issuer, Settings — which holds the browser-wallet
@@ -213,9 +214,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 {walletState === 'disabled' && (
                   <span className="font-semibold text-red-600">Disabled</span>
                 )}
-                {walletState === 'unknown' && (
-                  <span className="font-semibold text-gray-400">Checking…</span>
-                )}
+                {walletState === 'unknown' && <LoadingLabel label="Checking…" />}
               </p>
               {walletState === 'enabled' ? (
                 <button

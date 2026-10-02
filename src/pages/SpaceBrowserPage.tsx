@@ -7,6 +7,7 @@ import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
+import LoadingLabel from '../components/LoadingLabel';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -782,7 +783,7 @@ export default function FileBrowserPage() {
                     ? 'text-gray-500 hover:text-gray-700 transition-colors'
                     : 'text-gray-800 font-medium cursor-default'}
                 >
-                  {spaceDetails[activeSpace.url]?.name ?? '…'}
+                  {spaceDetails[activeSpace.url]?.name ?? <LoadingLabel />}
                 </button>
               </>
             )}
@@ -884,8 +885,8 @@ export default function FileBrowserPage() {
 
         {/* States */}
         {loading && (
-          <div className="flex items-center justify-center py-20 text-gray-400 text-sm">
-            Loading…
+          <div className="flex items-center justify-center py-20 text-sm">
+            <LoadingLabel />
           </div>
         )}
 
@@ -929,7 +930,7 @@ export default function FileBrowserPage() {
                       spaces, so neither the name nor the badge leaves the
                       card */}
                   <span className="min-w-0 break-words font-medium text-gray-800">
-                    {spaceDetails[space.url]?.name ?? '…'}
+                    {spaceDetails[space.url]?.name ?? <LoadingLabel />}
                   </span>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                     space.type === 'batch' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'
