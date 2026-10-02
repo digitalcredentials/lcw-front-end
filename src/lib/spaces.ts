@@ -54,10 +54,12 @@ export async function createSpace(type: 'credential' | 'batch', name: string): P
   return (response.data as { space: string }).space
 }
 
+// Lists the session DID's spaces. The server reads the caller's DID from the
+// signed invocation itself, so the request carries no email.
 export async function listSpaces(): Promise<SpaceInfo[]> {
-  const { zcapClient, email } = await sessionContext()
+  const { zcapClient } = await sessionContext()
   const response = await zcapClient.request({
-    url: `${wasBase()}/spaces?email=${encodeURIComponent(email)}`,
+    url: `${wasBase()}/spaces`,
     method: 'GET',
     action: 'read',
   })
