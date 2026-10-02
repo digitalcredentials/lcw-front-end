@@ -5,6 +5,7 @@ import type { CollectionSummary } from '@interop/was-client';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient } from '../lib/was';
 import { isAuthenticated } from '../lib/auth';
+import LoadingLabel from '../components/LoadingLabel';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
@@ -274,7 +275,7 @@ export default function ChapiPage() {
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-md p-8">
         <h1 className="text-xl font-semibold text-gray-800 mb-4">Learner Credential Wallet</h1>
 
-        {phase.step === 'starting' && <p className="text-sm text-gray-500">Waiting for the credential request…</p>}
+        {phase.step === 'starting' && <p className="text-sm"><LoadingLabel label="Waiting for the credential request…" /></p>}
 
         {phase.step === 'not-signed-in' && (
           <div>
@@ -287,7 +288,7 @@ export default function ChapiPage() {
           </div>
         )}
 
-        {phase.step === 'claiming' && <p className="text-sm text-gray-500">Proving your DID to the issuer…</p>}
+        {phase.step === 'claiming' && <p className="text-sm"><LoadingLabel label="Proving your DID to the issuer…" /></p>}
 
         {phase.step === 'choose' && (
           <div className="space-y-4">
@@ -376,7 +377,7 @@ export default function ChapiPage() {
         )}
 
         {phase.step === 'loading-credentials' && (
-          <p className="text-sm text-gray-500">Finding credentials that match the request…</p>
+          <p className="text-sm"><LoadingLabel label="Finding credentials that match the request…" /></p>
         )}
 
         {phase.step === 'pick' && (
