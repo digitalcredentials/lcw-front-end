@@ -27,6 +27,20 @@ export default function BatchIssuerPage() {
         remove: deleteSpace,
       },
       notifyRecipients,
+      // Revokes a credential's status position; the token is the
+      // authorization, so this talks to the status service directly.
+      revokeStatus: async (revocationToken: string) => {
+        const base = (import.meta.env.VITE_STATUS_API_BASE ?? '').replace(/\/+$/, '');
+        const response = await fetch(`${base}/revoke`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revocationToken }),
+        });
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error ?? 'The revocation failed.');
+        }
+      },
       templatesApiBase: (import.meta.env.VITE_TEMPLATES_API_BASE ?? '').replace(/\/+$/, ''),
       onUnauthorized: () => {
         clearToken();
