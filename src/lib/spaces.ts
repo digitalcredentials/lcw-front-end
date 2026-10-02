@@ -1,7 +1,7 @@
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { ZcapClient } from '@interop/ezcap'
-import { getEmail, getSessionKey, getCoupon } from './auth'
+import { getSessionKey, getCoupon } from './auth'
 
 // The WAS server's space registry endpoints (per the Wallet Attached Storage
 // spec): POST /spaces provisions a space, GET /spaces lists the account's
@@ -23,12 +23,10 @@ function wasBase(): string {
 
 async function sessionContext(): Promise<{
   zcapClient: ZcapClient
-  email: string
   controller: string
 }> {
   const stored = getSessionKey()
-  const email = getEmail()
-  if (!stored || !email) {
+  if (!stored) {
     throw new Error('UNAUTHORIZED')
   }
   const keyPair = await Ed25519VerificationKey.from(stored)
@@ -36,20 +34,20 @@ async function sessionContext(): Promise<{
     SuiteClass: Ed25519Signature2020,
     invocationSigner: keyPair.signer(),
   })
-  return { zcapClient, email, controller: keyPair.controller as string }
+  return { zcapClient, controller: keyPair.controller as string }
 }
 
 // Provisions a new WAS space of the given type. Per the spec the body names
 // the space's controller DID (the wallet's session DID) and the invocation is
-// signed by it; the server additionally requires the account's registration
-// token as a coupon. Resolves to the new space URL.
+// signed by it; the server additionally requires redeeming a coupon (the
+// account's registration token). Resolves to the new space URL.
 export async function createSpace(type: 'credential' | 'batch', name: string): Promise<string> {
-  const { zcapClient, email, controller } = await sessionContext()
+  const { zcapClient, controller } = await sessionContext()
   const response = await zcapClient.request({
     url: `${wasBase()}/spaces`,
     method: 'POST',
     action: 'write',
-    json: { controller, email, type, name, coupon: getCoupon() },
+    json: { controller, type, name, coupon: getCoupon() },
   })
   return (response.data as { space: string }).space
 }
