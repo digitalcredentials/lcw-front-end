@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken, setSpaceUrl, setSessionKey, setEmail as storeEmail } from '../lib/auth';
+import { setToken, setSpaceUrl, setSessionKey, setCoupon, setEmail as storeEmail } from '../lib/auth';
 import { login } from '../lib/login';
 
 export default function LoginPage() {
@@ -20,6 +20,10 @@ export default function LoginPage() {
 
       setToken(result.controller);
       storeEmail(result.email);
+      if (result.token) {
+        // The WAS server requires this as the coupon when creating a space
+        setCoupon(result.token);
+      }
       if (result.space) {
         setSpaceUrl(result.space);
       }
