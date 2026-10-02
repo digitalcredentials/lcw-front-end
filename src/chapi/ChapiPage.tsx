@@ -288,7 +288,7 @@ export default function ChapiPage() {
           </div>
         )}
 
-        {phase.step === 'claiming' && <p className="text-sm"><LoadingLabel label="Proving your DID to the issuer…" /></p>}
+        {phase.step === 'claiming' && <p className="text-sm"><LoadingLabel label="Proving ownership of your DID to the issuer…" /></p>}
 
         {phase.step === 'choose' && (
           <div className="space-y-4">
