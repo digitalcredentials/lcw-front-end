@@ -143,3 +143,32 @@ test('shares a credential to LinkedIn', async ({ page }) => {
     }
   }
 });
+
+test('My Spaces and the title link back to the spaces view', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    // Deep into a credential's detail view
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    await page.locator('[data-resource-id*="LCWExperience"]')
+      .getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByText('Credential Source')).toBeVisible();
+
+    // The sidebar nav link resets to the spaces cards
+    await page.getByRole('link', { name: 'My Spaces' }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+
+    // Back into the detail view, then the wallet title resets too
+    await page.locator('[data-space-type="credential"]').first().click();
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    await page.locator('[data-resource-id*="LCWExperience"]')
+      .getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByText('Credential Source')).toBeVisible();
+    await page.getByRole('link', { name: /Digital Credentials Commons/ }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
