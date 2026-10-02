@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
@@ -64,6 +64,7 @@ const FOLDER_ICON = (
 
 export default function FileBrowserPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   // The client signs with the key pair that authenticated at login, against
   // the space URL the login API returned.
   // The space whose collections are open; null shows the spaces card view
@@ -658,6 +659,17 @@ export default function FileBrowserPage() {
   useEffect(() => {
     loadSpaces();
   }, [loadSpaces]);
+
+  // Clicking My Spaces or the wallet title navigates to /files even when this
+  // page is already mounted: that pushes a new history entry (a new location
+  // key) without remounting, so each new key returns the view to the spaces
+  // cards.
+  useEffect(() => {
+    setActiveSpace(null);
+    setSelected(null);
+    setViewing(null);
+    setError('');
+  }, [location.key]);
 
   // Opening a space loads its collections; leaving it clears them
   useEffect(() => {

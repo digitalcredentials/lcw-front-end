@@ -113,14 +113,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <aside className="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col">
-        <div className="px-4 py-5 border-b border-gray-200">
+        {/* The title links home: back to the spaces card view */}
+        <Link
+          to="/files"
+          className="block px-4 py-5 border-b border-gray-200 hover:bg-gray-50 transition-colors"
+        >
           <span className="block text-lg font-semibold text-gray-800 leading-tight">
             Digital Credentials Commons
           </span>
           <span className="block text-sm text-gray-500 leading-tight">
             Learner Credential Wallet
           </span>
-        </div>
+        </Link>
         <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Main">
           <Link to="/files" className={itemClass(pathname === '/files')}>
             My Spaces
