@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
-import '@digitalcredentials/veri-good';
-import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
@@ -10,6 +8,7 @@ import AppShell from '../components/AppShell';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
+import CredentialVerifier from '../components/CredentialVerifier';
 import {
   credentialFrom,
   credentialName,
@@ -31,22 +30,6 @@ interface RowSummary {
   issued: string | null;
   expires: string | null;
 }
-
-// Issuers whose credentials the verifier accepts, keyed by DID
-const ISSUER_DIDS = {
-  'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
-    issuerName: 'DCC Demo University',
-    url: 'https://digitalcredentials.mit.edu/'
-  },
-  'did:key:z6MktL8XGbuYv5f7hwf6hVyJkJWynNtNhcsXFYe9NJzjKHkW': {
-    issuerName: 'Digital Credentials Consortium',
-    url: 'https://digitalcredentials.mit.edu/'
-  },
-  'did:key:z6MkkCNaxehr7RoeDJQP39oQ1yFbmUg29ziXfLwoyeCo1QFf': {
-    issuerName: 'LCW Sandbox Issuer',
-    url: 'https://issuer.lcw-sandbox.org'
-  }
-};
 
 const FILE_ICON = (
   <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -133,20 +116,6 @@ export default function FileBrowserPage() {
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [newCollectionError, setNewCollectionError] = useState('');
 
-  // The verifier is mounted once and reused for every verification. It fires
-  // veri-good-is-ready synchronously on connect, so it accepts calls as soon
-  // as React attaches the ref. The issuer DIDs must go through
-  // setIssuerDids(): the component reads a <template> child's .content
-  // fragment, which React never populates (it renders template children as
-  // ordinary child nodes), so the declarative form silently yields an empty
-  // issuer list.
-  const verifierRef = useRef<VeriGoodElement | null>(null);
-  const handleVerifierRef = useCallback((node: HTMLElement | null) => {
-    verifierRef.current = node as VeriGoodElement | null;
-    if (node) {
-      (node as VeriGoodElement).setIssuerDids(JSON.stringify(ISSUER_DIDS));
-    }
-  }, []);
 
   // Turns a failed request into either a redirect to login or a shown message.
   const handleError = useCallback((err: unknown) => {
@@ -287,7 +256,6 @@ export default function FileBrowserPage() {
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc, mode });
       if (mode === 'detail') {
-        verifierRef.current?.verify(vc);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
@@ -411,17 +379,27 @@ export default function FileBrowserPage() {
     }
   }, [viewing]);
 
-  // The formatted summary shown at the top of the credential detail view
-  const viewingSummary = useMemo(() => {
+  // The viewed resource as a credential, unwrapped from its presentation
+  // envelope, or null when it isn't one. The summary and the verifier both
+  // read this, so they always describe the same credential.
+  const viewingCredential = useMemo((): CredentialLike | null => {
     if (!viewing) {
       return null;
     }
-    let credential: CredentialLike | null = null;
     try {
-      credential = credentialFrom(JSON.parse(viewing.vc));
+      return credentialFrom(JSON.parse(viewing.vc));
     } catch {
       return null;
     }
+  }, [viewing]);
+
+  // What the verifier card checks: only in the detail view
+  const verifying =
+    viewing?.mode === 'detail' ? ((viewingCredential ?? undefined) as Record<string, unknown> | undefined) : undefined;
+
+  // The formatted summary shown at the top of the credential detail view
+  const viewingSummary = useMemo(() => {
+    const credential = viewingCredential;
     if (!credential) {
       return null;
     }
@@ -442,7 +420,7 @@ export default function FileBrowserPage() {
       expires: credentialExpiration(credential),
       description: typeof description === 'string' ? description : null,
     };
-  }, [viewing]);
+  }, [viewingCredential]);
 
   // item.url is a path on the WAS server; the share sheet wants it absolute
   const wasOrigin = (activeSpace?.url ?? getSpaceUrl() ?? '').replace(/\/space\/.*$/, '');
@@ -1073,10 +1051,10 @@ export default function FileBrowserPage() {
         )}
         {/* Credential detail view: header + formatted summary above, source
             and verification side by side, Share/Delete at the bottom. The
-            veri-good element is mounted once and kept in a fixed slot of an
-            always-rendered wrapper (keyed, with a placeholder occupying the
-            sibling slot) because the component misbehaves when remounted; it
-            is hidden with CSS outside detail mode. */}
+            verifier stays mounted in a fixed slot of an always-rendered
+            wrapper (keyed, with a placeholder occupying the sibling slot) and
+            is hidden with CSS outside detail mode, where it is given no
+            credential. */}
         {selected && viewing?.mode === 'detail' && (
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-800">
@@ -1188,7 +1166,12 @@ export default function FileBrowserPage() {
               Credential Verification
             </h2>
             <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <veri-good ref={handleVerifierRef} />
+              {viewing?.mode === 'detail' && !verifying && (
+                <p className="text-sm text-gray-600">
+                  This isn't a single verifiable credential, so there's nothing here to check.
+                </p>
+              )}
+              <CredentialVerifier credential={verifying} />
             </div>
           </section>
         </div>

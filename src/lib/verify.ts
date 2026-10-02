@@ -51,14 +51,20 @@ const REGISTRIES_URL =
   'https://digitalcredentials.github.io/dcc-known-registries/known-did-registries.json';
 let registriesPromise: Promise<object> | null = null;
 
-function knownDIDRegistries(): Promise<object> {
-  registriesPromise ??= fetch(REGISTRIES_URL).then((response) => {
-    if (!response.ok) {
+export function knownDIDRegistries(): Promise<object> {
+  registriesPromise ??= fetch(REGISTRIES_URL)
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`Could not load the known registries (${response.status}).`);
+      }
+      return response.json();
+    })
+    .catch((err) => {
+      // Any failure, the network included, is forgotten so the next call
+      // tries again rather than reusing the rejection for the page's life.
       registriesPromise = null;
-      throw new Error(`Could not load the known registries (${response.status}).`);
-    }
-    return response.json();
-  });
+      throw err;
+    });
   return registriesPromise;
 }
 
