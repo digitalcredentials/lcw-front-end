@@ -6,6 +6,9 @@ export interface LoginResult {
   verified: boolean
   email: string
   controller: string
+  // The registration token, required by the WAS server as the space-creation
+  // coupon
+  token?: string
   space?: string
 }
 
