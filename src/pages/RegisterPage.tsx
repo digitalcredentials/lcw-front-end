@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { register } from '../lib/register';
+import { markWelcomePending } from '../lib/welcome';
 
 export default function RegisterPage() {
   const [email, setEmail] = useState('');
@@ -27,6 +28,8 @@ export default function RegisterPage() {
       // Registration finishes by email: the back end starts the registration
       // flow, which sends a confirmation link.
       setNotice(await register(email, password, registrationCode));
+      // The first signed-in open on this browser offers the welcome credential
+      markWelcomePending(email);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to register. Please try again.');
     } finally {
