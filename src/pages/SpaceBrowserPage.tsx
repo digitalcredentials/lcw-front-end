@@ -1168,26 +1168,28 @@ export default function FileBrowserPage() {
           </div>
         )}
 
-        <div className={viewing?.mode === 'detail' ? 'grid gap-6 items-start lg:grid-cols-2' : ''}>
+        {/* The grid's default stretch plus flex columns make both panels the
+            height of the taller one (the source editor fills its column) */}
+        <div className={viewing?.mode === 'detail' ? 'grid gap-6 lg:grid-cols-2' : ''}>
           {selected && viewing?.mode === 'detail' ? (
-            <section key="source" aria-label="Credential source">
+            <section key="source" aria-label="Credential source" className="flex flex-col">
               <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
                 Credential Source
               </h2>
-              <JSONInput text={viewingSource} readOnly />
+              <JSONInput text={viewingSource} readOnly className="flex-1 min-h-64" />
             </section>
           ) : (
             <span key="source" className="hidden" />
           )}
           <section
             key="verifier"
-            className={selected && viewing?.mode === 'detail' ? '' : 'hidden'}
+            className={selected && viewing?.mode === 'detail' ? 'flex flex-col' : 'hidden'}
             aria-label="Credential verification"
           >
             <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
               Credential Verification
             </h2>
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6">
               <veri-good ref={handleVerifierRef} />
             </div>
           </section>
