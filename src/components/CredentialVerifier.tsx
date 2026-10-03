@@ -43,7 +43,11 @@ export default function CredentialVerifier({ credential }: { credential?: Creden
 
   return (
     <>
-      {credential !== undefined && !ready && <p role="status" className="text-sm text-gray-600">Checking…</p>}
+      {/* Always there, empty until needed: a status region that arrives
+          already holding its text may never be read out */}
+      <p role="status" className="text-sm text-gray-600">
+        {credential !== undefined && !ready ? 'Checking…' : ''}
+      </p>
       {/* Mounted throughout, but hidden until it has a credential: without
           one, its card is an empty bordered box */}
       <verifier-credential

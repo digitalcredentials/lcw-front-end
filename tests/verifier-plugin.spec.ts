@@ -156,10 +156,12 @@ test('the card stays hidden until it has a credential to check', async ({ page }
   const show = (c?: Record<string, unknown>) =>
     page.evaluate(async (c) => (await import('/tests/harness/verifier.tsx')).show(c), c);
 
-  // No credential: no empty card
+  // No credential: no empty card, and an empty status line already in place,
+  // so that "Checking…" is read out when it appears
   await show(undefined);
   await expect(card).toHaveCount(1);
   await expect(card).toBeHidden();
+  await expect(page.getByRole('status')).toHaveText('');
 
   // A credential, but the registry list is still loading: a line says so instead
   await show(credential('verified'));
