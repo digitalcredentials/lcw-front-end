@@ -2,6 +2,7 @@ const TOKEN_KEY = 'lcw_auth_token';
 const SPACE_KEY = 'lcw_space_url';
 const SESSION_KEY_KEY = 'lcw_session_key';
 const EMAIL_KEY = 'lcw_email';
+const COUPON_KEY = 'lcw_coupon';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -16,6 +17,17 @@ export function clearToken(): void {
   localStorage.removeItem(SPACE_KEY);
   localStorage.removeItem(SESSION_KEY_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  localStorage.removeItem(COUPON_KEY);
+}
+
+// The account's registration token, returned by /login. The WAS server
+// requires it as the coupon when creating a space.
+export function getCoupon(): string | null {
+  return localStorage.getItem(COUPON_KEY);
+}
+
+export function setCoupon(coupon: string): void {
+  localStorage.setItem(COUPON_KEY, coupon);
 }
 
 // The logged-in account's email, kept for the zcap-authenticated back-end

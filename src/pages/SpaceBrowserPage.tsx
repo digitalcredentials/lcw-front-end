@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
+import LoadingLabel from '../components/LoadingLabel';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -47,6 +48,7 @@ const FOLDER_ICON = (
 
 export default function FileBrowserPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   // The client signs with the key pair that authenticated at login, against
   // the space URL the login API returned.
   // The space whose collections are open; null shows the spaces card view
@@ -637,6 +639,17 @@ export default function FileBrowserPage() {
     loadSpaces();
   }, [loadSpaces]);
 
+  // Clicking My Spaces or the wallet title navigates to /files even when this
+  // page is already mounted: that pushes a new history entry (a new location
+  // key) without remounting, so each new key returns the view to the spaces
+  // cards.
+  useEffect(() => {
+    setActiveSpace(null);
+    setSelected(null);
+    setViewing(null);
+    setError('');
+  }, [location.key]);
+
   // Opening a space loads its collections; leaving it clears them
   useEffect(() => {
     if (activeSpace) {
@@ -748,7 +761,7 @@ export default function FileBrowserPage() {
                     ? 'text-gray-500 hover:text-gray-700 transition-colors'
                     : 'text-gray-800 font-medium cursor-default'}
                 >
-                  {spaceDetails[activeSpace.url]?.name ?? '…'}
+                  {spaceDetails[activeSpace.url]?.name ?? <LoadingLabel />}
                 </button>
               </>
             )}
@@ -850,8 +863,8 @@ export default function FileBrowserPage() {
 
         {/* States */}
         {loading && (
-          <div className="flex items-center justify-center py-20 text-gray-400 text-sm">
-            Loading…
+          <div className="flex items-center justify-center py-20 text-sm">
+            <LoadingLabel />
           </div>
         )}
 
@@ -895,7 +908,7 @@ export default function FileBrowserPage() {
                       spaces, so neither the name nor the badge leaves the
                       card */}
                   <span className="min-w-0 break-words font-medium text-gray-800">
-                    {spaceDetails[space.url]?.name ?? '…'}
+                    {spaceDetails[space.url]?.name ?? <LoadingLabel />}
                   </span>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${
                     space.type === 'batch' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'
@@ -1146,26 +1159,28 @@ export default function FileBrowserPage() {
           </div>
         )}
 
-        <div className={viewing?.mode === 'detail' ? 'grid gap-6 items-start lg:grid-cols-2' : ''}>
+        {/* The grid's default stretch plus flex columns make both panels the
+            height of the taller one (the source editor fills its column) */}
+        <div className={viewing?.mode === 'detail' ? 'grid gap-6 lg:grid-cols-2' : ''}>
           {selected && viewing?.mode === 'detail' ? (
-            <section key="source" aria-label="Credential source">
+            <section key="source" aria-label="Credential source" className="flex flex-col">
               <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
                 Credential Source
               </h2>
-              <JSONInput text={viewingSource} readOnly />
+              <JSONInput text={viewingSource} readOnly className="flex-1 min-h-64" />
             </section>
           ) : (
             <span key="source" className="hidden" />
           )}
           <section
             key="verifier"
-            className={selected && viewing?.mode === 'detail' ? '' : 'hidden'}
+            className={selected && viewing?.mode === 'detail' ? 'flex flex-col' : 'hidden'}
             aria-label="Credential verification"
           >
             <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
               Credential Verification
             </h2>
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6">
               {viewing?.mode === 'detail' && !verifying && (
                 <p className="text-sm text-gray-600">
                   This isn't a single verifiable credential, so there's nothing here to check.

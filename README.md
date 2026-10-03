@@ -4,9 +4,10 @@ The web front end for the Learner Credential Wallet (LCW): a React + TypeScript
 + Vite app for logging in with a passphrase-derived
 [did:key](https://w3c-ccg.github.io/did-key-spec/), browsing the account's
 [Wallet Attached Storage](https://w3c-ccg.github.io/wallet-attached-storage-spec/)
-space, and adding, viewing, sharing, deleting, verifying, and claiming
-Verifiable Credentials — including claiming over
-[CHAPI](https://chapi.io/) from an external issuer.
+spaces, adding, viewing, sharing, moving, deleting, and verifying Verifiable
+Credentials, claiming and presenting them over [CHAPI](https://chapi.io/), and
+issuing batches of credentials through the embedded
+[batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui) panel.
 
 ## How it works
 
@@ -14,28 +15,40 @@ Verifiable Credentials — including claiming over
   the Ed25519 key, so the same password always derives the same `did:key`. The
   page signs a [zCap capability invocation](https://github.com/interop-alliance/http-signature-zcap-verify)
   of the lcw-back-end's `POST /login`, which verifies it against the DID
-  registered for the email and returns the account's space URL. The key pair,
-  controller DID, and space URL are kept in `localStorage` for the session
-  (cleared on sign-out).
-- **Space browser** (`src/pages/SpaceBrowserPage.tsx`): lists the space's
-  collections and resources through
+  registered for the email and returns the account's registration token (the
+  WAS server's space-creation coupon) and its spaces. The key pair, controller
+  DID, email, coupon, and credential-space URL are kept in `localStorage` for
+  the session (cleared on sign-out). On the first open after registering, the
+  wallet offers to issue a **welcome credential** (the test issuer's LCW
+  Sandbox Badge) and, in the same flow, to enable the browser wallet
+  (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
+- **My Spaces** (`src/pages/SpaceBrowserPage.tsx`, `src/lib/spaces.ts`): the
+  account's spaces as cards, with names and descriptions read from each
+  space's WAS description document. **New Space** provisions a space through
+  the WAS server's spec-shaped `POST /spaces` (controller DID + coupon);
+  renaming and describing a space edits its description document; a `batch`
+  space's card asks whether to open the batch view or the standard space view.
+- **Space browser**: a space's collections and resources through
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
-  signing every request with the login key. Each credential row offers
-  **Open** and **Move**. Opening a credential shows its summary, its source,
-  and the [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
-  card that checks it (`src/components/CredentialVerifier.tsx`), with
-  **Share**, **Move** and **Delete** (soft delete into the space's `Trash`
-  collection). Rows in `Trash` and `dids` offer **View Source** (read-only
-  JSON editor) and **Delete** instead, and `Trash` also offers **Restore**.
-- **Sharing** (`src/components/ShareCredentialModal.tsx`): **Create Public
-  Link** marks just that credential world-readable (`resource.setPublic()`;
-  its collection and siblings stay private) and shows two links — the raw
-  credential URL and a [VerifierPlus](https://verifierplus.org) link that
-  renders it verified. **Unshare** (with a confirmation warning) clears the
-  policy. **QR code** renders either link as a scannable code; a private
-  credential is made public only while the QR is showing and reverts when it's
-  hidden or the dialog closes. The device share sheet appears where the Web
-  Share API exists; LinkedIn is still a stub.
+  signing every request with the login key. Collections and credentials are
+  cards; opening a credential shows a formatted summary with its source and a
+  live verification (the
+  [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
+  card, `src/components/CredentialVerifier.tsx`) side by side, plus
+  **Share**, **Move** (between collections), and **Delete** (soft delete into
+  the space's `Trash` collection, from which **Restore** moves it back out).
+- **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
+  the credential is verified with
+  [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)
+  and problems are shown as warnings (sharing is never blocked). **Create
+  Public Link** marks just that credential world-readable
+  (`resource.setPublic()`; its collection and siblings stay private) and shows
+  the raw credential URL and a [VerifierPlus](https://verifierplus.org) link.
+  **Unshare** clears the policy. **QR code** renders either link; a private
+  credential is public only while the QR shows. **Add to LinkedIn**
+  (`src/lib/linkedin.ts`) opens LinkedIn's add-to-profile form prefilled from
+  the credential. The device share sheet appears where the Web Share API
+  exists.
 - **Add Credential** (`src/components/UploadCredentialModal.tsx`): paste JSON,
   pick or drag a file, scan a QR code with the camera, or drop a QR image. A
   QR may carry the credential JSON itself, a URL that serves it, or a CBOR-LD
@@ -45,18 +58,25 @@ Verifiable Credentials — including claiming over
   a [vanilla-jsoneditor](https://github.com/josdejong/svelte-jsoneditor)
   wrapper (`src/components/JSONInput.tsx`) checks and highlights JSON errors
   as you type.
-- **Claiming over CHAPI** (`src/chapi/`, `src/lib/claim.ts`,
-  `src/lib/chapi.ts`): the header's **Enable browser wallet** button registers
-  the wallet with the [authn.io](https://authn.io) mediator (the button
-  reflects the real permission state and offers to disable). When an issuer
-  page requests a credential exchange, the mediator opens `chapi.html` (a
-  second Vite entry rendering `src/chapi/ChapiPage.tsx`), which runs the
+- **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
+  `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
+  wallet with the [authn.io](https://authn.io) mediator (a once-per-session
+  prompt also offers it when the wallet opens unregistered). When an issuer
+  page offers a credential, the mediator opens `chapi.html` (a second Vite
+  entry rendering `src/chapi/ChapiPage.tsx`), which runs the
   [VC API exchange](https://www.w3.org/TR/vcalm-1.0/#workflows-and-exchanges):
-  it generates a fresh `did:key`, stores it (with its secret) in the space's
-  `dids` collection, signs the DIDAuth presentation over the issuer's
-  challenge and domain, and saves the issued credential to a collection the
-  user picks. The companion issuer lives in
+  a fresh `did:key` (stored in the space's `dids` collection) signs the
+  DIDAuth presentation, and the issued credential is saved to a collection the
+  user picks (including a new one created on the spot). An incoming
+  **verifiable presentation request** from a verifier site shows what is being
+  asked for, lets the user pick credentials, verifies them first (warn-only),
+  and answers with a signed presentation. The companion issuer lives in
   [aws-lambda-issuer](https://github.com/digitalcredentials/aws-lambda-issuer).
+- **Credential Issuer** (`src/pages/BatchIssuerPage.tsx`): mounts the
+  [batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui)
+  panel with an adapter built from the wallet's own session — the WAS client,
+  the spaces API, the issuer's `POST /notify`, and per-credential revocation
+  against the [status list service](https://github.com/digitalcredentials/status-list-lambda).
 
 Gotchas documented in the code and worth knowing: the verifier checks issuers
 against the DCC known-registries list, the same one the pre-share check uses
@@ -88,12 +108,16 @@ npm install
 npm run dev
 ```
 
-`.env` points the app at the local back end. The full local stack is:
+`.env` points the app at the local back end; `.env.production` carries the
+deployed URLs (`VITE_API_BASE_URL` for lcw-back-end, `VITE_WAS_BASE_URL` for
+the WAS server's `/spaces`, `VITE_TEMPLATES_API_BASE`, `VITE_ISSUER_API_BASE`,
+and `VITE_STATUS_API_BASE` for the status list service). The full local stack
+is:
 
 - **lcw-back-end** `sam local start-api --port 3001 ...` — the login API
-- **was-server-aws** `sam local start-api` (port 3000) — the space
-- a demo account registered in the `wallet-test` DynamoDB table whose
-  `spaceURL` points at `http://localhost:3000`
+- **was-server-aws** `sam local start-api` (port 3000) — the spaces
+- a demo account registered in the `wallet-test` DynamoDB table with a space
+  registered under `http://localhost:3000` in `wallet-spaces`
 
 ## Tests
 
@@ -133,9 +157,11 @@ mediator.
 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 ```
 
-Opt-in smoke tests against a deployed instance (login as the deployed demo
-account, list the space, verify a credential), with console errors and failed
-requests captured for debugging. Skipped unless `DEPLOYED_URL` is set.
+Opt-in smoke tests against a deployed instance: login and the space
+collections, opening and verifying a credential, the batch issuer screen,
+sharing to LinkedIn, the My Spaces and title navigation resets, and the
+welcome-credential dialog — with console errors and failed requests captured
+for debugging. Skipped unless `DEPLOYED_URL` is set.
 
 ## Deploy
 

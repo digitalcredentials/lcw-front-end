@@ -144,3 +144,69 @@ test('shares a credential to LinkedIn', async ({ page }) => {
     }
   }
 });
+
+test('My Spaces and the title link back to the spaces view', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    // Deep into a credential's detail view
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    await page.locator('[data-resource-id*="LCWExperience"]')
+      .getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByText('Credential Source')).toBeVisible();
+
+    // The sidebar nav link resets to the spaces cards
+    await page.getByRole('link', { name: 'My Spaces' }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+
+    // Back into the detail view, then the wallet title resets too
+    await page.locator('[data-space-type="credential"]').first().click();
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    await page.locator('[data-resource-id*="LCWExperience"]')
+      .getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByText('Credential Source')).toBeVisible();
+    await page.getByRole('link', { name: /Digital Credentials Commons/ }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
+
+test('offers the welcome credential on first open after registration', async ({ page }) => {
+  const noise = capture(page);
+  // Simulate this browser having just registered the demo account
+  await page.addInitScript((email) => {
+    sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
+    localStorage.setItem('lcw_welcome_pending', email);
+  }, DEMO_EMAIL);
+  await page.goto(`${DEPLOYED_URL}/`);
+  await page.getByLabel('Email').fill(DEMO_EMAIL);
+  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  try {
+    // The offer, with the name that goes on the credential
+    const dialog = page.getByRole('dialog', { name: 'Welcome Credential' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel('Name').fill('Deployed Test');
+    await dialog.getByRole('button', { name: 'Issue my credential' }).click();
+
+    // The CHAPI step explains receiving credentials from other issuers.
+    // Stop here: going further would send a real email.
+    await expect(dialog.getByText(/credentials from other issuers/)).toBeVisible();
+
+    // The offer is still pending after a reload (nothing sent, nothing cleared)
+    await page.reload();
+    await expect(page.getByRole('dialog', { name: 'Welcome Credential' })).toBeVisible();
+
+    // Declining clears it and the wallet is usable
+    await page.getByRole('button', { name: 'No thanks' }).click();
+    await expect(page.getByRole('dialog', { name: 'Welcome Credential' })).toBeHidden();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});

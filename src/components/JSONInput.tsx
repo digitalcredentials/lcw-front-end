@@ -5,11 +5,15 @@ interface JSONInputProps {
   text: string;
   onChange?: (text: string) => void;
   readOnly?: boolean;
+  // Sizing for the editor's container; the default fixed height suits the
+  // modal and form uses, while the credential detail view stretches it to
+  // match the panel beside it.
+  className?: string;
 }
 
 // A JSON text editor with dynamic error checking and highlighting, after
 // exchange-ui's JSONInput: vanilla-jsoneditor in text mode, wrapped for React.
-export default function JSONInput({ text, onChange, readOnly = false }: JSONInputProps) {
+export default function JSONInput({ text, onChange, readOnly = false, className = 'h-64' }: JSONInputProps) {
   const refContainer = useRef<HTMLDivElement>(null);
   const refEditor = useRef<JsonEditor | null>(null);
   // Tracks the editor's own text so external updates (a staged file) can be
@@ -52,5 +56,5 @@ export default function JSONInput({ text, onChange, readOnly = false }: JSONInpu
     }
   }, [text]);
 
-  return <div ref={refContainer} className="h-64 overflow-hidden rounded-lg border border-gray-300" />;
+  return <div ref={refContainer} className={`${className} overflow-hidden rounded-lg border border-gray-300`} />;
 }
