@@ -77,8 +77,9 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     await page.locator('[data-resource-id*="LCWExperience"]')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
-    await expect(page.getByText('Signature is valid.')).toBeVisible();
-    await expect(page.getByText('Has not been revoked')).toBeVisible();
+    // verifier-plugin's card, in the verification panel
+    await expect(page.locator('section[aria-label="Credential verification"] verifier-credential'))
+      .toContainText('Verified', { timeout: 45_000 });
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

@@ -94,42 +94,7 @@ test('creates a new collection', async ({ page }) => {
   );
 });
 
-test('verifies a credential and highlights its row', async ({ page }) => {
-  await logIn(page);
-  await openUniversityCollection(page);
-
-  const row = page.getByRole('row').filter({ hasText: 'LCWExperience' });
-  await row.getByRole('button', { name: 'Verify' }).click();
-
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
-  await expect(page.getByText('Has not been revoked')).toBeVisible();
-  // the credential's own name renders in the verifier
-  await expect(page.getByText('LCW Experience Badge').first()).toBeVisible();
-  await expect(row).toHaveClass(/bg-indigo-50/);
-});
-
-test('shows the verifier only after a credential is selected', async ({ page }) => {
-  await logIn(page);
-  const verifier = page.locator('section[aria-label="Credential verification"]');
-
-  // not on the collections page…
-  await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
-  await expect(verifier).toBeHidden();
-
-  // …not on the collection page before a click…
-  await openUniversityCollection(page);
-  await expect(page.getByRole('row').filter({ hasText: 'LCWExperience' })).toBeVisible();
-  await expect(verifier).toBeHidden();
-
-  // …only once a credential is selected for verification
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Verify' }).click();
-  await expect(verifier).toBeVisible();
-
-  // and it hides again on leaving the collection
-  await page.getByRole('button', { name: 'Collections' }).click();
-  await expect(verifier).toBeHidden();
-});
+// The verifier's tests are in verifier-plugin.e2e.spec.ts.
 
 const FIXTURE_PATH = new URL('./fixtures/PlaywrightUpload.json', import.meta.url).pathname;
 

@@ -32,10 +32,11 @@ issuing batches of credentials through the embedded
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
   signing every request with the login key. Collections and credentials are
   cards; opening a credential shows a formatted summary with its source and a
-  live verification (the [veri-good](https://github.com/digitalcredentials/veri-good)
-  web component) side by side, plus **Share**, **Move** (between
-  collections), and **Delete** (soft delete into the space's `Trash`
-  collection, from which **Restore** moves it back out).
+  live verification (the
+  [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
+  card, `src/components/CredentialVerifier.tsx`) side by side, plus
+  **Share**, **Move** (between collections), and **Delete** (soft delete into
+  the space's `Trash` collection, from which **Restore** moves it back out).
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
   [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)
@@ -77,16 +78,30 @@ issuing batches of credentials through the embedded
   the spaces API, the issuer's `POST /notify`, and per-credential revocation
   against the [status list service](https://github.com/digitalcredentials/status-list-lambda).
 
-Gotchas documented in the code and worth knowing: veri-good's issuer list must
-be set via `setIssuerDids()` (React never populates a `<template>` child's
-`.content`); the `<veri-good>` element is mounted once and hidden with CSS,
-never remounted; CHAPI calls go through `navigator.credentialsPolyfill` rather
-than `navigator.credentials`, which password managers like 1Password can lock;
-and the handler page uses `WebCredentialHandler.activateHandler({get})` — not
+Gotchas documented in the code and worth knowing: the verifier checks issuers
+against the DCC known-registries list, the same one the pre-share check uses
+(`src/lib/verify.ts`), and waits up to 10 seconds for it before checking; CHAPI
+calls go through `navigator.credentialsPolyfill` rather than
+`navigator.credentials`, which password managers like 1Password can lock; and
+the handler page uses `WebCredentialHandler.activateHandler({get})` — not
 `receiveCredentialEvent()`, which only serves the redirect pattern and times
 out under the normal mediator flow.
 
 ## Local development
+
+Two packages are linked from sibling checkouts rather than npm, and this repo
+uses their built `dist/`, so first clone and build both next to this one:
+
+```bash
+git clone https://github.com/digitalcredentials/batch-issuer-ui.git
+(cd batch-issuer-ui && npm ci && npm run build)
+git clone https://github.com/digitalcredentials/verifier-plugin.git
+# verifier-plugin installs verifier-core from a git commit whose prepare
+# script needs pnpm; corepack provides it
+(cd verifier-plugin && corepack enable && npm ci && npm run build)
+```
+
+Then:
 
 ```bash
 npm install
@@ -113,13 +128,22 @@ npm run test:e2e
 End-to-end Playwright tests against the local stack (see the prerequisites at
 the top of `tests/e2e.spec.ts`): login, browsing, adding credentials (file,
 paste, drag, and QR images carrying JSON, a URL, or a CBOR-LD `VP1-`
-payload), verification, source view, public links with the VerifierPlus
+payload), source view, public links with the VerifierPlus
 companion link, the unshare confirmation round trip, QR sharing with
 temporary public access, and the delete round trip into `Trash`. The Vite
 dev server is started or reused automatically. Note: if the share test fails
 mid-flow it can leave the demo credential public, which cascades into later
 runs — clear `policies/UniversityOfToronto/LCWExperience.json.json` from the
 demo space bucket to reset.
+
+```bash
+npx playwright test tests/verifier-plugin.spec.ts
+```
+
+The verifier card as the wallet uses it, in a real browser, with no back end
+or network: the registry list, registry and schema are answered from
+`tests/fixtures/verifier`. `tests/verifier-plugin.e2e.spec.ts` covers it in
+the detail view against the local stack, like `tests/e2e.spec.ts`.
 
 ```bash
 npm run test:claim

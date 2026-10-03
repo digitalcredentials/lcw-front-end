@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@digitalcredentials/batch-issuer-ui": "file:../batch-issuer-ui",
-    "@digitalcredentials/veri-good": "^0.0.0-beta.7",
     "@digitalcredentials/verifier-core": "^1.0.0-beta.10",
+    "@digitalcredentials/verifier-plugin": "file:../verifier-plugin",
     "@digitalcredentials/vpqr": "^2.2.1",
     "@interop/did-method-key": "^7.3.5",
     "@interop/ed25519-signature": "^7.2.1",
