@@ -174,7 +174,8 @@ test('the card stays hidden until it has a credential to check', async ({ page }
   await show(undefined);
   await expect(card).toHaveCount(1);
   await expect(card).toBeHidden();
-  await expect(page.getByRole('status')).toHaveText('');
+  // The wallet's own line, not the card's live region inside its shadow root
+  await expect(page.locator('#verifier-harness > p[role="status"]')).toHaveText('');
 
   // A credential, but the registry list is still loading: a line says so instead
   await show(credential('verified'));
