@@ -15,8 +15,6 @@ const credential = (name: string) => JSON.parse(readFileSync(fixture(`${name}.js
 
 const REGISTRY_LIST = 'https://digitalcredentials.github.io/dcc-known-registries/known-did-registries.json';
 const REGISTRY = 'https://registry.example.test/registry.json';
-// verifier-plugin's own default, which the card falls back to without the list.
-const DEFAULT_REGISTRY = 'https://digitalcredentials.github.io/sandbox-registry/registry.json';
 const SCHEMA = 'https://purl.imsglobal.org/spec/ob/v3p0/schema/json/ob_v3p0_achievementcredential_schema.json';
 
 const outside: string[] = [];
@@ -38,7 +36,10 @@ async function serveFixtures(page: Page, registryList: 'ok' | 'down' | 'down-onc
         const down = registryList === 'down' || (registryList === 'down-once' && listRequests === 1);
         return down ? route.fulfill({ status: 503 }) : json('known-did-registries.json');
       }
-      if (url === REGISTRY || url === DEFAULT_REGISTRY) return json('registry.json');
+      // Only the registry the list names. verifier-plugin's own default
+      // registry is never answered: the wallet never lets the card fall back to
+      // it, so a request for it is an outside request and fails the test.
+      if (url === REGISTRY) return json('registry.json');
       if (url === SCHEMA) return json('ob_v3p0_achievementcredential_schema.json');
       outside.push(url);
       return route.abort('blockedbyclient');
@@ -56,9 +57,12 @@ async function verify(page: Page, credential?: Record<string, unknown>) {
       document.addEventListener(
         'verification-complete',
         (e) => {
-          const results = (e as CustomEvent).detail.response.results as { id?: string; outcome: { status: string; message?: string } }[];
+          const results = (e as CustomEvent).detail.response.results as {
+            id?: string;
+            outcome: { status: string; message?: string; reason?: string };
+          }[];
           const check = results.find((r) => r.id === 'trust.registry.issuer')?.outcome;
-          registry = check ? `${check.status}: ${check.message ?? ''}` : 'absent';
+          registry = check ? `${check.status}: ${check.message ?? check.reason ?? ''}` : 'absent';
           resolve();
         },
         { once: true }
@@ -79,6 +83,7 @@ async function verify(page: Page, credential?: Record<string, unknown>) {
       registry,
       severity: glyph ? [...glyph.classList].find((c) => c.startsWith('s-'))?.slice(2) : undefined,
       headline: root?.querySelector('.headline')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      detail: root?.querySelector('.detail')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       text: root?.querySelector('.card')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
     };
   }, credential);
@@ -116,15 +121,22 @@ test('it checks once, after the registry list has loaded', async ({ page }) => {
   expect(card.started).toBe(1);
 });
 
-test('if the registry list will not load, it still checks the credential', async ({ page }) => {
+// What the card reports when it is told the list is unavailable: no lookup at
+// all, rather than one in verifier-plugin's own default registry.
+const NOT_LOOKED_UP = 'skipped: No registries configured in verification context.';
+
+test("if the registry list will not load, it still checks the credential, and says the list didn't load", async ({ page }) => {
   await page.unrouteAll();
   await serveFixtures(page, 'down');
   await page.goto('/');
   const card = await verify(page, credential('verified'));
   expect(card.started).toBe(1);
-  // Found through verifier-plugin's own default registry instead.
-  expect(card.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
-  expect(card.severity).toBe('success');
+  expect(card.registry).toBe(NOT_LOOKED_UP);
+  expect(card.severity).toBe('unchecked');
+  expect(card.headline).toContain("We couldn't confirm who issued this");
+  expect(card.detail).toContain("Our list of known issuers didn't load.");
+  // Not "not on our list": the issuer is on it, the list just didn't arrive
+  expect(card.text).not.toContain('not on our list');
 });
 
 test('if the registry list never answers, it checks without it after 10 seconds', async ({ page }) => {
@@ -133,7 +145,8 @@ test('if the registry list never answers, it checks without it after 10 seconds'
   await page.goto('/');
   const card = await verify(page, credential('verified'));
   expect(card.started).toBe(1);
-  expect(card.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
+  expect(card.registry).toBe(NOT_LOOKED_UP);
+  expect(card.detail).toContain("Our list of known issuers didn't load.");
 });
 
 test('after the registry list fails, the next credential asks for it again', async ({ page }) => {
@@ -141,7 +154,7 @@ test('after the registry list fails, the next credential asks for it again', asy
   await serveFixtures(page, 'down-once');
   await page.goto('/');
   const first = await verify(page, credential('verified'));
-  expect(first.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
+  expect(first.registry).toBe(NOT_LOOKED_UP);
   // A new credential, so the list is asked for again, and this time it loads
   const second = await verify(page, credential('verified'));
   expect(second.started).toBe(1);

@@ -17,7 +17,9 @@ type Registries =
 // result. Issuers are looked up in the DCC known-registries list, the same list
 // the pre-share check uses. The credential is held back until
 // that list has loaded (or failed to), so it is checked once, not twice. If the
-// list can't be loaded, the card falls back to its own default registry.
+// list can't be loaded, the card is told so and says our list of known issuers
+// didn't load. Left to its own default registry instead, it would call an
+// issuer on our list "not on our list of known issuers".
 export default function CredentialVerifier({ credential }: { credential?: Credential }) {
   const [registries, setRegistries] = useState<Registries>({ state: 'loading' });
   const loaded = registries.state === 'loaded';
@@ -52,6 +54,7 @@ export default function CredentialVerifier({ credential }: { credential?: Creden
           one, its card is an empty bordered box */}
       <verifier-credential
         registries={loaded ? registries.list : undefined}
+        registriesUnavailable={registries.state === 'failed'}
         credential={checking ? credential : undefined}
         style={checking ? undefined : { display: 'none' }}
       />
