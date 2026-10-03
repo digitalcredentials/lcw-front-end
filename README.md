@@ -20,11 +20,13 @@ Verifiable Credentials — including claiming over
 - **Space browser** (`src/pages/SpaceBrowserPage.tsx`): lists the space's
   collections and resources through
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
-  signing every request with the login key. Opening a credential shows its
-  summary, its source, and the
-  [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
-  card that checks it (`src/components/CredentialVerifier.tsx`). Elsewhere it offers **View Source** (read-only JSON editor),
-  **Share**, and **Delete** (soft delete into the space's `Trash` collection).
+  signing every request with the login key. Each credential row offers
+  **Open** and **Move**. Opening a credential shows its summary, its source,
+  and the [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
+  card that checks it (`src/components/CredentialVerifier.tsx`), with
+  **Share**, **Move** and **Delete** (soft delete into the space's `Trash`
+  collection). Rows in `Trash` and `dids` offer **View Source** (read-only
+  JSON editor) and **Delete** instead, and `Trash` also offers **Restore**.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): **Create Public
   Link** marks just that credential world-readable (`resource.setPublic()`;
   its collection and siblings stay private) and shows two links — the raw
@@ -58,9 +60,10 @@ Verifiable Credentials — including claiming over
 
 Gotchas documented in the code and worth knowing: the verifier checks issuers
 against the DCC known-registries list, the same one the pre-share check uses
-(`src/lib/verify.ts`), and waits for it before checking; CHAPI calls go through `navigator.credentialsPolyfill` rather
-than `navigator.credentials`, which password managers like 1Password can lock;
-and the handler page uses `WebCredentialHandler.activateHandler({get})` — not
+(`src/lib/verify.ts`), and waits up to 10 seconds for it before checking; CHAPI
+calls go through `navigator.credentialsPolyfill` rather than
+`navigator.credentials`, which password managers like 1Password can lock; and
+the handler page uses `WebCredentialHandler.activateHandler({get})` — not
 `receiveCredentialEvent()`, which only serves the redirect pattern and times
 out under the normal mediator flow.
 

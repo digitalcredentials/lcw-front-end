@@ -61,6 +61,8 @@ test('verifier-plugin checks a credential opened from a collection', async ({ pa
   await page.locator('[data-resource-id*="LCWExperience"]').getByRole('button', { name: 'Open', exact: true }).click();
 
   const card = await cardOnceChecked(page);
+  // The card itself, not only the section around it
+  await expect(page.locator('verifier-credential')).toBeVisible();
   expect(card.text).toContain('LCW Experience Badge');
   expect(card.text).toContain('Verified');
   expect(card.checks).toBe(1);

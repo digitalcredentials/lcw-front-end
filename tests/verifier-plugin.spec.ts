@@ -21,8 +21,11 @@ const SCHEMA = 'https://purl.imsglobal.org/spec/ob/v3p0/schema/json/ob_v3p0_achi
 
 const outside: string[] = [];
 
-async function serveFixtures(page: Page, registryList: 'ok' | 'down' = 'ok') {
+// 'down-once' fails the first request for the registry list and answers the
+// rest; 'hang' never answers it.
+async function serveFixtures(page: Page, registryList: 'ok' | 'down' | 'down-once' | 'hang' = 'ok') {
   outside.length = 0;
+  let listRequests = 0;
   await page.route(
     (url) => url.hostname !== 'localhost',
     (route) => {
@@ -30,7 +33,10 @@ async function serveFixtures(page: Page, registryList: 'ok' | 'down' = 'ok') {
       const json = (name: string) =>
         route.fulfill({ path: fixture(name), contentType: 'application/json', headers: { 'access-control-allow-origin': '*' } });
       if (url === REGISTRY_LIST) {
-        return registryList === 'ok' ? json('known-did-registries.json') : route.fulfill({ status: 503 });
+        listRequests++;
+        if (registryList === 'hang') return;
+        const down = registryList === 'down' || (registryList === 'down-once' && listRequests === 1);
+        return down ? route.fulfill({ status: 503 }) : json('known-did-registries.json');
       }
       if (url === REGISTRY || url === DEFAULT_REGISTRY) return json('registry.json');
       if (url === SCHEMA) return json('ob_v3p0_achievementcredential_schema.json');
@@ -93,12 +99,15 @@ test('a genuine credential from a listed issuer is verified', async ({ page }) =
   expect(card.registry).toBe('success: Issuer found in registry: Test Registry');
   expect(card.severity).toBe('success');
   expect(card.headline).toContain('Verified');
+  await expect(page.locator('verifier-credential')).toBeVisible();
 });
 
 test('a tampered credential is an error', async ({ page }) => {
   await page.goto('/');
   const card = await verify(page, credential('tampered'));
+  expect(card.started).toBe(1);
   expect(card.severity).toBe('error');
+  expect(card.headline).toContain('tampered');
 });
 
 test('it checks once, after the registry list has loaded', async ({ page }) => {
@@ -116,4 +125,44 @@ test('if the registry list will not load, it still checks the credential', async
   // Found through verifier-plugin's own default registry instead.
   expect(card.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
   expect(card.severity).toBe('success');
+});
+
+test('if the registry list never answers, it checks without it after 10 seconds', async ({ page }) => {
+  await page.unrouteAll();
+  await serveFixtures(page, 'hang');
+  await page.goto('/');
+  const card = await verify(page, credential('verified'));
+  expect(card.started).toBe(1);
+  expect(card.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
+});
+
+test('after the registry list fails, the next credential asks for it again', async ({ page }) => {
+  await page.unrouteAll();
+  await serveFixtures(page, 'down-once');
+  await page.goto('/');
+  const first = await verify(page, credential('verified'));
+  expect(first.registry).toBe('success: Issuer found in registry: DCC Sandbox Registry');
+  // A new credential, so the list is asked for again, and this time it loads
+  const second = await verify(page, credential('verified'));
+  expect(second.started).toBe(1);
+  expect(second.registry).toBe('success: Issuer found in registry: Test Registry');
+});
+
+test('the card stays hidden until it has a credential to check', async ({ page }) => {
+  await page.unrouteAll();
+  await serveFixtures(page, 'hang');
+  await page.goto('/');
+  const card = page.locator('verifier-credential');
+  const show = (c?: Record<string, unknown>) =>
+    page.evaluate(async (c) => (await import('/tests/harness/verifier.tsx')).show(c), c);
+
+  // No credential: no empty card
+  await show(undefined);
+  await expect(card).toHaveCount(1);
+  await expect(card).toBeHidden();
+
+  // A credential, but the registry list is still loading: a line says so instead
+  await show(credential('verified'));
+  await expect(page.getByText('Checking…')).toBeVisible();
+  await expect(card).toBeHidden();
 });

@@ -45,14 +45,18 @@ export function interpretVerification(result: CoreVerificationResult): ShareVeri
   };
 }
 
-// The DCC-maintained list of known issuer registries, fetched once per page
-// load (VerifierPlus fetches the same URL).
+// The DCC-maintained list of known issuer registries, fetched once and kept
+// for the page's life once it loads (VerifierPlus fetches the same URL).
 const REGISTRIES_URL =
   'https://digitalcredentials.github.io/dcc-known-registries/known-did-registries.json';
+// GitHub Pages normally answers in well under a second. Without a limit, a
+// request that stalls rather than fails would hold up the verifier card, which
+// waits for this list, and the pre-share check, for as long as it stalls.
+const REGISTRIES_TIMEOUT_MS = 10_000;
 let registriesPromise: Promise<object> | null = null;
 
 export function knownDIDRegistries(): Promise<object> {
-  registriesPromise ??= fetch(REGISTRIES_URL)
+  registriesPromise ??= fetch(REGISTRIES_URL, { signal: AbortSignal.timeout(REGISTRIES_TIMEOUT_MS) })
     .then((response) => {
       if (!response.ok) {
         throw new Error(`Could not load the known registries (${response.status}).`);
@@ -60,8 +64,9 @@ export function knownDIDRegistries(): Promise<object> {
       return response.json();
     })
     .catch((err) => {
-      // Any failure, the network included, is forgotten so the next call
-      // tries again rather than reusing the rejection for the page's life.
+      // Any failure, the network and the time limit included, is forgotten so
+      // the next call tries again rather than reusing the rejection for the
+      // page's life.
       registriesPromise = null;
       throw err;
     });
