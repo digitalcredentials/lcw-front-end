@@ -60,26 +60,29 @@ export async function sessionEncryption(storedKeyPair: StoredKeyPair) {
 // an existing one that predates the descriptor is re-declared once with
 // configure. Safe to call repeatedly: an existing descriptor is left alone,
 // and ensureFirstEpoch adopts a roster another provisioner already installed.
+// The display name (and optional description) of a newly created collection
+// goes into the encrypted /meta custom — never the plaintext Description.
 export async function ensureEncryptedCollection({
   space,
   id,
   storedKeyPair,
   name,
+  description,
 }: {
   space: Space
   id: string
   storedKeyPair: StoredKeyPair
   name: string
+  description?: string
 }): Promise<void> {
   const collection = space.collection(id)
   const described = (await collection.describe().catch(() => null)) as
     | { encryption?: unknown }
     | null
   if (!described) {
-    await space.createCollection({ id, name, encryption: { scheme: 'edv' } })
+    await space.createCollection({ id, encryption: { scheme: 'edv' } })
   } else if (!described.encryption) {
     await collection.configure({
-      name,
       encryption: { scheme: 'edv' },
       force: true,
     } as Parameters<typeof collection.configure>[0])
@@ -90,6 +93,28 @@ export async function ensureEncryptedCollection({
     recipients: [ownerRecipient({ keyAgreementKey })],
   })
   encryptedState.set(`${collection.spaceId}/${collection.id}`, true)
+  if (!described && name) {
+    await collection.setMeta({
+      custom: { name, ...(description && { tags: { description } }) },
+    })
+  }
+}
+
+// The display fields of an encrypted collection, from its /meta custom
+// ({name, tags.description}); null when it has none or cannot be read.
+export async function encryptedCollectionDisplay(
+  collection: Collection
+): Promise<{ name?: string; description?: string } | null> {
+  const meta = (await collection.meta().catch(() => null)) as {
+    custom?: { name?: string; tags?: Record<string, string> }
+  } | null
+  if (!meta?.custom) {
+    return null
+  }
+  return {
+    ...(meta.custom.name && { name: meta.custom.name }),
+    ...(meta.custom.tags?.description && { description: meta.custom.tags.description }),
+  }
 }
 
 // Whether a collection's description declares client-side encryption, memoized
