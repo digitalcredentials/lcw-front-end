@@ -2,6 +2,7 @@ import { WasClient } from '@interop/was-client'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { deriveKeyPair } from './login'
 import { getSessionKey, getSpaceUrl } from './auth'
+import { sessionEncryption } from './edv'
 
 
 export const getWASClient = async (seed: string, serverUrl: string): Promise<WasClient> => {
@@ -37,7 +38,10 @@ export async function getSessionWASClient(): Promise<{ client: WasClient; spaceI
   const keyPair = await Ed25519VerificationKey.from(storedKeyPair)
   const client = await WasClient.fromSigner({
     serverUrl: parsed.serverUrl,
-    signer: keyPair.signer()
+    signer: keyPair.signer(),
+    // Pass-through EDV: collections whose description declares the edv
+    // scheme encrypt on write and decrypt on read with the session key
+    encryption: await sessionEncryption(storedKeyPair)
   })
   return { client, spaceId: parsed.spaceId }
 }
@@ -56,7 +60,8 @@ export async function getSessionWASClientFor(
   const keyPair = await Ed25519VerificationKey.from(storedKeyPair)
   const client = await WasClient.fromSigner({
     serverUrl: parsed.serverUrl,
-    signer: keyPair.signer()
+    signer: keyPair.signer(),
+    encryption: await sessionEncryption(storedKeyPair)
   })
   return { client, spaceId: parsed.spaceId }
 }
