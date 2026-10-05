@@ -1,7 +1,7 @@
 import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { createEdvEncryption, ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
-import type { Collection } from '@interop/was-client'
+import type { Space } from '@interop/was-client'
 
 // EDV-over-WAS (end-to-end encryption) support: collections declared with an
 // `encryption: { scheme: 'edv' }` descriptor store JWE envelopes the server
@@ -55,27 +55,34 @@ export async function sessionEncryption(storedKeyPair: StoredKeyPair) {
 }
 
 // Declares a collection encrypted (set-once) and installs its first key
-// epoch, wrapped to the session key. Safe to call repeatedly: an existing
-// descriptor is left alone, and ensureFirstEpoch adopts a roster another
-// provisioner already installed.
+// epoch, wrapped to the session key. A missing collection is created through
+// the server's create-collection route (the was-client's recommended path);
+// an existing one that predates the descriptor is re-declared once with
+// configure. Safe to call repeatedly: an existing descriptor is left alone,
+// and ensureFirstEpoch adopts a roster another provisioner already installed.
 export async function ensureEncryptedCollection({
-  collection,
+  space,
+  id,
   storedKeyPair,
   name,
 }: {
-  collection: Collection
+  space: Space
+  id: string
   storedKeyPair: StoredKeyPair
   name: string
 }): Promise<void> {
+  const collection = space.collection(id)
   const described = (await collection.describe().catch(() => null)) as
     | { encryption?: unknown }
     | null
-  if (!described?.encryption) {
+  if (!described) {
+    await space.createCollection({ id, name, encryption: { scheme: 'edv' } })
+  } else if (!described.encryption) {
     await collection.configure({
       name,
       encryption: { scheme: 'edv' },
       force: true,
-    } as Parameters<Collection['configure']>[0])
+    } as Parameters<typeof collection.configure>[0])
   }
   const keyAgreementKey = await keyAgreementFromSession(storedKeyPair)
   await ensureFirstEpoch({
