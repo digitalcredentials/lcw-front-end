@@ -8,7 +8,7 @@ import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
-import { ensureEncryptedCollection, isEncryptedCollection, writeResource } from '../lib/edv';
+import { ensureEncryptedCollection, encryptedCollectionDisplay, isEncryptedCollection, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -121,9 +121,11 @@ export default function FileBrowserPage() {
   const [moving, setMoving] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
   const [newCollectionDescription, setNewCollectionDescription] = useState('');
-  // Collection descriptions for the cards, keyed by collection id, fetched in
-  // the background from each collection's description document
-  const [collectionDescriptions, setCollectionDescriptions] = useState<Record<string, string>>({});
+  // Collection display details (name + description) for the cards, keyed by
+  // collection id, fetched in the background: from the encrypted /meta custom
+  // for encrypted collections, from the plaintext description document
+  // otherwise
+  const [collectionDetails, setCollectionDetails] = useState<Record<string, { name?: string; description?: string }>>({});
   const [editDescriptionOpen, setEditDescriptionOpen] = useState(false);
   const [descriptionTarget, setDescriptionTarget] = useState<'collection' | 'space'>('collection');
   const [descriptionDraft, setDescriptionDraft] = useState('');
@@ -182,22 +184,33 @@ export default function FileBrowserPage() {
       const items = collectionList?.items ?? [];
       setCollections(items);
 
-      // Fetch each collection's description document in the background for
-      // the card blurbs (the listing itself carries no description)
+      // Fetch each collection's display fields in the background for the
+      // cards: an encrypted collection keeps its name and description in the
+      // encrypted /meta custom, a plaintext one in its description document
       void Promise.all(
-        items.map(async (item): Promise<[string, string] | null> => {
+        items.map(async (item): Promise<[string, { name?: string; description?: string }] | null> => {
           try {
-            const desc = await s.client.space(s.spaceId).collection(item.id).describe();
-            const text = (desc as { description?: unknown } | null)?.description;
-            return typeof text === 'string' && text.trim() ? [item.id, text] : null;
+            const col = s.client.space(s.spaceId).collection(item.id);
+            const desc = (await col.describe().catch(() => null)) as
+              | { encryption?: unknown; name?: unknown; description?: unknown }
+              | null;
+            if (desc?.encryption) {
+              const display = await encryptedCollectionDisplay(col);
+              return display ? [item.id, display] : null;
+            }
+            const details = {
+              ...(typeof desc?.name === 'string' && desc.name.trim() && { name: desc.name }),
+              ...(typeof desc?.description === 'string' && desc.description.trim() && { description: desc.description }),
+            };
+            return Object.keys(details).length ? [item.id, details] : null;
           } catch {
             return null;
           }
         })
       ).then((entries) => {
-        const found = entries.filter((e): e is [string, string] => e !== null);
+        const found = entries.filter((e): e is [string, { name?: string; description?: string }] => e !== null);
         if (found.length) {
-          setCollectionDescriptions((current) => ({ ...current, ...Object.fromEntries(found) }));
+          setCollectionDetails((current) => ({ ...current, ...Object.fromEntries(found) }));
         }
       });
     } catch (err) {
@@ -531,33 +544,28 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      // A raw PUT of the full description document (the WAS update-or-create
-      // by id operation): the client's configure() helper strips fields it
-      // does not know, and `description` is not among its writable fields.
+      // New credential collections are end-to-end encrypted, and their
+      // display fields (name, description) live in the encrypted /meta
+      // custom — nothing readable lands in the plaintext Description.
       const description = newCollectionDescription.trim();
       const collectionId = name.replace(/\s+/g, '-');
-      await s.client.request({
-        path: `/space/${s.spaceId}/${collectionId}`,
-        method: 'PUT',
-        json: {
-          type: ['Collection'],
-          name,
-          // New credential collections are end-to-end encrypted; the raw PUT
-          // (rather than createCollection) carries the custom description
-          // field alongside the declaration
-          encryption: { scheme: 'edv' },
-          ...(description && { description }),
-        },
-      });
       const storedKeyPair = getSessionKey();
-      if (storedKeyPair) {
-        await ensureEncryptedCollection({
-          space: s.client.space(s.spaceId),
-          id: collectionId,
-          storedKeyPair,
-          name,
-        });
+      if (!storedKeyPair) {
+        clearToken();
+        navigate('/login', { replace: true });
+        return;
       }
+      await ensureEncryptedCollection({
+        space: s.client.space(s.spaceId),
+        id: collectionId,
+        storedKeyPair,
+        name,
+        ...(description && { description }),
+      });
+      setCollectionDetails((current) => ({
+        ...current,
+        [collectionId]: { name, ...(description && { description }) },
+      }));
       setNewCollectionOpen(false);
       setNewCollectionName('');
       setNewCollectionDescription('');
@@ -590,32 +598,43 @@ export default function FileBrowserPage() {
       }
       const description = descriptionDraft.trim();
       if (descriptionTarget === 'collection' && selected) {
-        const existing = (await s.client.space(s.spaceId).collection(selected.id).describe()) ?? {};
-        const document = {
-          ...existing,
-          type: [ (existing as { type?: unknown }).type ?? [] ].flat().includes('Collection')
-            ? (existing as { type?: unknown }).type
-            : ['Collection'],
-          name: (existing as { name?: unknown }).name ?? selected.name ?? selected.id,
-        } as Record<string, unknown>;
-        if (description) {
-          document.description = description;
+        const col = s.client.space(s.spaceId).collection(selected.id);
+        if (await isEncryptedCollection(col)) {
+          // Encrypted collections keep their display fields in the encrypted
+          // /meta custom; setMeta is a full replacement, so the name rides
+          // along
+          const name = collectionDetails[selected.id]?.name ?? selected.name ?? selected.id;
+          await col.setMeta({
+            custom: { name, ...(description && { tags: { description } }) },
+          });
         } else {
-          delete document.description;
-        }
-        await s.client.request({
-          path: `/space/${s.spaceId}/${selected.id}`,
-          method: 'PUT',
-          json: document,
-        });
-        setCollectionDescriptions((current) => {
-          const next = { ...current };
+          const existing = (await col.describe()) ?? {};
+          const document = {
+            ...existing,
+            type: [ (existing as { type?: unknown }).type ?? [] ].flat().includes('Collection')
+              ? (existing as { type?: unknown }).type
+              : ['Collection'],
+            name: (existing as { name?: unknown }).name ?? selected.name ?? selected.id,
+          } as Record<string, unknown>;
           if (description) {
-            next[selected.id] = description;
+            document.description = description;
           } else {
-            delete next[selected.id];
+            delete document.description;
           }
-          return next;
+          await s.client.request({
+            path: `/space/${s.spaceId}/${selected.id}`,
+            method: 'PUT',
+            json: document,
+          });
+        }
+        setCollectionDetails((current) => {
+          const entry = { ...current[selected.id] };
+          if (description) {
+            entry.description = description;
+          } else {
+            delete entry.description;
+          }
+          return { ...current, [selected.id]: entry };
         });
       } else if (activeSpace) {
         // The space's description document (metadata/description.json),
@@ -658,7 +677,7 @@ export default function FileBrowserPage() {
     } finally {
       setSavingDescription(false);
     }
-  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails]);
+  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails]);
 
   // The spaces list: the account's registered spaces from the back end, with
   // each space's description fetched in the background from its WAS
@@ -833,7 +852,7 @@ export default function FileBrowserPage() {
             {selected && (
               <>
                 <span className="text-gray-300" aria-hidden="true">/</span>
-                <span className="text-gray-800 font-medium">{selected.name || selected.id}</span>
+                <span className="text-gray-800 font-medium">{collectionDetails[selected.id]?.name ?? selected.name ?? selected.id}</span>
               </>
             )}
           </nav>
@@ -897,18 +916,18 @@ export default function FileBrowserPage() {
         {selected && viewing?.mode !== 'detail' && (
           <div className="mb-4 -mt-1">
             <span className="text-base text-gray-600">
-              {collectionDescriptions[selected.id] ?? ''}
+              {collectionDetails[selected.id]?.description ?? ''}
             </span>
             {!['Trash', 'dids'].includes(selected.id) && (
               <button
                 onClick={() => {
-                  setDescriptionDraft(collectionDescriptions[selected.id] ?? '');
+                  setDescriptionDraft(collectionDetails[selected.id]?.description ?? '');
                   setDescriptionError('');
                   setDescriptionTarget('collection');
                   setEditDescriptionOpen(true);
                 }}
-                aria-label={collectionDescriptions[selected.id] ? 'Edit description' : 'Add description'}
-                title={collectionDescriptions[selected.id] ? 'Edit description' : 'Add description'}
+                aria-label={collectionDetails[selected.id]?.description ? 'Edit description' : 'Add description'}
+                title={collectionDetails[selected.id]?.description ? 'Edit description' : 'Add description'}
                 className="relative -top-1.5 ml-1.5 inline-flex text-gray-400 hover:text-indigo-600 transition-colors"
               >
                 <svg
@@ -1005,11 +1024,11 @@ export default function FileBrowserPage() {
               >
                 <span className="flex items-center gap-2">
                   {FOLDER_ICON}
-                  <span className="font-medium text-gray-800">{item.name ?? item.id}</span>
+                  <span className="font-medium text-gray-800">{collectionDetails[item.id]?.name ?? item.name ?? item.id}</span>
                 </span>
-                {collectionDescriptions[item.id] && (
+                {collectionDetails[item.id]?.description && (
                   <span className="line-clamp-2 text-sm text-gray-500">
-                    {collectionDescriptions[item.id]}
+                    {collectionDetails[item.id]?.description}
                   </span>
                 )}
               </button>
@@ -1291,7 +1310,7 @@ export default function FileBrowserPage() {
           >
             <h2 className="text-lg font-semibold text-gray-800 mb-4">
               {descriptionTarget === 'collection'
-                ? `Description for ${selected?.name ?? selected?.id}`
+                ? `Description for ${(selected && collectionDetails[selected.id]?.name) ?? selected?.name ?? selected?.id}`
                 : 'Edit Space'}
             </h2>
             <form
