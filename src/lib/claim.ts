@@ -3,7 +3,7 @@ import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient } from './was'
-import { ensureEncryptedCollection } from './edv'
+import { ensureEncryptedCollection, writeResource } from './edv'
 import { getSessionKey } from './auth'
 import type { ResourceData } from '@interop/was-client'
 
@@ -103,13 +103,20 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
 
 // Saves the issued credential (in its presentation envelope, the same shape
 // other wallet contents use) into the chosen collection.
-export async function saveCredential(collectionId: string, name: string, envelope: Record<string, unknown>) {
+// Saves the claimed credential, returning the id it landed under (the given
+// name in a plaintext collection; a minted EDV id in an encrypted one).
+export async function saveCredential(
+  collectionId: string,
+  name: string,
+  envelope: Record<string, unknown>
+): Promise<{ id: string }> {
   const session = await getSessionWASClient()
   if (!session) {
     throw new Error('Sign in to your wallet first.')
   }
-  await session.client
-    .space(session.spaceId)
-    .collection(collectionId)
-    .put(name, envelope as unknown as ResourceData)
+  return writeResource({
+    collection: session.client.space(session.spaceId).collection(collectionId),
+    name,
+    body: envelope as unknown as ResourceData,
+  })
 }
