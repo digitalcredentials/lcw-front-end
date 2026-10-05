@@ -3,6 +3,8 @@ import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient } from './was'
+import { ensureEncryptedCollection } from './edv'
+import { getSessionKey } from './auth'
 import type { ResourceData } from '@interop/was-client'
 
 const documentLoader = securityLoader().build()
@@ -47,10 +49,18 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   key.controller = holderDid
   key.id = `${holderDid}#${key.fingerprint()}`
 
+  // The dids collection holds key secrets, so it is end-to-end encrypted:
+  // declared with the edv descriptor (set-once; adopted if already present)
+  // and written through add(), which mints an opaque EDV id — the key is
+  // found again by its content (present.ts scans for the fingerprint).
   const dids = session.client.space(session.spaceId).collection('dids')
-  await dids.configure({ name: 'dids', force: true })
+  const storedKeyPair = getSessionKey()
+  if (!storedKeyPair) {
+    throw new Error('UNAUTHORIZED')
+  }
+  await ensureEncryptedCollection({ collection: dids, storedKeyPair, name: 'dids' })
   const exported = await key.export({ secretKey: true, includeContext: true })
-  await dids.put(`${key.fingerprint()}.json`, exported as unknown as ResourceData)
+  await dids.add(exported as unknown as ResourceData)
 
   // 3. DIDAuth: prove control of the DID against the issuer's challenge
   // The suite context defines the proof terms (challenge, domain); the
