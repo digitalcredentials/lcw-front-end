@@ -53,12 +53,13 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   // declared with the edv descriptor (set-once; adopted if already present)
   // and written through add(), which mints an opaque EDV id — the key is
   // found again by its content (present.ts scans for the fingerprint).
-  const dids = session.client.space(session.spaceId).collection('dids')
+  const space = session.client.space(session.spaceId)
+  const dids = space.collection('dids')
   const storedKeyPair = getSessionKey()
   if (!storedKeyPair) {
     throw new Error('UNAUTHORIZED')
   }
-  await ensureEncryptedCollection({ collection: dids, storedKeyPair, name: 'dids' })
+  await ensureEncryptedCollection({ space, id: 'dids', storedKeyPair, name: 'dids' })
   const exported = await key.export({ secretKey: true, includeContext: true })
   await dids.add(exported as unknown as ResourceData)
 
