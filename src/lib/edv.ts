@@ -100,21 +100,32 @@ export async function ensureEncryptedCollection({
   }
 }
 
-// The display fields of an encrypted collection, from its /meta custom
-// ({name, tags.description}); null when it has none or cannot be read.
-export async function encryptedCollectionDisplay(
+// A collection's display fields. The authoritative home is the /meta custom
+// ({name, tags.description}) — plaintext custom on a plaintext collection, an
+// encrypted envelope on an encrypted one, decoded transparently either way.
+// Collections whose fields predate the move fall back to the description
+// document's name/description; every edit writes to /meta, so the legacy
+// fields fade.
+export async function collectionDisplay(
   collection: Collection
 ): Promise<{ name?: string; description?: string } | null> {
   const meta = (await collection.meta().catch(() => null)) as {
     custom?: { name?: string; tags?: Record<string, string> }
   } | null
-  if (!meta?.custom) {
-    return null
+  if (meta?.custom && (meta.custom.name || meta.custom.tags?.description)) {
+    return {
+      ...(meta.custom.name && { name: meta.custom.name }),
+      ...(meta.custom.tags?.description && { description: meta.custom.tags.description }),
+    }
   }
-  return {
-    ...(meta.custom.name && { name: meta.custom.name }),
-    ...(meta.custom.tags?.description && { description: meta.custom.tags.description }),
+  const desc = (await collection.describe().catch(() => null)) as
+    | { name?: unknown; description?: unknown }
+    | null
+  const legacy = {
+    ...(typeof desc?.name === 'string' && desc.name.trim() && { name: desc.name }),
+    ...(typeof desc?.description === 'string' && desc.description.trim() && { description: desc.description }),
   }
+  return Object.keys(legacy).length ? legacy : null
 }
 
 // Whether a collection's description declares client-side encryption, memoized

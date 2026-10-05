@@ -8,7 +8,7 @@ import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
-import { ensureEncryptedCollection, encryptedCollectionDisplay, isEncryptedCollection, writeResource } from '../lib/edv';
+import { ensureEncryptedCollection, collectionDisplay, isEncryptedCollection, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -185,24 +185,13 @@ export default function FileBrowserPage() {
       setCollections(items);
 
       // Fetch each collection's display fields in the background for the
-      // cards: an encrypted collection keeps its name and description in the
-      // encrypted /meta custom, a plaintext one in its description document
+      // cards: /meta is the one home (decoded transparently when encrypted),
+      // with the description document as the legacy fallback
       void Promise.all(
         items.map(async (item): Promise<[string, { name?: string; description?: string }] | null> => {
           try {
-            const col = s.client.space(s.spaceId).collection(item.id);
-            const desc = (await col.describe().catch(() => null)) as
-              | { encryption?: unknown; name?: unknown; description?: unknown }
-              | null;
-            if (desc?.encryption) {
-              const display = await encryptedCollectionDisplay(col);
-              return display ? [item.id, display] : null;
-            }
-            const details = {
-              ...(typeof desc?.name === 'string' && desc.name.trim() && { name: desc.name }),
-              ...(typeof desc?.description === 'string' && desc.description.trim() && { description: desc.description }),
-            };
-            return Object.keys(details).length ? [item.id, details] : null;
+            const display = await collectionDisplay(s.client.space(s.spaceId).collection(item.id));
+            return display ? [item.id, display] : null;
           } catch {
             return null;
           }
@@ -598,35 +587,14 @@ export default function FileBrowserPage() {
       }
       const description = descriptionDraft.trim();
       if (descriptionTarget === 'collection' && selected) {
+        // One write path for every collection: /meta's custom, encrypted
+        // transparently when the collection is. setMeta is a full
+        // replacement, so the name rides along.
         const col = s.client.space(s.spaceId).collection(selected.id);
-        if (await isEncryptedCollection(col)) {
-          // Encrypted collections keep their display fields in the encrypted
-          // /meta custom; setMeta is a full replacement, so the name rides
-          // along
-          const name = collectionDetails[selected.id]?.name ?? selected.name ?? selected.id;
-          await col.setMeta({
-            custom: { name, ...(description && { tags: { description } }) },
-          });
-        } else {
-          const existing = (await col.describe()) ?? {};
-          const document = {
-            ...existing,
-            type: [ (existing as { type?: unknown }).type ?? [] ].flat().includes('Collection')
-              ? (existing as { type?: unknown }).type
-              : ['Collection'],
-            name: (existing as { name?: unknown }).name ?? selected.name ?? selected.id,
-          } as Record<string, unknown>;
-          if (description) {
-            document.description = description;
-          } else {
-            delete document.description;
-          }
-          await s.client.request({
-            path: `/space/${s.spaceId}/${selected.id}`,
-            method: 'PUT',
-            json: document,
-          });
-        }
+        const name = collectionDetails[selected.id]?.name ?? selected.name ?? selected.id;
+        await col.setMeta({
+          custom: { name, ...(description && { tags: { description } }) },
+        });
         setCollectionDetails((current) => {
           const entry = { ...current[selected.id] };
           if (description) {
