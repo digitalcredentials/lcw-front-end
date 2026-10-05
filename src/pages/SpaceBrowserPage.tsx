@@ -3,11 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
 import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
-import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
+import { getToken, clearToken, getSpaceUrl, getSessionKey } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
+import { ensureEncryptedCollection, isEncryptedCollection, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -315,7 +316,25 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).delete();
+      const space = s.client.space(s.spaceId);
+      const source = space.collection(selected.id);
+      if (selected.id !== 'Trash' && (await isEncryptedCollection(source))) {
+        // The server's soft delete copies the raw envelope into Trash, which
+        // Trash's own key epoch cannot read. Instead: re-encrypt the decrypted
+        // body into Trash under Trash's epoch, delete the original, and purge
+        // the server's envelope copy (a delete inside Trash is permanent).
+        const data = await source.resource(resource.id).get();
+        const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
+        const storedKeyPair = getSessionKey();
+        if (body !== null && storedKeyPair) {
+          await ensureEncryptedCollection({ space, id: 'Trash', storedKeyPair, name: 'Trash' });
+          await space.collection('Trash').add(body as ResourceData);
+        }
+        await source.resource(resource.id).delete();
+        await space.collection('Trash').resource(resource.id).delete();
+      } else {
+        await source.resource(resource.id).delete();
+      }
       setDeleteTarget(null);
       setViewing((v) => (v?.resource.id === resource.id ? null : v));
       await loadResources(selected);
@@ -350,7 +369,11 @@ export default function FileBrowserPage() {
         throw new Error('The credential could not be read from Trash.');
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
-      await space.collection(targetCollectionId).put(resource.id, body as ResourceData);
+      await writeResource({
+        collection: space.collection(targetCollectionId),
+        name: resource.id,
+        body: body as ResourceData,
+      });
       await space.collection(selected.id).resource(resource.id).delete();
       setRestoreTarget(null);
       setViewing((v) => (v?.resource.id === resource.id ? null : v));
@@ -387,7 +410,11 @@ export default function FileBrowserPage() {
         throw new Error('The credential could not be read.');
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
-      await space.collection(targetCollectionId).put(resource.id, body as ResourceData);
+      await writeResource({
+        collection: space.collection(targetCollectionId),
+        name: resource.id,
+        body: body as ResourceData,
+      });
       await space.collection(selected.id).resource(resource.id).delete();
       await space.collection('Trash').resource(resource.id).delete();
       setMoveTarget(null);
@@ -446,8 +473,6 @@ export default function FileBrowserPage() {
     };
   }, [viewing]);
 
-  // item.url is a path on the WAS server; the share sheet wants it absolute
-  const wasOrigin = (activeSpace?.url ?? getSpaceUrl() ?? '').replace(/\/space\/.*$/, '');
 
   // Uploads credential JSON (pasted, picked, or dropped) to the selected
   // collection under the given name, then refreshes the resource list.
@@ -473,7 +498,11 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      await s.client.space(s.spaceId).collection(selected.id).put(name, credential as ResourceData);
+      await writeResource({
+        collection: s.client.space(s.spaceId).collection(selected.id),
+        name,
+        body: credential as ResourceData,
+      });
       setUploadOpen(false);
       await loadResources(selected);
     } catch (err) {
@@ -506,15 +535,29 @@ export default function FileBrowserPage() {
       // by id operation): the client's configure() helper strips fields it
       // does not know, and `description` is not among its writable fields.
       const description = newCollectionDescription.trim();
+      const collectionId = name.replace(/\s+/g, '-');
       await s.client.request({
-        path: `/space/${s.spaceId}/${name.replace(/\s+/g, '-')}`,
+        path: `/space/${s.spaceId}/${collectionId}`,
         method: 'PUT',
         json: {
           type: ['Collection'],
           name,
+          // New credential collections are end-to-end encrypted; the raw PUT
+          // (rather than createCollection) carries the custom description
+          // field alongside the declaration
+          encryption: { scheme: 'edv' },
           ...(description && { description }),
         },
       });
+      const storedKeyPair = getSessionKey();
+      if (storedKeyPair) {
+        await ensureEncryptedCollection({
+          space: s.client.space(s.spaceId),
+          id: collectionId,
+          storedKeyPair,
+          name,
+        });
+      }
       setNewCollectionOpen(false);
       setNewCollectionName('');
       setNewCollectionDescription('');
@@ -1040,7 +1083,7 @@ export default function FileBrowserPage() {
                           onClick={() => {
                             setMoveTarget(item);
                             setMoveCollectionId(
-                              collections.find((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))?.id ?? ''
+                              collections.find((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
                             );
                           }}
                           className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
@@ -1062,7 +1105,7 @@ export default function FileBrowserPage() {
                         onClick={() => {
                           setRestoreTarget(item);
                           setRestoreCollectionId(
-                            collections.find((c) => !['Trash', 'dids'].includes(c.id))?.id ?? ''
+                            collections.find((c) => !['Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
                           );
                         }}
                         className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
@@ -1106,7 +1149,7 @@ export default function FileBrowserPage() {
                 onClick={() => {
                   setMoveTarget(viewing.resource);
                   setMoveCollectionId(
-                    collections.find((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))?.id ?? ''
+                    collections.find((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
                   );
                 }}
                 className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
@@ -1569,7 +1612,7 @@ export default function FileBrowserPage() {
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
             >
               {collections
-                .filter((c) => !['Trash', 'dids'].includes(c.id))
+                .filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
                 .map((c) => (
                   <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
                 ))}
@@ -1606,7 +1649,7 @@ export default function FileBrowserPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-lg font-semibold text-gray-800 mb-2">Move Credential</h2>
-            {collections.some((c) => ![selected.id, 'Trash', 'dids'].includes(c.id)) ? (
+            {collections.some((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id)) ? (
               <>
                 <p className="text-sm text-gray-600 mb-3">
                   Move <span className="font-medium text-gray-800">
@@ -1621,7 +1664,7 @@ export default function FileBrowserPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
                 >
                   {collections
-                    .filter((c) => ![selected.id, 'Trash', 'dids'].includes(c.id))
+                    .filter((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))
                     .map((c) => (
                       <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
                     ))}
@@ -1651,34 +1694,51 @@ export default function FileBrowserPage() {
         </div>
       )}
 
+      {/* Sharing publishes a plaintext copy in the space's dedicated public
+          collection (a world-readable ciphertext would be useless), and
+          unsharing deletes the copy. The copy's id names its origin. */}
       {shareTarget && selected && (
         <ShareCredentialModal
           resourceName={shareTarget.name ?? shareTarget.id}
-          resourceUrl={`${wasOrigin}${shareTarget.url ?? ''}`}
+          resourceUrl={`${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${selected.id}--${shareTarget.id}`}
           onCheckPublic={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            return s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).isPublic();
+            return s.client.space(s.spaceId)
+              .collection('public', { encryption: 'plaintext' })
+              .resource(`${selected.id}--${shareTarget.id}`)
+              .isPublic();
           }}
           onCreatePublicLink={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            // Only this resource becomes world-readable; the collection
-            // listing and its other members stay private
-            await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).setPublic();
-            return `${wasOrigin}${shareTarget.url ?? ''}`;
+            // The decrypted (or plaintext) body, copied into the public
+            // collection; only that copy becomes world-readable, so the
+            // source collection and its members stay private
+            const publicId = `${selected.id}--${shareTarget.id}`;
+            const data = await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).get();
+            const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
+            const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
+            await pub.put(publicId, body as ResourceData);
+            await pub.resource(publicId).setPublic();
+            return `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}`;
           }}
           onUnshare={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            // Reverts the resource to capability-only access
-            await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).clearPolicy();
+            // Removes the public copy entirely: policy, the copy, and the
+            // soft-delete remnant in Trash
+            const publicId = `${selected.id}--${shareTarget.id}`;
+            const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
+            await pub.resource(publicId).clearPolicy();
+            await pub.resource(publicId).delete().catch(() => undefined);
+            await s.client.space(s.spaceId).collection('Trash').resource(publicId).delete().catch(() => undefined);
           }}
           onLoadCredential={async () => {
             const s = await session;

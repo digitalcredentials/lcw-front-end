@@ -1,7 +1,7 @@
 import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key'
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { createEdvEncryption, ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
-import type { Space } from '@interop/was-client'
+import type { Collection, ResourceData, Space } from '@interop/was-client'
 
 // EDV-over-WAS (end-to-end encryption) support: collections declared with an
 // `encryption: { scheme: 'edv' }` descriptor store JWE envelopes the server
@@ -89,4 +89,46 @@ export async function ensureEncryptedCollection({
     collection,
     recipients: [ownerRecipient({ keyAgreementKey })],
   })
+  encryptedState.set(`${collection.spaceId}/${collection.id}`, true)
+}
+
+// Whether a collection's description declares client-side encryption, memoized
+// per space/collection for the session (only this wallet ever declares it, so
+// the answer cannot change under us except through ensureEncryptedCollection,
+// which updates the memo).
+const encryptedState = new Map<string, boolean>()
+
+export async function isEncryptedCollection(collection: Collection): Promise<boolean> {
+  const key = `${collection.spaceId}/${collection.id}`
+  const cached = encryptedState.get(key)
+  if (cached !== undefined) {
+    return cached
+  }
+  const described = (await collection.describe().catch(() => null)) as
+    | { encryption?: unknown }
+    | null
+  const encrypted = Boolean(described?.encryption)
+  encryptedState.set(key, encrypted)
+  return encrypted
+}
+
+// Writes a resource with the operation the collection requires: an encrypted
+// collection mints an opaque EDV id via add() (a named put would leak the
+// name onto the URL); a plaintext collection keeps the caller-chosen id.
+// Returns the id the resource landed under.
+export async function writeResource({
+  collection,
+  name,
+  body,
+}: {
+  collection: Collection
+  name: string
+  body: ResourceData
+}): Promise<{ id: string }> {
+  if (await isEncryptedCollection(collection)) {
+    const { id } = await collection.add(body)
+    return { id }
+  }
+  await collection.put(name, body)
+  return { id: name }
 }
