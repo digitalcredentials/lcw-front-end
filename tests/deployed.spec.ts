@@ -209,3 +209,34 @@ test('offers the welcome credential on first open after registration', async ({ 
     }
   }
 });
+
+test('creates, saves, and deletes a batch', async ({ page }) => {
+  const noise = capture(page);
+  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+  await page.goto(`${DEPLOYED_URL}/`);
+  await page.getByLabel('Email').fill(DEMO_EMAIL);
+  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  try {
+    await page.getByRole('link', { name: 'Credential issuer' }).click();
+    await page.getByRole('button', { name: 'New batch' }).click();
+
+    // Saving creates the batch's own space and writes batch.json into its
+    // fresh (description-less) batch collection — the path that broke when
+    // the client became encryption-capable.
+    const name = `Deployed test batch ${Date.now()}`;
+    await page.getByLabel('Batch name').fill(name);
+    await page.getByRole('button', { name: 'Save batch' }).click();
+    await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 20000 });
+
+    // Delete the batch (its whole space); confirm() is a browser dialog
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText(name)).toBeHidden();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
