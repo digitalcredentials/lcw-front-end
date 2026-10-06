@@ -8,6 +8,31 @@ import { buildPresentation } from './vpRequest'
 
 const documentLoader = securityLoader().build()
 
+// Finds the stored key document for a holder DID in the space's dids
+// collection. Entries are EDV-encrypted with opaque ids (claim.ts writes them
+// with add()), so the lookup lists the collection and matches on the
+// decrypted content's controller; legacy plaintext entries written under
+// `<fingerprint>.json` ids are found the same way. The collection holds one
+// small key document per claimed credential, so the scan is cheap.
+async function findStoredKey(
+  session: { client: import('@interop/was-client').WasClient; spaceId: string },
+  holderDid: string
+): Promise<unknown | null> {
+  const dids = session.client.space(session.spaceId).collection('dids')
+  const list = await dids.list().catch(() => null)
+  for (const item of list?.items ?? []) {
+    const stored = await dids.resource(item.id).get().catch(() => null)
+    if (!stored || stored instanceof Blob) {
+      continue
+    }
+    const { controller } = stored as { controller?: unknown }
+    if (controller === holderDid) {
+      return stored
+    }
+  }
+  return null
+}
+
 export interface WalletCredential {
   // Where the credential lives, for display and de-duplication
   collectionId: string
@@ -26,7 +51,7 @@ export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   }
   const space = session.client.space(session.spaceId)
   const list = await space.collections()
-  const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids'].includes(c.id))
+  const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
 
   const credentials: WalletCredential[] = []
   for (const collection of collections) {
@@ -78,14 +103,7 @@ export async function presentationFor({
   }
 
   const session = await getSessionWASClient()
-  const fingerprint = holderDid.slice('did:key:'.length)
-  const stored = session
-    ? await session.client
-        .space(session.spaceId)
-        .collection('dids')
-        .get(`${fingerprint}.json`)
-        .catch(() => null)
-    : null
+  const stored = session ? await findStoredKey(session, holderDid) : null
   if (!stored || stored instanceof Blob) {
     // No stored key for this DID: send unsigned rather than fail the share
     return buildPresentation({ credentials, holder: holderDid })

@@ -4,8 +4,9 @@ import * as WebCredentialHandler from 'web-credential-handler';
 import type { CollectionSummary } from '@interop/was-client';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient } from '../lib/was';
-import { isAuthenticated } from '../lib/auth';
+import { isAuthenticated, getSessionKey } from '../lib/auth';
 import LoadingLabel from '../components/LoadingLabel';
+import { ensureEncryptedCollection } from '../lib/edv';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
@@ -113,7 +114,7 @@ export default function ChapiPage() {
 
                 const session = await getSessionWASClient();
                 const list = session ? await session.client.space(session.spaceId).collections() : null;
-                const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids'].includes(c.id));
+                const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id));
                 setPhase({ step: 'choose', claim, collections });
                 // With no collections yet, start on the new-collection input
                 setCollectionId(collections[0]?.id ?? NEW_COLLECTION);
@@ -137,35 +138,37 @@ export default function ChapiPage() {
     try {
       let targetId = collectionId;
       if (collectionId === NEW_COLLECTION) {
-        // Create the collection first, the same way the space browser does:
-        // the id is the name with whitespace dashed (it becomes a path
-        // segment), and force acknowledges that configure() cannot read a
-        // description that does not exist yet.
+        // Create the collection first, end-to-end encrypted like every new
+        // credential collection; the id is the name with whitespace dashed
+        // (it becomes a path segment).
         const name = newCollectionName.trim();
         if (!name) {
           return;
         }
         const session = await getSessionWASClient();
-        if (!session) {
+        const storedKeyPair = getSessionKey();
+        if (!session || !storedKeyPair) {
           setPhase({ step: 'not-signed-in' });
           return;
         }
         targetId = name.replace(/\s+/g, '-');
-        await session.client.space(session.spaceId).collection(targetId).configure({
+        await ensureEncryptedCollection({
+          space: session.client.space(session.spaceId),
+          id: targetId,
+          storedKeyPair,
           name,
-          force: true,
         });
       }
       const credentialName = (claimRef.current.credential.name as string) ?? 'credential';
       const resourceName = `${credentialName.replace(/\s+/g, '-')}-${Date.now()}.json`;
-      await saveCredential(targetId, resourceName, claimRef.current.envelope);
+      const { id: savedId } = await saveCredential(targetId, resourceName, claimRef.current.envelope);
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
         dataType: 'VerifiablePresentation',
         data: claimRef.current.envelope,
       });
-      setPhase({ step: 'saved', name: resourceName, collection: targetId });
+      setPhase({ step: 'saved', name: savedId, collection: targetId });
     } catch (err) {
       setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
     } finally {
