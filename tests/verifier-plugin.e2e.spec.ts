@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs';
 // the local stack (prerequisites as for tests/e2e.spec.ts): the lcw-back-end
 // sam local API on :3001,
 // was-server-aws on :3000, and the demo account with the LCWExperience and
-// Bachelors credentials in its UniversityOfToronto collection.
+// Bachelors credentials in its UniversityOfToronto collection. Two tests add
+// PlaywrightUpload.json and TeamworkBadge.json there (overwritten on re-runs).
 //
 // Registry lookups go to the real DCC known-registries list, so this needs
 // the network as well.

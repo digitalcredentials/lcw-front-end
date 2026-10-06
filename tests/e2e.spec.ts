@@ -119,9 +119,9 @@ test('uploads a credential from a picked file', async ({ page }) => {
   await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
   await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
-  // the refreshed list contains the uploaded credential (checking it is in
-  // verifier-plugin.e2e.spec.ts)
-  await expect(page.getByRole('row').filter({ hasText: 'PlaywrightUpload' })).toBeVisible();
+  // the refreshed list contains the uploaded credential, as a card carrying
+  // its resource id (checking it is in verifier-plugin.e2e.spec.ts)
+  await expect(page.locator('[data-resource-id="PlaywrightUpload.json"]')).toBeVisible();
 });
 
 test('uploads a credential from pasted JSON under a chosen name', async ({ page }) => {
