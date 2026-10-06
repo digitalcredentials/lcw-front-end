@@ -97,8 +97,9 @@ git clone https://github.com/digitalcredentials/batch-issuer-ui.git
 (cd batch-issuer-ui && npm ci && npm run build)
 git clone https://github.com/digitalcredentials/verifier-plugin.git
 # verifier-plugin installs verifier-core from a git commit whose prepare
-# script needs pnpm; corepack provides it
-(cd verifier-plugin && corepack enable && npm ci && npm run build)
+# script needs pnpm. On Node 24 and earlier, `corepack enable` provides it;
+# Node 25 and later no longer ship corepack, so `npm install -g pnpm` instead
+(cd verifier-plugin && npm ci && npm run build)
 ```
 
 Then:
