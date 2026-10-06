@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import * as polyfill from 'credential-handler-polyfill';
 import * as WebCredentialHandler from 'web-credential-handler';
-import type { CollectionSummary } from '@interop/was-client';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
-import { getSessionWASClient } from '../lib/was';
+import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
+import { listSpaces } from '../lib/spaces';
 import { isAuthenticated, getSessionKey } from '../lib/auth';
 import LoadingLabel from '../components/LoadingLabel';
 import { ensureEncryptedCollection } from '../lib/edv';
@@ -23,11 +23,18 @@ import { verifyForSharing } from '../lib/verify';
 
 type GetResponse = { type: 'response'; dataType: string; data: unknown };
 
+// The save target choices: every credential space's collections, grouped.
+interface SpaceCollections {
+  spaceUrl: string;
+  spaceName: string;
+  collections: { id: string; name?: string }[];
+}
+
 type Phase =
   | { step: 'starting' }
   | { step: 'not-signed-in' }
   | { step: 'claiming' }
-  | { step: 'choose'; claim: ClaimResult; collections: CollectionSummary[] }
+  | { step: 'choose'; claim: ClaimResult; spaces: SpaceCollections[] }
   | { step: 'saved'; name: string; collection: string }
   // The verifier-request flow: consent first (naming the requester up front),
   // then a picker over the credentials that match the request
@@ -112,12 +119,38 @@ export default function ChapiPage() {
                 const claim = await runExchange(exchangeUrl);
                 claimRef.current = claim;
 
-                const session = await getSessionWASClient();
-                const list = session ? await session.client.space(session.spaceId).collections() : null;
-                const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id));
-                setPhase({ step: 'choose', claim, collections });
-                // With no collections yet, start on the new-collection input
-                setCollectionId(collections[0]?.id ?? NEW_COLLECTION);
+                // Every credential space's collections (batch spaces are
+                // working storage for the issuer, dids/Trash/public are the
+                // wallet's own), grouped by space for the picker
+                const spaceInfos = (await listSpaces()).filter((info) => info.type === 'credential');
+                const spaces = (await Promise.all(
+                  spaceInfos.map(async (info): Promise<SpaceCollections | null> => {
+                    const s = await getSessionWASClientFor(info.url);
+                    if (!s) {
+                      return null;
+                    }
+                    const [list, desc] = await Promise.all([
+                      s.client.space(s.spaceId).collections().catch(() => null),
+                      s.client.space(s.spaceId).describe().catch(() => null),
+                    ]);
+                    return {
+                      spaceUrl: info.url,
+                      spaceName: (desc as { name?: string } | null)?.name ?? s.spaceId,
+                      collections: (list?.items ?? [])
+                        .filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
+                        .map(({ id, name }) => ({ id, name })),
+                    };
+                  })
+                )).filter((sp): sp is SpaceCollections => sp !== null);
+                setPhase({ step: 'choose', claim, spaces });
+                // Default to the first collection anywhere; with none yet,
+                // start on the first space's new-collection input
+                const first = spaces.find((sp) => sp.collections.length > 0);
+                setCollectionId(first
+                  ? `${first.spaceUrl}|${first.collections[0].id}`
+                  : spaces[0]
+                    ? `${spaces[0].spaceUrl}|${NEW_COLLECTION}`
+                    : '');
               } catch (err) {
                 setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
               }
@@ -136,8 +169,10 @@ export default function ChapiPage() {
     }
     setSaving(true);
     try {
-      let targetId = collectionId;
-      if (collectionId === NEW_COLLECTION) {
+      // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
+      const [spaceUrl, choice] = collectionId.split('|');
+      let targetId = choice;
+      if (choice === NEW_COLLECTION) {
         // Create the collection first, end-to-end encrypted like every new
         // credential collection; the id is the name with whitespace dashed
         // (it becomes a path segment).
@@ -145,7 +180,7 @@ export default function ChapiPage() {
         if (!name) {
           return;
         }
-        const session = await getSessionWASClient();
+        const session = await getSessionWASClientFor(spaceUrl);
         const storedKeyPair = getSessionKey();
         if (!session || !storedKeyPair) {
           setPhase({ step: 'not-signed-in' });
@@ -161,7 +196,7 @@ export default function ChapiPage() {
       }
       const credentialName = (claimRef.current.credential.name as string) ?? 'credential';
       const resourceName = `${credentialName.replace(/\s+/g, '-')}-${Date.now()}.json`;
-      const { id: savedId } = await saveCredential(targetId, resourceName, claimRef.current.envelope);
+      const { id: savedId } = await saveCredential(targetId, resourceName, claimRef.current.envelope, spaceUrl);
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
@@ -303,20 +338,24 @@ export default function ChapiPage() {
               <label htmlFor="collection" className="block text-sm font-medium text-gray-700 mb-1">
                 Save to collection
               </label>
-              {phase.collections.length > 0 && (
+              {phase.spaces.length > 0 && (
                 <select
                   id="collection"
                   value={collectionId}
                   onChange={(e) => setCollectionId(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  {phase.collections.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
+                  {phase.spaces.map((sp) => (
+                    <optgroup key={sp.spaceUrl} label={sp.spaceName}>
+                      {sp.collections.map((c) => (
+                        <option key={c.id} value={`${sp.spaceUrl}|${c.id}`}>{c.name ?? c.id}</option>
+                      ))}
+                      <option value={`${sp.spaceUrl}|${NEW_COLLECTION}`}>New collection…</option>
+                    </optgroup>
                   ))}
-                  <option value={NEW_COLLECTION}>New collection…</option>
                 </select>
               )}
-              {collectionId === NEW_COLLECTION && (
+              {collectionId.endsWith(`|${NEW_COLLECTION}`) && (
                 <input
                   type="text"
                   value={newCollectionName}
@@ -333,7 +372,7 @@ export default function ChapiPage() {
               </button>
               <button
                 onClick={save}
-                disabled={saving || !collectionId || (collectionId === NEW_COLLECTION && !newCollectionName.trim())}
+                disabled={saving || !collectionId || (collectionId.endsWith(`|${NEW_COLLECTION}`) && !newCollectionName.trim())}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
               >
                 {saving ? 'Saving…' : 'Save'}
