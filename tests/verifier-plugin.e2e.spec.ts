@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 // The verifier-plugin card in the credential detail view, end to end against
 // the local stack (prerequisites as for tests/e2e.spec.ts): the lcw-back-end
@@ -27,6 +28,19 @@ async function logIn(page: Page) {
   // registration names spaces now
   await page.getByRole('button', { name: /Verifiable Credentials Collection|'s Space/ }).first().click();
 }
+
+/** Adds a fixture to the open collection by pasting it, under the given name. */
+async function addCredential(page: Page, fixture: string, name: string) {
+  await page.getByRole('button', { name: 'Add Credential' }).click();
+  const modal = page.getByRole('dialog', { name: 'Add Credential' });
+  await modal.locator('.cm-content').fill(readFileSync(new URL(fixture, import.meta.url), 'utf8'));
+  await modal.getByLabel('Name').fill(name);
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(modal).toBeHidden();
+}
+
+const open = (page: Page, id: string) =>
+  page.locator(`[data-resource-id="${id}"]`).getByRole('button', { name: 'Open', exact: true }).click();
 
 const verifier = (page: Page) => page.locator('section[aria-label="Credential verification"]');
 
@@ -89,4 +103,37 @@ test('the verifier shows only in the credential detail view', async ({ page }) =
   await page.getByRole('button', { name: 'Back to list' }).click();
   await expect(verifier(page)).toBeHidden();
   await expect(page.locator('verifier-credential')).toHaveCount(1);
+});
+
+test('an uploaded presentation is checked as the credential inside it', async ({ page }) => {
+  await logIn(page);
+  await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+  await addCredential(page, './fixtures/PlaywrightUpload.json', 'PlaywrightUpload.json');
+  await open(page, 'PlaywrightUpload.json');
+
+  const card = await cardOnceChecked(page);
+  expect(card.text).toContain('LCW Experience Badge');
+  expect(card.text).toContain('Verified');
+  expect(card.checks).toBe(1);
+});
+
+test('opening a second credential checks that one instead', async ({ page }) => {
+  await logIn(page);
+  await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+  await addCredential(page, './fixtures/verifier/verified.json', 'TeamworkBadge.json');
+
+  await open(page, 'LCWExperience.json');
+  const first = await cardOnceChecked(page);
+  expect(first.text).toContain('LCW Experience Badge');
+
+  await page.getByRole('button', { name: 'Back to list' }).click();
+  await open(page, 'TeamworkBadge.json');
+  // The second check has finished once the count passes the first's
+  await page.waitForFunction(() => (window as unknown as { __checked: number }).__checked >= 2, null, {
+    timeout: 45_000,
+  });
+  const second = await cardOnceChecked(page);
+  expect(second.text).toContain('Teamwork');
+  expect(second.text).not.toContain('LCW Experience Badge');
+  expect(second.checks).toBe(2);
 });

@@ -119,11 +119,9 @@ test('uploads a credential from a picked file', async ({ page }) => {
   await expect(modal.locator('.cm-content')).toContainText('VerifiablePresentation');
   await modal.getByRole('button', { name: 'Add', exact: true }).click();
 
-  // the refreshed list contains the uploaded credential, and it verifies
-  const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
-  await expect(row).toBeVisible();
-  await row.getByRole('button', { name: 'Verify' }).click();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
+  // the refreshed list contains the uploaded credential (checking it is in
+  // verifier-plugin.e2e.spec.ts)
+  await expect(page.getByRole('row').filter({ hasText: 'PlaywrightUpload' })).toBeVisible();
 });
 
 test('uploads a credential from pasted JSON under a chosen name', async ({ page }) => {
@@ -384,23 +382,4 @@ test('deletes a credential into the Trash collection', async ({ page }) => {
   await page.reload();
   await page.getByRole('button', { name: /Trash/ }).click();
   await expect(page.getByRole('row').filter({ hasText: 'PastedUpload' })).toBeVisible();
-});
-
-test('verifies a second credential after the first', async ({ page }) => {
-  await logIn(page);
-  await openUniversityCollection(page);
-
-  const experience = page.getByRole('row').filter({ hasText: 'LCWExperience' });
-  await experience.getByRole('button', { name: 'Verify' }).click();
-  await expect(page.getByText('LCW Experience Badge').first()).toBeVisible();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
-
-  const bachelors = page.getByRole('row').filter({ hasText: 'Bachelors' });
-  await bachelors.getByRole('button', { name: 'Verify' }).click();
-  // the verifier re-renders with the second credential's content, and the
-  // highlight moves to its row
-  await expect(page.getByText('Bachelors in Computer Science').first()).toBeVisible();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
-  await expect(bachelors).toHaveClass(/bg-indigo-50/);
-  await expect(experience).not.toHaveClass(/bg-indigo-50/);
 });
