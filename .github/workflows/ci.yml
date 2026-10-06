@@ -38,6 +38,16 @@ jobs:
           ref: 5f5eda978a077e541ad9fa1aeaa5a429a0d72bef
           path: batch-issuer-ui
 
+      # The same for verifier-plugin, the verification card, linked as
+      # file:../verifier-plugin once #104 lands (built here before that, so
+      # the two can merge in either order). Pinned to the commit #104 was
+      # tested against.
+      - uses: actions/checkout@v6
+        with:
+          repository: digitalcredentials/verifier-plugin
+          ref: 517159cddf6a21a29e801b286905de98f7cbec25
+          path: verifier-plugin
+
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -45,10 +55,17 @@ jobs:
           cache-dependency-path: |
             lcw-front-end/package-lock.json
             batch-issuer-ui/package-lock.json
+            verifier-plugin/package-lock.json
 
       - name: Build batch-issuer-ui
         working-directory: batch-issuer-ui
         run: npm ci && npm run build
+
+      # verifier-plugin installs verifier-core from a git commit whose
+      # prepare script needs pnpm; on Node 24, corepack provides it
+      - name: Build verifier-plugin
+        working-directory: verifier-plugin
+        run: corepack enable && npm ci && npm run build
 
       - name: Install dependencies
         run: npm ci
