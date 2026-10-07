@@ -85,6 +85,11 @@ issuing batches of credentials through the embedded
   panel as a plugin — its adapter is the host plus the issuer's `POST /notify`
   and per-credential revocation against the
   [status list service](https://github.com/digitalcredentials/status-list-lambda).
+  The package is installed from that repository's `release` branch
+  (`github:digitalcredentials/batch-issuer-ui#release`), which its workflow
+  rebuilds on every push to `main`; the lock file pins the commit. To take a
+  new build: `npm update @digitalcredentials/batch-issuer-ui`, then commit
+  the lock file.
 
 Gotchas documented in the code and worth knowing: veri-good's issuer list must
 be set via `setIssuerDids()` (React never populates a `<template>` child's
