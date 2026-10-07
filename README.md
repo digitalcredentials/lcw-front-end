@@ -6,8 +6,10 @@ The web front end for the Learner Credential Wallet (LCW): a React + TypeScript
 [Wallet Attached Storage](https://w3c-ccg.github.io/wallet-attached-storage-spec/)
 spaces, adding, viewing, sharing, moving, deleting, and verifying Verifiable
 Credentials, claiming and presenting them over [CHAPI](https://chapi.io/), and
-issuing batches of credentials through the embedded
-[batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui) panel.
+mounting plugins such as the
+[batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui) panel
+for issuing batches of credentials. Credential collections are end-to-end
+encrypted (EDV over WAS); the server stores ciphertext it cannot read.
 
 ## How it works
 
@@ -31,20 +33,41 @@ issuing batches of credentials through the embedded
 - **Space browser**: a space's collections and resources through
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
   signing every request with the login key. Collections and credentials are
-  cards; opening a credential shows a formatted summary with its source and a
-  live verification (the [veri-good](https://github.com/digitalcredentials/veri-good)
-  web component) side by side, plus **Share**, **Move** (between
-  collections), and **Delete** (soft delete into the space's `Trash`
-  collection, from which **Restore** moves it back out).
+  cards; a collection's display name and description come from its `/meta`
+  sub-resource (`collectionDisplay` in `src/lib/edv.ts`, with the description
+  document as the fallback for collections that predate `/meta`). **New
+  Collection** creates an encrypted collection through the server's
+  `POST /space/{id}/` route. Opening a credential shows a formatted summary
+  with its source and a live verification (the
+  [veri-good](https://github.com/digitalcredentials/veri-good) web component,
+  or a plugin filling the `credentialDetail` slot) side by side, plus
+  **Share**, **Move** (between collections), and **Delete** (soft delete into
+  the space's `Trash` collection, from which **Restore** moves it back out).
+  Every state that waits on the network shows a `LoadingLabel` with a spinner
+  and a message rather than a placeholder.
+- **End-to-end encryption** (`src/lib/edv.ts`): collections the wallet
+  creates — credential collections, `dids`, `Trash` — carry the was-client's
+  `encryption: { scheme: 'edv' }` descriptor. The session's Ed25519 key is
+  converted to an X25519 key-agreement key, the collection's first key epoch
+  is wrapped to it (`ensureFirstEpoch`), and the was-client encrypts on write
+  and decrypts on read: resources are JWE envelopes (XChaCha20-Poly1305
+  content, per-recipient ECDH-ES+A256KW), `/meta` customs are encrypted the
+  same way, and encrypted collections mint opaque resource ids (`add()`)
+  rather than taking a name. Deleting out of an encrypted collection
+  re-encrypts the body into `Trash` under `Trash`'s own epoch and purges the
+  server's raw soft-delete copy. Only the session key can decrypt, so the
+  passphrase is the only secret.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
   [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)
-  and problems are shown as warnings (sharing is never blocked). **Create
-  Public Link** marks just that credential world-readable
-  (`resource.setPublic()`; its collection and siblings stay private) and shows
-  the raw credential URL and a [VerifierPlus](https://verifierplus.org) link.
-  **Unshare** clears the policy. **QR code** renders either link; a private
-  credential is public only while the QR shows. **Add to LinkedIn**
+  and problems are shown as warnings (sharing is never blocked). Because an
+  encrypted credential's stored form is ciphertext, **Create Public Link**
+  writes a plaintext copy of it into the space's `public` collection (a
+  plaintext collection; the copy is named `<collection>--<id>`) and marks only
+  that copy world-readable (`setPublic()`), then shows the copy's URL and a
+  [VerifierPlus](https://verifierplus.org) link. **Unshare** clears the
+  policy and deletes the copy (and its `Trash` remnant). **QR code** renders
+  either link; a private credential is public only while the QR shows. **Add to LinkedIn**
   (`src/lib/linkedin.ts`) opens LinkedIn's add-to-profile form prefilled from
   the credential. The device share sheet appears where the Web Share API
   exists.
@@ -64,15 +87,17 @@ issuing batches of credentials through the embedded
   page offers a credential, the mediator opens `chapi.html` (a second Vite
   entry rendering `src/chapi/ChapiPage.tsx`), which runs the
   [VC API exchange](https://www.w3.org/TR/vcalm-1.0/#workflows-and-exchanges):
-  a fresh `did:key` (stored in the space's `dids` collection) signs the
-  DIDAuth presentation, and the issued credential is saved to a collection the
-  user picks (including a new one created on the spot). An incoming
+  a fresh `did:key` (stored in the space's encrypted `dids` collection) signs
+  the DIDAuth presentation, and the issued credential is saved to a
+  collection the user picks from every credential space of the account
+  (grouped by space; `Trash`, `dids` and `public` excluded), or to a new
+  collection created on the spot in the chosen space. An incoming
   **verifiable presentation request** from a verifier site shows what is being
   asked for, lets the user pick credentials, verifies them first (warn-only),
   and answers with a signed presentation. The companion issuer lives in
   [aws-lambda-issuer](https://github.com/digitalcredentials/aws-lambda-issuer).
 - **Plugins** (`src/plugins/`): a plugin is a React component, bundled into
-  the wallet from an npm package or a local file, that receives a
+  the wallet from an npm package or a repository's `release` branch, that receives a
   `WalletHost` object (session WAS client, spaces API, service base URLs,
   `onUnauthorized`) and nothing else. `src/plugins/index.ts` lists the
   registered plugins; `App.tsx` generates a route and `AppShell` a sidebar
@@ -123,6 +148,16 @@ is:
 ## Tests
 
 ```bash
+npm run lint
+npx playwright test tests/vp-request.spec.ts tests/verify-interpret.spec.ts
+```
+
+Lint (oxlint) and the unit specs that need no server: parsing and matching
+of verifiable presentation requests (`src/lib/vpRequest.ts`) and the
+interpretation of verifier-core results for the pre-share check
+(`src/lib/verify.ts`).
+
+```bash
 npm run test:e2e
 ```
 
@@ -151,17 +186,19 @@ DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 
 Opt-in smoke tests against a deployed instance: login and the space
 collections, opening and verifying a credential, the batch issuer screen,
-sharing to LinkedIn, the My Spaces and title navigation resets, and the
-welcome-credential dialog — with console errors and failed requests captured
-for debugging. Skipped unless `DEPLOYED_URL` is set.
+sharing to LinkedIn, the My Spaces and title navigation resets, the
+welcome-credential dialog, and creating, saving and deleting a batch (a
+scratch batch space) — with console errors and failed requests captured for
+debugging. Skipped unless `DEPLOYED_URL` is set. Run it after every deploy.
 
 ## Deploy
 
 The site is served at [https://lcw-sandbox.org](https://lcw-sandbox.org)
 from the `dcc-lcw-ui` S3 bucket behind CloudFront (distribution
 `E6VT0O094YUC1`; the `dk59u8ewdxjcs.cloudfront.net` domain still works).
-`npm run build` bakes in the deployed lcw-back-end API URL from
-`.env.production` (local dev keeps using `.env`).
+`npm run build` bakes in the deployed service URLs from `.env.production`
+(local dev keeps using `.env`). The batch issuer panel is installed from its
+repository's `release` branch, so nothing is built outside this repo.
 
 ```bash
 npm run build
