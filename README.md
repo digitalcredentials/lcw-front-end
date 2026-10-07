@@ -71,11 +71,20 @@ issuing batches of credentials through the embedded
   asked for, lets the user pick credentials, verifies them first (warn-only),
   and answers with a signed presentation. The companion issuer lives in
   [aws-lambda-issuer](https://github.com/digitalcredentials/aws-lambda-issuer).
-- **Credential Issuer** (`src/pages/BatchIssuerPage.tsx`): mounts the
+- **Plugins** (`src/plugins/`): a plugin is a React component, bundled into
+  the wallet from an npm package or a local file, that receives a
+  `WalletHost` object (session WAS client, spaces API, service base URLs,
+  `onUnauthorized`) and nothing else. `src/plugins/index.ts` lists the
+  registered plugins; `App.tsx` generates a route and `AppShell` a sidebar
+  link for each, rendered through `src/pages/PluginPage.tsx`. To add one:
+  install the package, write a registry entry that maps the host onto the
+  plugin's own adapter, append it to the list, and add an `@source` line in
+  `src/index.css` if its JSX uses Tailwind classes.
+- **Credential Issuer** (`src/plugins/batchIssuerPlugin.ts`, `BatchIssuer.tsx`): the
   [batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui)
-  panel with an adapter built from the wallet's own session — the WAS client,
-  the spaces API, the issuer's `POST /notify`, and per-credential revocation
-  against the [status list service](https://github.com/digitalcredentials/status-list-lambda).
+  panel as a plugin — its adapter is the host plus the issuer's `POST /notify`
+  and per-credential revocation against the
+  [status list service](https://github.com/digitalcredentials/status-list-lambda).
 
 Gotchas documented in the code and worth knowing: veri-good's issuer list must
 be set via `setIssuerDids()` (React never populates a `<template>` child's
