@@ -155,13 +155,12 @@ any configuration prop.
 
 ## 4. How the wallet gets the package
 
-Any of these; the wallet's `package.json` names which.
+One of these; the wallet's `package.json` names which. Every plugin, from its first integration, is taken from a published package or a `release` branch, so that a wallet build never depends on a checkout on someone's machine.
 
 | Method | `package.json` entry | When |
 |---|---|---|
 | **npm** | `"@scope/name": "^1.2.3"` | the package is published |
 | **GitHub release branch** (current practice) | `"@scope/name": "github:org/repo#release"` | the package is not published yet. A workflow in the plugin repo builds `dist/` on every push to `main` and force-pushes it with `package.json`, `LICENSE` and `README.md` to a `release` branch. `npm install` clones that branch and runs none of the package's scripts, so the wallet needs none of the plugin's build tools. The wallet's lock file pins the commit; `npm update @scope/name` moves it. Reference implementation: [batch-issuer-ui `.github/workflows/release.yml`](https://github.com/digitalcredentials/batch-issuer-ui/blob/main/.github/workflows/release.yml) (a build job with a read-only token, a publish job that installs nothing). |
-| **Local checkout** | `"@scope/name": "file:../name"` | developing the plugin and the wallet together. Build the plugin (`npm run build`) before building the wallet; the wallet consumes `dist/`. |
 
 Do not rely on a `prepare` script that builds on install: it makes every
 wallet `npm install` run the plugin's toolchain, and fails on machines
@@ -254,8 +253,8 @@ Then `plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin]` in
 
 ## 7. Checklist for registering it here
 
-- [ ] Dependency in `package.json` (npm version, `github:…#release`, or
-      `file:` for local work); lock file committed.
+- [ ] Dependency in `package.json` (npm version or `github:…#release`);
+      lock file committed.
 - [ ] `src/plugins/<name>Plugin.ts` (+ a `.tsx` wrapper when the package is
       a web component or needs wallet-side calls), appended to `plugins` in
       `src/plugins/index.ts`.
