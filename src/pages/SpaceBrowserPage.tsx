@@ -483,7 +483,7 @@ export default function FileBrowserPage() {
       expires: credentialExpiration(credential),
       description: typeof description === 'string' ? description : null,
     };
-  }, [viewing]);
+  }, [viewingCredential]);
 
 
   // Uploads credential JSON (pasted, picked, or dropped) to the selected
