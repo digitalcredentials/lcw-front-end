@@ -20,6 +20,9 @@ import {
   credentialExpiration,
   credentialImage,
   issuerImage,
+  credentialRecipient,
+  credentialRole,
+  credentialActivityDates,
   type CredentialLike,
 } from '../lib/linkedin';
 
@@ -457,7 +460,7 @@ export default function FileBrowserPage() {
       return null;
     }
     const subject = credential.credentialSubject as
-      | { name?: unknown; hasCredential?: unknown; achievement?: unknown }
+      | { hasCredential?: unknown; achievement?: unknown }
       | undefined;
     const achievement = [subject?.hasCredential ?? subject?.achievement ?? []].flat()[0] as
       | { description?: unknown }
@@ -468,7 +471,9 @@ export default function FileBrowserPage() {
       title: credentialName(credential),
       issuer: issuerName(credential),
       issuerUrl: typeof issuerUrl === 'string' ? issuerUrl : null,
-      recipient: typeof subject?.name === 'string' ? subject.name : null,
+      recipient: credentialRecipient(credential),
+      role: credentialRole(credential),
+      activity: credentialActivityDates(credential),
       issued: credentialIssuance(credential),
       expires: credentialExpiration(credential),
       description: typeof description === 'string' ? description : null,
@@ -1166,6 +1171,31 @@ export default function FileBrowserPage() {
                 <div>
                   <dt className="text-xs uppercase tracking-wide text-gray-400">Issued to</dt>
                   <dd className="text-gray-800">{viewingSummary.recipient}</dd>
+                </div>
+              )}
+              {viewingSummary.role && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Role</dt>
+                  <dd className="text-gray-800">{viewingSummary.role}</dd>
+                </div>
+              )}
+              {/* Activity dates are calendar dates (see credentialActivityDates),
+                  so they are shown in UTC to keep the day the issuer wrote;
+                  Issued and Expires are moments, so they stay in local time. */}
+              {viewingSummary.activity.start && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Started</dt>
+                  <dd className="text-gray-800">
+                    {viewingSummary.activity.start.toLocaleDateString(undefined, { timeZone: 'UTC' })}
+                  </dd>
+                </div>
+              )}
+              {viewingSummary.activity.end && (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-gray-400">Ended</dt>
+                  <dd className="text-gray-800">
+                    {viewingSummary.activity.end.toLocaleDateString(undefined, { timeZone: 'UTC' })}
+                  </dd>
                 </div>
               )}
               {viewingSummary.issuer && (
