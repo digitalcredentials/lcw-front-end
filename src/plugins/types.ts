@@ -35,4 +35,16 @@ export interface WalletPlugin {
   // Sidebar link tooltip.
   description?: string;
   Component: ComponentType<{ host: WalletHost }>;
+  // Components the plugin contributes to fixed places in the wallet's own
+  // pages, besides its page. Each slot is rendered for every plugin that
+  // fills it, in registry order.
+  slots?: {
+    // The verification panel of the credential detail view. `credential` is
+    // the stored credential with its presentation envelope removed; null
+    // when the stored resource is not a credential.
+    credentialDetail?: ComponentType<{
+      credential: Record<string, unknown> | null;
+      host: WalletHost;
+    }>;
+  };
 }
