@@ -76,10 +76,12 @@ issuing batches of credentials through the embedded
   `WalletHost` object (session WAS client, spaces API, service base URLs,
   `onUnauthorized`) and nothing else. `src/plugins/index.ts` lists the
   registered plugins; `App.tsx` generates a route and `AppShell` a sidebar
-  link for each, rendered through `src/pages/PluginPage.tsx`. To add one:
-  install the package, write a registry entry that maps the host onto the
-  plugin's own adapter, append it to the list, and add an `@source` line in
-  `src/index.css` if its JSX uses Tailwind classes.
+  link for each, rendered through `src/pages/PluginPage.tsx`. A plugin can
+  also fill the verification panel of the credential detail view
+  (`slots.credentialDetail`). [docs/plugins.md](docs/plugins.md) is the
+  guide for plugin authors and for registering a plugin here: the host
+  interface, the package shape, distribution (npm or a `release` branch),
+  and the registry entry.
 - **Credential Issuer** (`src/plugins/batchIssuerPlugin.ts`, `BatchIssuer.tsx`): the
   [batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui)
   panel as a plugin — its adapter is the host plus the issuer's `POST /notify`
