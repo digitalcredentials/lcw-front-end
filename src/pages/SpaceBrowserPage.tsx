@@ -12,6 +12,7 @@ import { ensureEncryptedCollection, collectionDisplay, isEncryptedCollection, wr
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
+import { plugins, useWalletHost } from '../plugins';
 import {
   credentialFrom,
   credentialName,
@@ -146,6 +147,10 @@ export default function FileBrowserPage() {
   // ordinary child nodes), so the declarative form silently yields an empty
   // issuer list.
   const verifierRef = useRef<VeriGoodElement | null>(null);
+  // Plugin components for the verification panel (src/plugins/index.ts);
+  // the registry is a module constant, so this list never changes at run time
+  const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
+  const host = useWalletHost();
   const handleVerifierRef = useCallback((node: HTMLElement | null) => {
     verifierRef.current = node as VeriGoodElement | null;
     if (node) {
@@ -442,17 +447,22 @@ export default function FileBrowserPage() {
     }
   }, [viewing]);
 
-  // The formatted summary shown at the top of the credential detail view
-  const viewingSummary = useMemo(() => {
+  // The credential being viewed, with its presentation envelope removed;
+  // null when the stored resource is not a credential (or not JSON).
+  const viewingCredential = useMemo<CredentialLike | null>(() => {
     if (!viewing) {
       return null;
     }
-    let credential: CredentialLike | null = null;
     try {
-      credential = credentialFrom(JSON.parse(viewing.vc));
+      return credentialFrom(JSON.parse(viewing.vc));
     } catch {
       return null;
     }
+  }, [viewing]);
+
+  // The formatted summary shown at the top of the credential detail view
+  const viewingSummary = useMemo(() => {
+    const credential = viewingCredential;
     if (!credential) {
       return null;
     }
@@ -1233,7 +1243,17 @@ export default function FileBrowserPage() {
               Credential Verification
             </h2>
             <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6">
-              <veri-good ref={handleVerifierRef} />
+              {/* Plugins that fill the credentialDetail slot replace the
+                  built-in veri-good element */}
+              {detailSlots.length > 0
+                ? detailSlots.map((Slot, index) => (
+                    <Slot
+                      key={index}
+                      credential={viewingCredential as Record<string, unknown> | null}
+                      host={host}
+                    />
+                  ))
+                : <veri-good ref={handleVerifierRef} />}
             </div>
           </section>
         </div>
