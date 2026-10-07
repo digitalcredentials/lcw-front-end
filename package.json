@@ -12,7 +12,7 @@
     "test:claim": "node tests/scripts/claim-wire.mjs"
   },
   "dependencies": {
-    "@digitalcredentials/batch-issuer-ui": "file:../batch-issuer-ui",
+    "@digitalcredentials/batch-issuer-ui": "github:digitalcredentials/batch-issuer-ui#release",
     "@digitalcredentials/veri-good": "^0.0.0-beta.7",
     "@digitalcredentials/verifier-core": "^1.0.0-beta.10",
     "@digitalcredentials/vpqr": "^2.2.1",
