@@ -25,11 +25,13 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
 - **My Spaces** (`src/pages/SpaceBrowserPage.tsx`, `src/lib/spaces.ts`): the
-  account's spaces as cards, with names and descriptions read from each
-  space's WAS description document. **New Space** provisions a space through
-  the WAS server's spec-shaped `POST /spaces` (controller DID + coupon);
-  renaming and describing a space edits its description document; a `batch`
-  space's card asks whether to open the batch view or the standard space view.
+  account's spaces as cards (the WAS server's `GET /spaces/`), with names
+  and descriptions read from each space's Space Metadata object
+  (`/space/{s}/meta`). **New Space** provisions a space through the server's
+  `POST /spaces/` (controller DID, type array, coupon); renaming and
+  describing a space replaces its metadata object under `If-Match`. A space
+  whose type array carries `BatchSpace` is a batch space: its card asks
+  whether to open the batch view or the standard space view.
 - **Space browser**: a space's collections and resources through
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
   signing every request with the login key. Collections and credentials are
@@ -41,8 +43,9 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   with its source and a live verification (the
   [veri-good](https://github.com/digitalcredentials/veri-good) web component,
   or a plugin filling the `credentialDetail` slot) side by side, plus
-  **Share**, **Move** (between collections), and **Delete** (soft delete into
-  the space's `Trash` collection, from which **Restore** moves it back out).
+  **Share**, **Move** (between collections), and **Delete** (a copy into the
+  space's `Trash` collection, from which **Restore** moves it back out; the
+  server's delete is permanent, so the wallet does the copy itself).
   Every state that waits on the network shows a `LoadingLabel` with a spinner
   and a message rather than a placeholder.
 - **End-to-end encryption** (`src/lib/edv.ts`): collections the wallet
@@ -54,9 +57,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   content, per-recipient ECDH-ES+A256KW), `/meta` customs are encrypted the
   same way, and encrypted collections mint opaque resource ids (`add()`)
   rather than taking a name. Deleting out of an encrypted collection
-  re-encrypts the body into `Trash` under `Trash`'s own epoch and purges the
-  server's raw soft-delete copy. Only the session key can decrypt, so the
-  passphrase is the only secret.
+  re-encrypts the body into `Trash` under `Trash`'s own epoch before the
+  permanent delete. Only the session key can decrypt, so the passphrase is
+  the only secret. The client is `@interop/was-client` 0.93, which speaks WAS
+  v0.5 and reads the server's service description before its first request.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
   [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)

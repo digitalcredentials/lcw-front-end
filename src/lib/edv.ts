@@ -54,14 +54,13 @@ export async function sessionEncryption(storedKeyPair: StoredKeyPair) {
   })
 }
 
-// Declares a collection encrypted (set-once) and installs its first key
-// epoch, wrapped to the session key. A missing collection is created through
-// the server's create-collection route (the was-client's recommended path);
-// an existing one that predates the descriptor is re-declared once with
-// configure. Safe to call repeatedly: an existing descriptor is left alone,
-// and ensureFirstEpoch adopts a roster another provisioner already installed.
-// The display name (and optional description) of a newly created collection
-// goes into the encrypted /meta custom — never the plaintext Description.
+// Declares a collection encrypted and installs its first key epoch, wrapped
+// to the session key. A missing collection is created through the server's
+// create-collection route with the edv descriptor. Safe to call repeatedly:
+// an existing encrypted collection is left alone, and ensureFirstEpoch
+// adopts a roster another provisioner already installed. The display name
+// (and optional description) of a newly created collection goes into the
+// encrypted /meta custom, never a plaintext field.
 export async function ensureEncryptedCollection({
   space,
   id,
@@ -82,10 +81,7 @@ export async function ensureEncryptedCollection({
   if (!described) {
     await space.createCollection({ id, encryption: { scheme: 'edv' } })
   } else if (!described.encryption) {
-    await collection.configure({
-      encryption: { scheme: 'edv' },
-      force: true,
-    } as Parameters<typeof collection.configure>[0])
+    throw new Error(`The collection "${id}" exists and is not encrypted.`)
   }
   const keyAgreementKey = await keyAgreementFromSession(storedKeyPair)
   await ensureFirstEpoch({
@@ -100,12 +96,11 @@ export async function ensureEncryptedCollection({
   }
 }
 
-// A collection's display fields. The authoritative home is the /meta custom
-// ({name, tags.description}) — plaintext custom on a plaintext collection, an
-// encrypted envelope on an encrypted one, decoded transparently either way.
-// Collections whose fields predate the move fall back to the description
-// document's name/description; every edit writes to /meta, so the legacy
-// fields fade.
+// A collection's display fields: the /meta custom ({name, tags.description}),
+// plaintext on a plaintext collection, an encrypted envelope on an encrypted
+// one, decoded transparently either way. A collection with no custom (one
+// created by another client, or an implicit one) shows its configuration
+// name, which is a plaintext member of the metadata object.
 export async function collectionDisplay(
   collection: Collection
 ): Promise<{ name?: string; description?: string } | null> {
