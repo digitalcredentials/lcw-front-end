@@ -5,12 +5,12 @@ import { test, expect, type Page } from '@playwright/test';
 //
 //   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 //
-// They use the deployed demo account (its registered spaceURL points at the
-// deployed WAS API) and only read -- no uploads or deletes against the real
-// space.
+// They use the deployed demo account, seeded by tests/scripts/seed-demo.mjs
+// (a UniversityOfToronto collection holding the LCW Experience Badge), and
+// only read it -- the batch test creates and deletes a space of its own.
 
 const DEPLOYED_URL = process.env.DEPLOYED_URL ?? '';
-const DEMO_EMAIL = 'jc.chartrand+aws@gmail.com';
+const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
 
 test.skip(!DEPLOYED_URL, 'set DEPLOYED_URL to run the deployed smoke tests');
@@ -34,6 +34,12 @@ function capture(page: Page): string[] {
     }
   });
   return lines;
+}
+
+// A credential card, found by its title: resource ids in an encrypted
+// collection are opaque, so the card's text is what identifies it.
+function credentialCard(page: Page, title: string) {
+  return page.locator('[data-resource-id]').filter({ hasText: title });
 }
 
 async function logIn(page: Page) {
@@ -74,7 +80,7 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     // Open replaces the per-row Verify/View Source/Share/Delete buttons: the
     // detail view shows the summary, source, and verification side by side
     // Cards no longer show file names; the card carries its resource id
-    await page.locator('[data-resource-id*="LCWExperience"]')
+    await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
     await expect(page.getByText('Signature is valid.')).toBeVisible();
@@ -112,7 +118,7 @@ test('shares a credential to LinkedIn', async ({ page }) => {
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     // Sharing now goes through the credential detail view's bottom buttons
     // Cards no longer show file names; the card carries its resource id
-    await page.locator('[data-resource-id*="LCWExperience"]')
+    await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await page.getByRole('button', { name: 'Share', exact: true }).click();
     // Record the URL at the moment the page calls window.open, instead of
@@ -150,7 +156,7 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
   try {
     // Deep into a credential's detail view
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
-    await page.locator('[data-resource-id*="LCWExperience"]')
+    await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
 
@@ -161,7 +167,7 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
     // Back into the detail view, then the wallet title resets too
     await page.locator('[data-space-type="credential"]').first().click();
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
-    await page.locator('[data-resource-id*="LCWExperience"]')
+    await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
     await page.getByRole('link', { name: /Digital Credentials Commons/ }).click();

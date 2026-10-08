@@ -195,6 +195,13 @@ welcome-credential dialog, and creating, saving and deleting a batch (a
 scratch batch space) — with console errors and failed requests captured for
 debugging. Skipped unless `DEPLOYED_URL` is set. Run it after every deploy.
 
+The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
+passphrase in the spec file) is registered through the wallet like any
+other, and its Main Space is seeded by `tests/scripts/seed-demo.mjs`
+(`DEMO_EMAIL=... node tests/scripts/seed-demo.mjs`): an encrypted
+`UniversityOfToronto` collection holding the LCW Experience Badge fixture,
+created the way the wallet creates collections. The script is idempotent.
+
 ## Deploy
 
 The site is served at [https://lcw-sandbox.org](https://lcw-sandbox.org)
