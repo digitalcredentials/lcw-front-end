@@ -5,10 +5,10 @@ import '@digitalcredentials/veri-good';
 import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl, getSessionKey } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
-import { listSpaces, createSpace, type SpaceInfo } from '../lib/spaces';
+import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
-import { ensureEncryptedCollection, collectionDisplay, isEncryptedCollection, writeResource } from '../lib/edv';
+import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
@@ -186,7 +186,11 @@ export default function FileBrowserPage() {
         return;
       }
       const collectionList = await s.client.space(s.spaceId).collections();
-      const items = collectionList?.items ?? [];
+      // A listing may carry tombstones of deleted collections (a changes-feed
+      // feature this server does not have); only live ones are collections.
+      const items = (collectionList?.items ?? []).filter(
+        (item): item is CollectionSummary => !('deleted' in item && item.deleted)
+      );
       setCollections(items);
 
       // Fetch each collection's display fields in the background for the
@@ -307,8 +311,9 @@ export default function FileBrowserPage() {
     }
   }, [navigate, handleError, session, selected]);
 
-  // Moves the credential into the space's Trash collection (the WAS DELETE
-  // endpoint's soft-delete semantics), then refreshes the list.
+  // Moves the credential into the space's Trash collection (a copy under
+  // Trash's own key epoch, then a permanent delete of the original), then
+  // refreshes the list. Inside Trash the delete is final.
   const deleteCredential = useCallback(async (resource: ResourceSummary) => {
     if (!selected) {
       return;
@@ -325,11 +330,7 @@ export default function FileBrowserPage() {
       }
       const space = s.client.space(s.spaceId);
       const source = space.collection(selected.id);
-      if (selected.id !== 'Trash' && (await isEncryptedCollection(source))) {
-        // The server's soft delete copies the raw envelope into Trash, which
-        // Trash's own key epoch cannot read. Instead: re-encrypt the decrypted
-        // body into Trash under Trash's epoch, delete the original, and purge
-        // the server's envelope copy (a delete inside Trash is permanent).
+      if (selected.id !== 'Trash') {
         const data = await source.resource(resource.id).get();
         const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
         const storedKeyPair = getSessionKey();
@@ -337,11 +338,8 @@ export default function FileBrowserPage() {
           await ensureEncryptedCollection({ space, id: 'Trash', storedKeyPair, name: 'Trash' });
           await space.collection('Trash').add(body as ResourceData);
         }
-        await source.resource(resource.id).delete();
-        await space.collection('Trash').resource(resource.id).delete();
-      } else {
-        await source.resource(resource.id).delete();
       }
+      await source.resource(resource.id).delete();
       setDeleteTarget(null);
       setViewing((v) => (v?.resource.id === resource.id ? null : v));
       await loadResources(selected);
@@ -354,8 +352,7 @@ export default function FileBrowserPage() {
   }, [navigate, handleError, session, selected, loadResources]);
 
   // Moves a credential out of Trash into the chosen collection: copy the
-  // stored body over, then delete the Trash copy (a DELETE inside Trash is
-  // permanent on the server, so this is a move, not another soft delete).
+  // stored body over, then delete the Trash copy.
   const restoreCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
     if (!selected || !targetCollectionId) {
       return;
@@ -394,9 +391,7 @@ export default function FileBrowserPage() {
   }, [navigate, handleError, session, selected, loadResources]);
 
   // Moves a credential into another collection: copy the stored body over,
-  // delete the original (the server soft-deletes it into Trash), then delete
-  // the Trash copy (a DELETE inside Trash is permanent), so the move leaves
-  // nothing behind.
+  // then delete the original.
   const moveCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
     if (!selected || !targetCollectionId) {
       return;
@@ -423,7 +418,6 @@ export default function FileBrowserPage() {
         body: body as ResourceData,
       });
       await space.collection(selected.id).resource(resource.id).delete();
-      await space.collection('Trash').resource(resource.id).delete();
       setMoveTarget(null);
       setViewing((v) => (v?.resource.id === resource.id ? null : v));
       await loadResources(selected);
@@ -615,30 +609,10 @@ export default function FileBrowserPage() {
           return { ...current, [selected.id]: entry };
         });
       } else if (activeSpace) {
-        // The space's description document (metadata/description.json),
-        // written whole; the server stamps the derived fields. The edited
-        // name is written too — the description document is the only home
-        // for a space's name.
-        const existing = (await s.client.space(s.spaceId).describe()) ?? {};
-        const name = nameDraft.trim()
-          || ((existing as { name?: unknown }).name as string | undefined)
-          || spaceDetails[activeSpace.url]?.name
-          || s.spaceId;
-        const document = {
-          ...existing,
-          type: ['Space'],
-          name,
-        } as Record<string, unknown>;
-        if (description) {
-          document.description = description;
-        } else {
-          delete document.description;
-        }
-        await s.client.request({
-          path: `/space/${s.spaceId}`,
-          method: 'PUT',
-          json: document,
-        });
+        // The Space Metadata object holds the name and description; the
+        // edited name is written too.
+        const name = nameDraft.trim() || spaceDetails[activeSpace.url]?.name || s.spaceId;
+        await updateSpaceMeta(activeSpace.url, { name, description });
         setSpaceDetails((current) => {
           const entry = { ...current[activeSpace.url], name };
           if (description) {
@@ -657,9 +631,8 @@ export default function FileBrowserPage() {
     }
   }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails]);
 
-  // The spaces list: the account's registered spaces from the back end, with
-  // each space's description fetched in the background from its WAS
-  // description document
+  // The spaces list: the account's registered spaces, with each space's
+  // description fetched in the background from its Space Metadata object
   const loadSpaces = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -735,8 +708,8 @@ export default function FileBrowserPage() {
     setError('');
   }
 
-  // Creates a credential space through the back end, then writes its
-  // description document when a description was given
+  // Creates a credential space, then writes its description into its Space
+  // Metadata object when one was given
   const createNewSpace = useCallback(async () => {
     const name = newSpaceName.trim();
     if (!name) {
@@ -748,14 +721,7 @@ export default function FileBrowserPage() {
       const spaceUrl = await createSpace('credential', name);
       const description = newSpaceDescription.trim();
       if (description) {
-        const s = await getSessionWASClientFor(spaceUrl);
-        if (s) {
-          await s.client.request({
-            path: `/space/${s.spaceId}`,
-            method: 'PUT',
-            json: { type: ['Space'], name, description },
-          });
-        }
+        await updateSpaceMeta(spaceUrl, { description });
       }
       setSpaceDetails((current) => ({
         ...current,
@@ -1739,13 +1705,11 @@ export default function FileBrowserPage() {
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            // Removes the public copy entirely: policy, the copy, and the
-            // soft-delete remnant in Trash
+            // Removes the public copy entirely: its policy, then the copy
             const publicId = `${selected.id}--${shareTarget.id}`;
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
             await pub.resource(publicId).clearPolicy();
             await pub.resource(publicId).delete().catch(() => undefined);
-            await s.client.space(s.spaceId).collection('Trash').resource(publicId).delete().catch(() => undefined);
           }}
           onLoadCredential={async () => {
             const s = await session;

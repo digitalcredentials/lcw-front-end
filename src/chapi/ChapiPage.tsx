@@ -138,7 +138,7 @@ export default function ChapiPage() {
                       spaceName: (desc as { name?: string } | null)?.name ?? s.spaceId,
                       collections: (list?.items ?? [])
                         .filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
-                        .map(({ id, name }) => ({ id, name })),
+                        .map((c) => ({ id: c.id, name: 'name' in c ? c.name : c.id })),
                     };
                   })
                 )).filter((sp): sp is SpaceCollections => sp !== null);
