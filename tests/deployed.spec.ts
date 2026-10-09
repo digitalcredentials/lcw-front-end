@@ -64,6 +64,8 @@ test('logs in and lists the space collections', async ({ page }) => {
     // The header is the static product title now, not the space's name
     await expect(page.getByText('Digital Credentials Commons')).toBeVisible();
     await expect(page.getByText('Learner Credential Wallet').first()).toBeVisible();
+    // The sidebar names the signed-in account
+    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
     await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
   } finally {
     if (noise.length) {
