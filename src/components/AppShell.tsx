@@ -249,6 +249,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
           )}
         </nav>
         <div className="px-3 py-4 border-t border-gray-200">
+          {/* Who is signed in: the account's email, from the session */}
+          <p className="px-3 pb-2 text-xs text-gray-500" data-testid="signed-in-as">
+            Signed in as
+            <span className="block truncate font-medium text-gray-700" title={getEmail() ?? ''}>
+              {getEmail()}
+            </span>
+          </p>
           <button onClick={signOut} className={itemClass(false)}>
             Sign Out
           </button>
