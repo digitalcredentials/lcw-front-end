@@ -91,8 +91,10 @@ export default function FileBrowserPage() {
   } | null>(null);
   // Credential summaries for the list rows, keyed by
   // `${collectionId}/${resourceId}`, fetched in the background after the
-  // listing loads
-  const [summaries, setSummaries] = useState<Record<string, RowSummary>>({});
+  // listing loads. A missing key means the body has not arrived yet (the
+  // card shows a loading label); null means it arrived but is not a
+  // credential (the card falls back to the file name).
+  const [summaries, setSummaries] = useState<Record<string, RowSummary | null>>({});
   const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
@@ -208,10 +210,11 @@ export default function FileBrowserPage() {
       setResources(items);
 
       // Fetch the bodies in the background to show credential details in the
-      // list; entries are keyed by collection so a stale fetch after
-      // switching collections is harmless.
-      void Promise.all(
-        items.map(async (item): Promise<[string, RowSummary] | null> => {
+      // list, filling each card as its own body arrives; entries are keyed by
+      // collection so a stale fetch after switching collections is harmless.
+      for (const item of items) {
+        const key = `${collection.id}/${item.id}`;
+        void (async (): Promise<RowSummary | null> => {
           try {
             const data = await s.client.space(s.spaceId).collection(collection.id).resource(item.id).get();
             const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data;
@@ -219,24 +222,21 @@ export default function FileBrowserPage() {
             if (!credential) {
               return null;
             }
-            return [`${collection.id}/${item.id}`, {
+            return {
               title: credentialName(credential),
               logo: credentialImage(credential),
               issuer: issuerName(credential),
               issuerLogo: issuerImage(credential),
               issued: credentialIssuance(credential)?.toLocaleDateString() ?? null,
               expires: credentialExpiration(credential)?.toLocaleDateString() ?? null,
-            }];
+            };
           } catch {
             return null;
           }
-        })
-      ).then((entries) => {
-        const found = entries.filter((e): e is [string, RowSummary] => e !== null);
-        if (found.length) {
-          setSummaries((current) => ({ ...current, ...Object.fromEntries(found) }));
-        }
-      });
+        })().then((summary) => {
+          setSummaries((current) => ({ ...current, [key]: summary }));
+        });
+      }
     } catch (err) {
       handleError(err);
     } finally {
@@ -948,7 +948,8 @@ export default function FileBrowserPage() {
         )}
 
         {/* Resources in the selected collection, as cards (hidden while a
-            credential's detail view is open). File names are not shown; a
+            credential's detail view is open). A card shows a loading label
+            until its body has been fetched; file names are not shown, but a
             resource without a credential title (a signing key, a non-VC
             upload) falls back to its file name as the card title. */}
         {!loading && !error && selected && resources.length > 0 && viewing?.mode !== 'detail' && (
@@ -976,7 +977,9 @@ export default function FileBrowserPage() {
                       <span className="mt-1 shrink-0">{FILE_ICON}</span>
                     )}
                     <span className="font-medium text-gray-800">
-                      {summary?.title ?? item.name ?? item.id}
+                      {summary === undefined
+                        ? <LoadingLabel />
+                        : summary?.title ?? item.name ?? item.id}
                     </span>
                   </div>
                   {summary?.issuer && (
@@ -1593,7 +1596,9 @@ export default function FileBrowserPage() {
               <>
                 <p className="text-sm text-gray-600 mb-3">
                   Move <span className="font-medium text-gray-800">
-                    {summaries[`${selected.id}/${moveTarget.id}`]?.title ?? moveTarget.name ?? moveTarget.id}
+                    {summaries[`${selected.id}/${moveTarget.id}`] === undefined
+                      ? <LoadingLabel />
+                      : summaries[`${selected.id}/${moveTarget.id}`]?.title ?? moveTarget.name ?? moveTarget.id}
                   </span> into:
                 </p>
                 <label htmlFor="move-collection" className="sr-only">Collection to move into</label>
