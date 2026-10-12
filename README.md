@@ -129,10 +129,16 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   `<verifier-credential>` card in the verification panel of the credential
   detail view; no page, so no sidebar link. Installed the same way, from
   `github:digitalcredentials/verifier-plugin#release`, updated with
-  `npm update @digitalcredentials/verifier-plugin`. `Verifier.tsx` holds the
-  registries the card looks issuers up in (the DCC Sandbox Registry); an
-  issuer not listed there, such as a batch issuer's per-batch DID, verifies
-  but reads "we can't confirm who issued it".
+  `npm update @digitalcredentials/verifier-plugin`. `Verifier.tsx` looks
+  issuers up in DCC's list of known registries, the same list the pre-share
+  check uses (`src/lib/verify.ts`), and tells the card when that list didn't
+  load rather than letting it fall back to its own default. Four registries
+  on that list don't yet let a browser read them (dcc-members-oidf#65 and
+  Credential Engine's), so an issuer found on none of the readable ones, such
+  as a batch issuer's per-batch DID, verifies but reads "We couldn't confirm
+  who issued this": some of the lists didn't respond. Once those registries
+  are readable, an issuer on no list reads "Genuine, but we can't confirm who
+  issued it".
 
 Gotchas documented in the code and worth knowing: the verification section is
 always rendered and hidden with CSS outside the detail view, so the plugin
