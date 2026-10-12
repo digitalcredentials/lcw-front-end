@@ -21,11 +21,14 @@ session and a few services. The plugin receives nothing else: it does not read
 environment variables, `localStorage`, or the wallet's routes, and it does not
 know how the user logged in.
 
-A plugin can appear in two places. One registry entry can fill both.
+A plugin can appear in two places. One registry entry can fill either or
+both: a plugin with no page has no route and no sidebar entry (a verifier
+that lives only in the credential detail view, say), and a page can opt out
+of the sidebar with `menu: false` while keeping its route.
 
 | Place | What the wallet renders | Prop(s) |
 |---|---|---|
-| **Its own page**, with a link in the left sidebar (for example *Credential Issuer* at `/batches`) | `plugin.Component` inside the wallet's chrome, behind login | `host` |
+| **Its own page**, with a link in the left sidebar unless it opts out (for example *Credential Issuer* at `/batches`) | `plugin.page.Component` inside the wallet's chrome, behind login | `host` |
 | **The verification panel of the credential detail view** (the right-hand panel when a stored credential is opened) | `plugin.slots.credentialDetail`, in place of the wallet's built-in verifier | `credential`, `host` |
 
 A plugin whose UI is a **web component** (a custom element) is fine: the
@@ -176,10 +179,14 @@ detail-view slot from the entry; nothing else in the wallet changes.
 
 ```ts
 export interface WalletPlugin {
-  path: string;          // route and sidebar link target, e.g. '/verify'
-  title: string;         // sidebar label
-  description?: string;  // sidebar link tooltip
-  Component: ComponentType<{ host: WalletHost }>;
+  id: string;            // unique among registered plugins
+  title: string;         // the plugin's name; the sidebar label of its page
+  page?: {               // omit for a plugin with no page of its own
+    path: string;        // route and sidebar link target, e.g. '/verify'
+    description?: string;// sidebar link tooltip
+    menu?: boolean;      // false: keep the route, show no sidebar link
+    Component: ComponentType<{ host: WalletHost }>;
+  };
   slots?: {
     credentialDetail?: ComponentType<{ credential: Record<string, unknown> | null; host: WalletHost }>;
   };
@@ -192,11 +199,11 @@ Example — a React-component plugin with its own adapter (the batch issuer,
 builds the package's `BatchIssuerAdapter` from `host` plus two wallet-side
 calls the panel needs and renders `<BatchIssuerPanel adapter={…} />`.
 
-Example — a web-component plugin that fills both places:
+Example — a web-component plugin that appears only in the credential
+detail view (no page, so no route and no sidebar entry):
 
 ```tsx
 // src/plugins/Verifier.tsx
-import { useState } from 'react';
 import '@digitalcredentials/verifier-plugin'; // registers <verifier-credential>
 import type { WalletHost } from './types';
 
@@ -206,26 +213,22 @@ const REGISTRIES = [{ name: 'DCC Sandbox Registry', type: 'dcc-legacy', url: 'ht
 export function VerifierDetail({ credential }: { credential: Record<string, unknown> | null; host: WalletHost }) {
   return <verifier-credential credential={credential ?? undefined} registries={REGISTRIES} />;
 }
-
-// The sidebar page: the wallet supplies the credential source (paste, upload,
-// or pick from the user's collections via host.getSession()), the plugin the card.
-export default function VerifierPage({ host }: { host: WalletHost }) {
-  const [credential, setCredential] = useState<Record<string, unknown>>();
-  // … a chooser that calls setCredential …
-  return <verifier-credential credential={credential} registries={REGISTRIES} />;
-}
 ```
 
 ```ts
 // src/plugins/verifierPlugin.ts
 export const verifierPlugin: WalletPlugin = {
-  path: '/verify',
-  title: 'Verify',
-  description: 'Check a credential',
-  Component: VerifierPage,
+  id: 'verifier',
+  title: 'Verifier',
   slots: { credentialDetail: VerifierDetail },
 };
 ```
+
+To give such a plugin a page as well — a standalone verify screen where the
+wallet supplies the credential (paste, upload, or a pick from the user's
+collections via `host.getSession()`) — add `page: { path: '/verify',
+description: 'Check a credential', Component: VerifierPage }`; add
+`menu: false` to it if the page should be reachable only by navigation.
 
 Then `plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin]` in
 `index.ts`, the dependency in `package.json`, and (Tailwind plugins only) the
