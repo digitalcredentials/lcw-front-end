@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import Brand from '../components/Brand';
 import { Link } from 'react-router-dom';
 import { register } from '../lib/register';
 import { markWelcomePending } from '../lib/welcome';
@@ -41,7 +42,7 @@ export default function RegisterPage() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <header className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Learner Credential Wallet</h1>
+          <Brand centered />
           <p className="mt-3 text-xs font-semibold tracking-wide text-amber-700">
             THIS IS A SANDBOX FOR TESTING AND WILL BE RESET FREQUENTLY
           </p>
