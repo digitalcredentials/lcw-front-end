@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
-import '@digitalcredentials/veri-good';
-import type { VeriGoodElement } from '../types/veri-good';
 import { getToken, clearToken, getSpaceUrl, getSessionKey } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
@@ -34,22 +32,6 @@ interface RowSummary {
   issued: string | null;
   expires: string | null;
 }
-
-// Issuers whose credentials the verifier accepts, keyed by DID
-const ISSUER_DIDS = {
-  'did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q': {
-    issuerName: 'DCC Demo University',
-    url: 'https://digitalcredentials.mit.edu/'
-  },
-  'did:key:z6MktL8XGbuYv5f7hwf6hVyJkJWynNtNhcsXFYe9NJzjKHkW': {
-    issuerName: 'Digital Credentials Consortium',
-    url: 'https://digitalcredentials.mit.edu/'
-  },
-  'did:key:z6MkkCNaxehr7RoeDJQP39oQ1yFbmUg29ziXfLwoyeCo1QFf': {
-    issuerName: 'LCW Sandbox Issuer',
-    url: 'https://issuer.lcw-sandbox.org'
-  }
-};
 
 const FILE_ICON = (
   <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -139,24 +121,10 @@ export default function FileBrowserPage() {
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [newCollectionError, setNewCollectionError] = useState('');
 
-  // The verifier is mounted once and reused for every verification. It fires
-  // veri-good-is-ready synchronously on connect, so it accepts calls as soon
-  // as React attaches the ref. The issuer DIDs must go through
-  // setIssuerDids(): the component reads a <template> child's .content
-  // fragment, which React never populates (it renders template children as
-  // ordinary child nodes), so the declarative form silently yields an empty
-  // issuer list.
-  const verifierRef = useRef<VeriGoodElement | null>(null);
   // Plugin components for the verification panel (src/plugins/index.ts);
   // the registry is a module constant, so this list never changes at run time
   const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
   const host = useWalletHost();
-  const handleVerifierRef = useCallback((node: HTMLElement | null) => {
-    verifierRef.current = node as VeriGoodElement | null;
-    if (node) {
-      (node as VeriGoodElement).setIssuerDids(JSON.stringify(ISSUER_DIDS));
-    }
-  }, []);
 
   // Turns a failed request into either a redirect to login or a shown message.
   const handleError = useCallback((err: unknown) => {
@@ -301,7 +269,6 @@ export default function FileBrowserPage() {
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc, mode });
       if (mode === 'detail') {
-        verifierRef.current?.verify(vc);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
@@ -1092,10 +1059,9 @@ export default function FileBrowserPage() {
         )}
         {/* Credential detail view: header + formatted summary above, source
             and verification side by side, Share/Delete at the bottom. The
-            veri-good element is mounted once and kept in a fixed slot of an
-            always-rendered wrapper (keyed, with a placeholder occupying the
-            sibling slot) because the component misbehaves when remounted; it
-            is hidden with CSS outside detail mode. */}
+            verification section is always rendered (keyed, with a placeholder
+            occupying the sibling slot) and hidden with CSS outside detail
+            mode, so the plugin components in it are never remounted. */}
         {selected && viewing?.mode === 'detail' && (
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-800">
@@ -1209,17 +1175,18 @@ export default function FileBrowserPage() {
               Credential Verification
             </h2>
             <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6">
-              {/* Plugins that fill the credentialDetail slot replace the
-                  built-in veri-good element */}
-              {detailSlots.length > 0
-                ? detailSlots.map((Slot, index) => (
-                    <Slot
-                      key={index}
-                      credential={viewingCredential as Record<string, unknown> | null}
-                      host={host}
-                    />
-                  ))
-                : <veri-good ref={handleVerifierRef} />}
+              {/* Every plugin that fills the credentialDetail slot, in
+                  registry order (src/plugins/index.ts) */}
+              {detailSlots.length === 0 && (
+                <p className="text-sm text-gray-500">No verifier plugin is installed.</p>
+              )}
+              {detailSlots.map((Slot, index) => (
+                <Slot
+                  key={index}
+                  credential={viewingCredential as Record<string, unknown> | null}
+                  host={host}
+                />
+              ))}
             </div>
           </section>
         </div>

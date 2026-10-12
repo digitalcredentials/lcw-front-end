@@ -101,8 +101,9 @@ test('verifies a credential and highlights its row', async ({ page }) => {
   const row = page.getByRole('row').filter({ hasText: 'LCWExperience' });
   await row.getByRole('button', { name: 'Verify' }).click();
 
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
-  await expect(page.getByText('Has not been revoked')).toBeVisible();
+  await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+    .toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('none detected')).toBeVisible();
   // the credential's own name renders in the verifier
   await expect(page.getByText('LCW Experience Badge').first()).toBeVisible();
   await expect(row).toHaveClass(/bg-indigo-50/);
@@ -158,7 +159,8 @@ test('uploads a credential from a picked file', async ({ page }) => {
   const row = page.getByRole('row').filter({ hasText: 'PlaywrightUpload' });
   await expect(row).toBeVisible();
   await row.getByRole('button', { name: 'Verify' }).click();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
+  await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+    .toBeVisible({ timeout: 30_000 });
 });
 
 test('uploads a credential from pasted JSON under a chosen name', async ({ page }) => {
@@ -428,14 +430,16 @@ test('verifies a second credential after the first', async ({ page }) => {
   const experience = page.getByRole('row').filter({ hasText: 'LCWExperience' });
   await experience.getByRole('button', { name: 'Verify' }).click();
   await expect(page.getByText('LCW Experience Badge').first()).toBeVisible();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
+  await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+    .toBeVisible({ timeout: 30_000 });
 
   const bachelors = page.getByRole('row').filter({ hasText: 'Bachelors' });
   await bachelors.getByRole('button', { name: 'Verify' }).click();
   // the verifier re-renders with the second credential's content, and the
   // highlight moves to its row
   await expect(page.getByText('Bachelors in Computer Science').first()).toBeVisible();
-  await expect(page.getByText('Signature is valid.')).toBeVisible();
+  await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+    .toBeVisible({ timeout: 30_000 });
   await expect(bachelors).toHaveClass(/bg-indigo-50/);
   await expect(experience).not.toHaveClass(/bg-indigo-50/);
 });
