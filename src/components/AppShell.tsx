@@ -178,13 +178,17 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {/* The title links home: back to the spaces card view */}
         <Link
           to="/files"
-          className="block px-4 py-5 border-b border-gray-200 hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-3 px-4 py-4 border-b border-gray-200 hover:bg-gray-50 transition-colors"
         >
-          <span className="block text-lg font-semibold text-gray-800 leading-tight">
-            Digital Credentials Commons
-          </span>
-          <span className="block text-sm text-gray-500 leading-tight">
-            Learner Credential Wallet
+          {/* The DCC mark (public/dcc-commons-mark.png, from badge-assets) */}
+          <img src="/dcc-commons-mark.png" alt="" className="h-11 w-11 shrink-0" />
+          <span className="min-w-0">
+            <span className="block text-base font-semibold text-gray-800 leading-tight">
+              Digital Credentials Commons
+            </span>
+            <span className="block text-sm text-gray-500 leading-tight">
+              Learner Credential Wallet
+            </span>
           </span>
         </Link>
         <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Main">
