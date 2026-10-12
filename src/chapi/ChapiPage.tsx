@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import Brand from '../components/Brand';
 import * as polyfill from 'credential-handler-polyfill';
 import * as WebCredentialHandler from 'web-credential-handler';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
@@ -311,7 +312,7 @@ export default function ChapiPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-md p-8">
-        <h1 className="text-xl font-semibold text-gray-800 mb-4">Learner Credential Wallet</h1>
+        <div className="mb-5"><Brand /></div>
 
         {phase.step === 'starting' && <p className="text-sm"><LoadingLabel label="Waiting for the credential request…" /></p>}
 
