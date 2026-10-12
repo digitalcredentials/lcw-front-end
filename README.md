@@ -104,10 +104,12 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   the wallet from an npm package or a repository's `release` branch, that receives a
   `WalletHost` object (session WAS client, spaces API, service base URLs,
   `onUnauthorized`) and nothing else. `src/plugins/index.ts` lists the
-  registered plugins; `App.tsx` generates a route and `AppShell` a sidebar
-  link for each, rendered through `src/pages/PluginPage.tsx`. A plugin can
-  also fill the verification panel of the credential detail view
-  (`slots.credentialDetail`). [docs/plugins.md](docs/plugins.md) is the
+  registered plugins; `App.tsx` generates a route for each plugin's page
+  and `AppShell` a sidebar link for each page that wants one, rendered
+  through `src/pages/PluginPage.tsx`. A plugin can instead, or also, fill
+  the verification panel of the credential detail view
+  (`slots.credentialDetail`); one with no page has no route or sidebar
+  entry. [docs/plugins.md](docs/plugins.md) is the
   guide for plugin authors and for registering a plugin here: the host
   interface, the package shape, distribution (npm or a `release` branch),
   and the registry entry.

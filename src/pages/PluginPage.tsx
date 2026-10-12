@@ -1,13 +1,13 @@
 import AppShell from '../components/AppShell';
-import { useWalletHost, type WalletPlugin } from '../plugins';
+import { useWalletHost, type WalletPluginPage } from '../plugins';
 
-// The page every plugin route renders: the plugin's component inside the
-// wallet's chrome, given the host object built from the session.
-export default function PluginPage({ plugin }: { plugin: WalletPlugin }) {
+// The page every plugin route renders: the plugin page's component inside
+// the wallet's chrome, given the host object built from the session.
+export default function PluginPage({ page }: { page: WalletPluginPage }) {
   const host = useWalletHost();
   return (
     <AppShell>
-      <plugin.Component host={host} />
+      <page.Component host={host} />
     </AppShell>
   );
 }

@@ -4,7 +4,7 @@ import { clearToken, getEmail } from '../lib/auth';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
 import LoadingLabel from './LoadingLabel';
-import { plugins } from '../plugins';
+import { pluginPages } from '../plugins';
 
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Spaces, one link per registered plugin such as Credential
@@ -195,17 +195,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <Link to="/files" className={itemClass(pathname === '/files')}>
             My Spaces
           </Link>
-          {/* One link per registered plugin (src/plugins/index.ts) */}
-          {plugins.map((plugin) => (
-            <Link
-              key={plugin.path}
-              to={plugin.path}
-              className={itemClass(pathname === plugin.path)}
-              title={plugin.description}
-            >
-              {plugin.title}
-            </Link>
-          ))}
+          {/* One link per plugin page that wants one (src/plugins/index.ts) */}
+          {pluginPages
+            .filter(({ page }) => page.menu !== false)
+            .map(({ plugin, page }) => (
+              <Link
+                key={plugin.id}
+                to={page.path}
+                className={itemClass(pathname === page.path)}
+                title={page.description}
+              >
+                {plugin.title}
+              </Link>
+            ))}
           <button
             onClick={toggleSettings}
             aria-expanded={settingsOpen}

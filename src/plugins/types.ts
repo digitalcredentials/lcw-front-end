@@ -24,20 +24,33 @@ export interface WalletHost {
   onUnauthorized(): void;
 }
 
-// A registry entry: the wallet generates one route and one sidebar link from
-// each. Pages render inside AppShell behind RequireAuth, so the component may
-// use the router (useLocation/useNavigate) like any wallet page.
-export interface WalletPlugin {
+// A plugin's own page: a route the wallet generates, rendered inside
+// AppShell behind RequireAuth (so the component may use the router like any
+// wallet page), with a link in the left sidebar unless `menu` is false.
+export interface WalletPluginPage {
   // Route path, e.g. '/batches'. Also the sidebar link target.
   path: string;
-  // Sidebar label.
-  title: string;
   // Sidebar link tooltip.
   description?: string;
+  // Whether the sidebar links to the page (default true). A page reached
+  // only by navigation from elsewhere sets this false.
+  menu?: boolean;
   Component: ComponentType<{ host: WalletHost }>;
+}
+
+// A registry entry. A plugin contributes a page, slots in the wallet's own
+// pages, or both; one with no `page` has no route and no sidebar link (a
+// verifier that appears only in the credential detail view, say).
+export interface WalletPlugin {
+  // Unique among registered plugins; the React key.
+  id: string;
+  // The plugin's name: the sidebar label of its page, and how the wallet
+  // refers to it elsewhere.
+  title: string;
+  page?: WalletPluginPage;
   // Components the plugin contributes to fixed places in the wallet's own
-  // pages, besides its page. Each slot is rendered for every plugin that
-  // fills it, in registry order.
+  // pages. Each slot is rendered for every plugin that fills it, in registry
+  // order.
   slots?: {
     // The verification panel of the credential detail view. `credential` is
     // the stored credential with its presentation envelope removed; null

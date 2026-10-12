@@ -2,8 +2,11 @@ import BatchIssuer from './BatchIssuer';
 import type { WalletPlugin } from './types';
 
 export const batchIssuerPlugin: WalletPlugin = {
-  path: '/batches',
+  id: 'batch-issuer',
   title: 'Credential Issuer',
-  description: 'Issue batches of credentials from a CSV',
-  Component: BatchIssuer,
+  page: {
+    path: '/batches',
+    description: 'Issue batches of credentials from a CSV',
+    Component: BatchIssuer,
+  },
 };

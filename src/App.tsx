@@ -4,7 +4,7 @@ import RegisterPage from './pages/RegisterPage'
 import FileBrowserPage from './pages/SpaceBrowserPage'
 import PluginPage from './pages/PluginPage'
 import RequireAuth from './components/RequireAuth'
-import { plugins } from './plugins'
+import { pluginPages } from './plugins'
 import './App.css'
 
 function App() {
@@ -21,14 +21,14 @@ function App() {
             </RequireAuth>
           }
         />
-        {/* One route per registered plugin (src/plugins/index.ts) */}
-        {plugins.map((plugin) => (
+        {/* One route per plugin page (src/plugins/index.ts) */}
+        {pluginPages.map(({ plugin, page }) => (
           <Route
-            key={plugin.path}
-            path={plugin.path}
+            key={plugin.id}
+            path={page.path}
             element={
               <RequireAuth>
-                <PluginPage plugin={plugin} />
+                <PluginPage page={page} />
               </RequireAuth>
             }
           />
