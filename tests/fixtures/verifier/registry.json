@@ -1,0 +1,10 @@
+{
+  "meta": { "created": "2026-10-02T00:00:00+00:00", "updated": "2026-10-02T00:00:00+00:00" },
+  "registry": {
+    "did:key:z6MknNQD1WHLGGraFi6zcbGevuAgkVfdyCdtZnQTGWVVvR5Q": {
+      "name": "DCC Demo University",
+      "location": "Cambridge, MA, USA",
+      "url": "https://digitalcredentials.mit.edu/"
+    }
+  }
+}

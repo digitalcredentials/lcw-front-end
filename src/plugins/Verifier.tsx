@@ -1,26 +1,75 @@
+import { useEffect, useState } from 'react';
 import '@digitalcredentials/verifier-plugin'; // registers <verifier-credential>
 import type { Registry } from '@digitalcredentials/verifier-plugin';
+import { knownDIDRegistries } from '../lib/verify';
 import type { WalletHost } from './types';
 
-// The registries the verifier looks an issuer up in: the wallet's own trust
-// list, passed to the element as a property. Sandbox issuers that are not
-// listed (the batch issuer's per-batch DIDs, say) still verify; the card then
-// says it could not confirm who issued the credential.
-const REGISTRIES: Registry[] = [
-  {
-    name: 'DCC Sandbox Registry',
-    type: 'dcc-legacy',
-    url: 'https://digitalcredentials.github.io/sandbox-registry/registry.json',
-  },
-];
+type Credential = Record<string, unknown>;
+
+// The registries the verifier looks an issuer up in: DCC's list of known
+// registries, the same list the pre-share check uses (src/lib/verify.ts), so
+// the two never disagree about who issued a credential. Issuers on no list
+// (the batch issuer's per-batch DIDs, say) still verify; the card then says
+// it could not confirm who issued the credential.
+//
+// A failed download remembers which credential it was for, so the next
+// credential asks for the list again instead of going without it until the
+// page is reloaded.
+type Registries =
+  | { state: 'loading' }
+  | { state: 'loaded'; list: Registry[] }
+  | { state: 'failed'; credential?: Credential };
 
 // The credentialDetail slot: the verifier-plugin card for the opened
-// credential. Setting `credential` runs the check; undefined clears the card.
+// credential. The credential is held back until the registry list has loaded
+// (or failed to), so it is checked once, not twice. If the list can't be
+// loaded, the card is told so and says our list of known issuers didn't load;
+// left to its own default registry instead, it would call an issuer on our
+// list "not on our list of known issuers".
 export default function VerifierDetail({
-  credential,
+  credential: given,
 }: {
-  credential: Record<string, unknown> | null;
+  credential: Credential | null;
   host: WalletHost;
 }) {
-  return <verifier-credential credential={credential ?? undefined} registries={REGISTRIES} />;
+  const credential = given ?? undefined;
+  const [registries, setRegistries] = useState<Registries>({ state: 'loading' });
+  const loaded = registries.state === 'loaded';
+
+  useEffect(() => {
+    if (loaded) return;
+    let current = true;
+    knownDIDRegistries().then(
+      (list) => current && setRegistries({ state: 'loaded', list: list as Registry[] }),
+      (err) => {
+        console.error('Could not load the known registries:', err);
+        if (current) setRegistries({ state: 'failed', credential });
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [credential, loaded]);
+
+  // Ready once the list has loaded, or has just failed for this credential.
+  const ready = loaded || (registries.state === 'failed' && registries.credential === credential);
+  const checking = credential !== undefined && ready;
+
+  return (
+    <>
+      {/* Always there, empty until needed: a status region that arrives
+          already holding its text may never be read out */}
+      <p role="status" className="text-sm text-gray-600">
+        {credential !== undefined && !ready ? 'Checking…' : ''}
+      </p>
+      {/* Mounted throughout, but hidden until it has a credential: without
+          one, its card is an empty bordered box */}
+      <verifier-credential
+        registries={loaded ? registries.list : undefined}
+        registriesUnavailable={registries.state === 'failed'}
+        credential={checking ? credential : undefined}
+        style={checking ? undefined : { display: 'none' }}
+      />
+    </>
+  );
 }
