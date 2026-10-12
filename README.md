@@ -40,9 +40,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   document as the fallback for collections that predate `/meta`). **New
   Collection** creates an encrypted collection through the server's
   `POST /space/{id}/` route. Opening a credential shows a formatted summary
-  with its source and a live verification (the
-  [veri-good](https://github.com/digitalcredentials/veri-good) web component,
-  or a plugin filling the `credentialDetail` slot) side by side, plus
+  with its source and a live verification (every plugin filling the
+  `credentialDetail` slot; today the
+  [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
+  card) side by side, plus
   **Share**, **Move** (between collections), and **Delete** (a copy into the
   space's `Trash` collection, from which **Restore** moves it back out; the
   server's delete is permanent, so the wallet does the copy itself).
@@ -123,11 +124,20 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   rebuilds on every push to `main`; the lock file pins the commit. To take a
   new build: `npm update @digitalcredentials/batch-issuer-ui`, then commit
   the lock file.
+- **Verifier** (`src/plugins/verifierPlugin.ts`, `Verifier.tsx`): the
+  [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
+  `<verifier-credential>` card in the verification panel of the credential
+  detail view; no page, so no sidebar link. Installed the same way, from
+  `github:digitalcredentials/verifier-plugin#release`, updated with
+  `npm update @digitalcredentials/verifier-plugin`. `Verifier.tsx` holds the
+  registries the card looks issuers up in (the DCC Sandbox Registry); an
+  issuer not listed there, such as a batch issuer's per-batch DID, verifies
+  but reads "we can't confirm who issued it".
 
-Gotchas documented in the code and worth knowing: veri-good's issuer list must
-be set via `setIssuerDids()` (React never populates a `<template>` child's
-`.content`); the `<veri-good>` element is mounted once and hidden with CSS,
-never remounted; CHAPI calls go through `navigator.credentialsPolyfill` rather
+Gotchas documented in the code and worth knowing: the verification section is
+always rendered and hidden with CSS outside the detail view, so the plugin
+components in it are never remounted; CHAPI calls go through
+`navigator.credentialsPolyfill` rather
 than `navigator.credentials`, which password managers like 1Password can lock;
 and the handler page uses `WebCredentialHandler.activateHandler({get})` — not
 `receiveCredentialEvent()`, which only serves the redirect pattern and times

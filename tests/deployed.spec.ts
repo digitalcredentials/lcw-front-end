@@ -85,8 +85,14 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
-    await expect(page.getByText('Signature is valid.')).toBeVisible();
-    await expect(page.getByText('Has not been revoked')).toBeVisible();
+    // The verifier-plugin card: the verdict (the demo issuer is not in the
+    // sandbox registry, so "Genuine, but…" rather than "Verified") and the
+    // Tampering row of its Details view. The headline carries a visually
+    // hidden severity prefix, so match the sentence, not the whole text.
+    await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+      .toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Tampering')).toBeVisible();
+    await expect(page.getByText('none detected')).toBeVisible();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

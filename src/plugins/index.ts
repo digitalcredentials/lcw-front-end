@@ -1,4 +1,5 @@
 import { batchIssuerPlugin } from './batchIssuerPlugin';
+import { verifierPlugin } from './verifierPlugin';
 import type { WalletPlugin } from './types';
 
 // The plugins mounted in this wallet build, in sidebar order. App.tsx
@@ -9,7 +10,7 @@ import type { WalletPlugin } from './types';
 // the plugin's own adapter, and append it here. A plugin whose JSX carries
 // Tailwind classes also needs an @source line in src/index.css so those
 // classes are compiled.
-export const plugins: WalletPlugin[] = [batchIssuerPlugin];
+export const plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin];
 
 // The pages the plugins contribute, with their plugin.
 export const pluginPages = plugins.flatMap((plugin) =>
