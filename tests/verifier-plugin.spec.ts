@@ -139,7 +139,7 @@ test("if the registry list will not load, it still checks the credential, and sa
   expect(card.registry).toBe(NOT_LOOKED_UP);
   expect(card.severity).toBe('unchecked');
   expect(card.headline).toContain("We couldn't confirm who issued this");
-  expect(card.detail).toContain("Our list of known issuers didn't load");
+  expect(card.detail).toContain("our list of known issuers didn't load");
   // Not "not on our list": the issuer is on it, the list just didn't arrive
   expect(card.text).not.toContain('not on our list');
 });
@@ -151,7 +151,7 @@ test('if the registry list never answers, it checks without it after 10 seconds'
   const card = await verify(page, credential('verified'));
   expect(card.started).toBe(1);
   expect(card.registry).toBe(NOT_LOOKED_UP);
-  expect(card.detail).toContain("Our list of known issuers didn't load");
+  expect(card.detail).toContain("our list of known issuers didn't load");
 });
 
 test("if the registry list isn't a list, it reads as a list that didn't load", async ({ page }) => {
@@ -161,7 +161,7 @@ test("if the registry list isn't a list, it reads as a list that didn't load", a
   const card = await verify(page, credential('verified'));
   expect(card.started).toBe(1);
   expect(card.registry).toBe(NOT_LOOKED_UP);
-  expect(card.detail).toContain("Our list of known issuers didn't load");
+  expect(card.detail).toContain("our list of known issuers didn't load");
 });
 
 test('after the registry list fails, the next credential asks for it again', async ({ page }) => {
