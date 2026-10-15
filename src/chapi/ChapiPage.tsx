@@ -34,9 +34,11 @@ interface SpaceCollections {
 type Phase =
   | { step: 'starting' }
   | { step: 'not-signed-in' }
-  | { step: 'claiming' }
+  // `from` is the requesting site's host, named while the claim runs
+  | { step: 'claiming'; from: string }
   | { step: 'choose'; claim: ClaimResult; spaces: SpaceCollections[] }
-  | { step: 'saved'; name: string; collection: string }
+  // Display names, as the wallet shows them elsewhere, not storage ids
+  | { step: 'saved'; credential: string; collection: string; space: string }
   // The verifier-request flow: consent first (naming the requester up front),
   // then a picker over the credentials that match the request
   | { step: 'consent'; origin: string; reasons: string[] }
@@ -51,6 +53,15 @@ function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | und
     ['VerifiableCredentialApiExchangeService', 'UnmediatedPresentationService2021'].includes(s.type ?? '')
   );
   return service?.serviceEndpoint;
+}
+
+// The requesting origin's host ("issuer.example.org"), or '' when unknown.
+function hostOf(origin: string | undefined): string {
+  try {
+    return origin ? new URL(origin).host : '';
+  } catch {
+    return '';
+  }
 }
 
 // Sentinel select value: the user wants to type a new collection name.
@@ -116,7 +127,7 @@ export default function ChapiPage() {
                   return;
                 }
 
-                setPhase({ step: 'claiming' });
+                setPhase({ step: 'claiming', from: hostOf(event.credentialRequestOrigin) });
                 const claim = await runExchange(exchangeUrl);
                 claimRef.current = claim;
 
@@ -172,8 +183,12 @@ export default function ChapiPage() {
     try {
       // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
       const [spaceUrl, choice] = collectionId.split('|');
+      const space = phase.spaces.find((sp) => sp.spaceUrl === spaceUrl);
       let targetId = choice;
-      if (choice === NEW_COLLECTION) {
+      let collectionName: string;
+      if (choice !== NEW_COLLECTION) {
+        collectionName = space?.collections.find((c) => c.id === choice)?.name ?? choice;
+      } else {
         // Create the collection first, end-to-end encrypted like every new
         // credential collection; the id is the name with whitespace dashed
         // (it becomes a path segment).
@@ -181,6 +196,7 @@ export default function ChapiPage() {
         if (!name) {
           return;
         }
+        collectionName = name;
         const session = await getSessionWASClientFor(spaceUrl);
         const storedKeyPair = getSessionKey();
         if (!session || !storedKeyPair) {
@@ -195,16 +211,23 @@ export default function ChapiPage() {
           name,
         });
       }
-      const credentialName = (claimRef.current.credential.name as string) ?? 'credential';
-      const resourceName = `${credentialName.replace(/\s+/g, '-')}-${Date.now()}.json`;
-      const { id: savedId } = await saveCredential(targetId, resourceName, claimRef.current.envelope, spaceUrl);
+      // One name for both the stored file and the message: the display name,
+      // with whitespace and slashes dashed (it becomes a path segment)
+      const displayName = credentialName(claimRef.current.credential);
+      const resourceName = `${displayName.replace(/[\s/]+/g, '-')}-${Date.now()}.json`;
+      await saveCredential(targetId, resourceName, claimRef.current.envelope, spaceUrl);
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
         dataType: 'VerifiablePresentation',
         data: claimRef.current.envelope,
       });
-      setPhase({ step: 'saved', name: savedId, collection: targetId });
+      setPhase({
+        step: 'saved',
+        credential: displayName,
+        collection: collectionName,
+        space: space?.spaceName ?? '',
+      });
     } catch (err) {
       setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
     } finally {
@@ -309,6 +332,9 @@ export default function ChapiPage() {
     }
   }
 
+  // The issuer named on a just-received credential, for the save step
+  const receivedFrom = phase.step === 'choose' ? issuerName(phase.claim.credential) : null;
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-sm bg-white rounded-2xl shadow-md p-8">
@@ -327,13 +353,17 @@ export default function ChapiPage() {
           </div>
         )}
 
-        {phase.step === 'claiming' && <p className="text-sm"><LoadingLabel label="Proving ownership of your DID to the issuer…" /></p>}
+        {phase.step === 'claiming' && (
+          <p className="text-sm">
+            <LoadingLabel label={phase.from ? `Getting your credential from ${phase.from}…` : 'Getting your credential…'} />
+          </p>
+        )}
 
         {phase.step === 'choose' && (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              You received <span className="font-medium text-gray-800">{String(phase.claim.credential.name ?? 'a credential')}</span>,
-              issued to a new DID stored in your <span className="font-mono text-xs">dids</span> collection.
+              You received <span className="font-medium text-gray-800">{credentialName(phase.claim.credential)}</span>
+              {receivedFrom ? ` from ${receivedFrom}` : ''}.
             </p>
             <div>
               <label htmlFor="collection" className="block text-sm font-medium text-gray-700 mb-1">
@@ -385,7 +415,7 @@ export default function ChapiPage() {
         {phase.step === 'saved' && (
           <div>
             <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              Saved {phase.name} to {phase.collection}. You can close this window.
+              Saved {phase.credential} to {phase.collection}{phase.space ? ` in ${phase.space}` : ''}. You can close this window.
             </p>
             <button onClick={() => window.close()} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
               Done
