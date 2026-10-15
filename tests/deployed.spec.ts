@@ -151,6 +151,9 @@ test('shares a credential to LinkedIn', async ({ page }) => {
     expect(url.searchParams.get('startTask')).toBe('CERTIFICATION_NAME');
     expect(url.searchParams.get('name')).toBeTruthy();
     expect(url.searchParams.get('certUrl')).toContain('verifierplus.org');
+    // The seeded credential carries an id short enough for LinkedIn's field,
+    // so it reaches the form as the certification id.
+    expect(url.searchParams.get('certId')).toBeTruthy();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

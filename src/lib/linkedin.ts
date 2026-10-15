@@ -11,6 +11,7 @@ interface Achievement {
 }
 
 export interface CredentialLike {
+  id?: unknown;
   type?: unknown;
   name?: unknown;
   issuer?: unknown;
@@ -119,6 +120,24 @@ export function issuerImage(credential: CredentialLike): string | null {
   return null;
 }
 
+// LinkedIn's own limit on the certification id field; a longer credential id
+// is left out rather than truncated, since half an id identifies nothing.
+const CERT_ID_MAX_LENGTH = 80;
+
+// The credential's own id, when it fits LinkedIn's field. Null for a
+// credential without one (an id is optional on a VC).
+export function certificationId(credential: CredentialLike): string | null {
+  const id = credential.id;
+  if (typeof id !== 'string') {
+    return null;
+  }
+  const trimmed = id.trim();
+  if (!trimmed || trimmed.length > CERT_ID_MAX_LENGTH) {
+    return null;
+  }
+  return trimmed;
+}
+
 export function linkedinAddToProfileUrl({
   credential,
   certUrl,
@@ -141,6 +160,10 @@ export function linkedinAddToProfileUrl({
   if (expires) {
     params.set('expirationYear', String(expires.getFullYear()));
     params.set('expirationMonth', String(expires.getMonth() + 1));
+  }
+  const certId = certificationId(credential);
+  if (certId) {
+    params.set('certId', certId);
   }
   params.set('certUrl', certUrl);
   return `https://www.linkedin.com/profile/add?${params.toString()}`;
