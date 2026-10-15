@@ -42,11 +42,30 @@ test('omits an id longer than 80 characters rather than truncating it', () => {
   expect(certIdOf({ ...CREDENTIAL, id })).toBeNull();
 });
 
-test('leaves the rest of the form filled in either way', () => {
-  const url = new URL(
-    linkedinAddToProfileUrl({ credential: { ...CREDENTIAL, id: 'urn:uuid:1' }, certUrl: CERT_URL })
-  );
-  expect(url.searchParams.get('name')).toBe('Introduction to Verifiable Credentials');
-  expect(url.searchParams.get('organizationName')).toBe('DCC');
-  expect(url.searchParams.get('certUrl')).toBe(CERT_URL);
+test('omits an id that is blank or not a string', () => {
+  expect(certIdOf({ ...CREDENTIAL, id: '' })).toBeNull();
+  expect(certIdOf({ ...CREDENTIAL, id: '   ' })).toBeNull();
+  expect(certIdOf({ ...CREDENTIAL, id: 42 })).toBeNull();
+  expect(certIdOf({ ...CREDENTIAL, id: { id: 'urn:uuid:1' } })).toBeNull();
 });
+
+test('trims the id before measuring and sending it', () => {
+  const id = `urn:uuid:${'a'.repeat(80 - 'urn:uuid:'.length)}`;
+  expect(id).toHaveLength(80);
+  // Surrounding whitespace neither pushes it over the limit nor reaches LinkedIn
+  expect(certIdOf({ ...CREDENTIAL, id: `  ${id}  ` })).toBe(id);
+});
+
+for (const [label, id] of [
+  ['with an id', 'urn:uuid:1'],
+  ['without an id', undefined],
+  ['with an id over the limit', `urn:uuid:${'0123456789'.repeat(8)}`],
+] as const) {
+  test(`leaves the rest of the form filled in ${label}`, () => {
+    const url = new URL(linkedinAddToProfileUrl({ credential: { ...CREDENTIAL, id }, certUrl: CERT_URL }));
+    expect(url.searchParams.get('startTask')).toBe('CERTIFICATION_NAME');
+    expect(url.searchParams.get('name')).toBe('Introduction to Verifiable Credentials');
+    expect(url.searchParams.get('organizationName')).toBe('DCC');
+    expect(url.searchParams.get('certUrl')).toBe(CERT_URL);
+  });
+}

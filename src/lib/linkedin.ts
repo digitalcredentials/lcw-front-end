@@ -1,10 +1,12 @@
 // Builds LinkedIn's add-to-profile URL from a stored credential — the same
 // mechanism as the mobile wallet's "Add to LinkedIn Profile"
-// (learner-credential-wallet app/lib/publicLink.ts linkedinUrlFrom), with two
-// deliberate differences: every parameter is URL-encoded (the mobile version
-// concatenates raw values, which breaks a certUrl containing ? or #), and a
-// credential without an issuer name omits organizationName rather than
-// sending the literal string "undefined".
+// (learner-credential-wallet app/lib/publicLink.ts linkedinUrlFrom), with
+// three deliberate differences: every parameter is URL-encoded (the mobile
+// version concatenates raw values, which breaks a certUrl containing ? or #),
+// a credential without an issuer name omits organizationName rather than
+// sending the literal string "undefined", and the credential's own id fills
+// LinkedIn's Credential ID field (certId), which the mobile version leaves
+// blank.
 
 interface Achievement {
   name?: unknown;
