@@ -152,8 +152,10 @@ npm run dev
 
 `.env` points the app at the local back end; `.env.production` carries the
 deployed URLs (`VITE_API_BASE_URL` for lcw-back-end, `VITE_WAS_BASE_URL` for
-the WAS server's `/spaces`, `VITE_TEMPLATES_API_BASE`, `VITE_ISSUER_API_BASE`,
-and `VITE_STATUS_API_BASE` for the status list service). The full local stack
+the WAS server's `/spaces`, `VITE_TEMPLATES_API_BASE`, `VITE_ISSUER_API_BASE`
+for the test issuer that grants the welcome credential, `VITE_BATCH_API_BASE`
+for the batch issuer's notify endpoint, and `VITE_STATUS_API_BASE` for the
+status list service). The full local stack
 is:
 
 - **lcw-back-end** `sam local start-api --port 3001 ...` — the login API
