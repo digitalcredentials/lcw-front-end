@@ -196,6 +196,8 @@ export default function ShareCredentialModal({
   }
   // First click on Add to LinkedIn: load the credential and show the confirm
   // step, with warnings (expired, unnamed issuer) the user may proceed past.
+  // A verification problem is not repeated here: the banner above already
+  // shows it.
   async function startLinkedin() {
     setLinkedinBusy(true);
     setLinkError('');
@@ -207,9 +209,6 @@ export default function ShareCredentialModal({
         return;
       }
       const warnings: string[] = [];
-      if (typeof verification === 'object' && verification && !verification.ok) {
-        warnings.push(`This credential does not fully verify: ${verification.problems.join('; ')}.`);
-      }
       const expires = credentialExpiration(credential);
       if (expires && expires.getTime() < Date.now()) {
         warnings.push('This credential has expired.');
