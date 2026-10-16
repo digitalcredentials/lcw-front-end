@@ -1644,7 +1644,16 @@ export default function FileBrowserPage() {
           unsharing deletes the copy. The copy's id names its origin. */}
       {shareTarget && selected && (
         <ShareCredentialModal
-          resourceName={shareTarget.name ?? shareTarget.id}
+          // The credential's title, as the detail header shows it (Share opens
+          // from that view), else its card's: an encrypted collection's opaque
+          // storage name reaches the subtitle and the device share sheet only
+          // when neither is known
+          resourceName={
+            viewingSummary?.title
+            ?? summaries[`${selected.id}/${shareTarget.id}`]?.title
+            ?? shareTarget.name
+            ?? shareTarget.id
+          }
           resourceUrl={`${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${selected.id}--${shareTarget.id}`}
           onCheckPublic={async () => {
             const s = await session;
