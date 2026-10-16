@@ -40,7 +40,9 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   }
   const { verifiablePresentationRequest: vpr } = await vprResponse.json()
   if (!vpr?.challenge || !vpr?.domain) {
-    throw new Error('The issuer sent no DIDAuthentication challenge.')
+    // The message stays plain; the request itself is kept for diagnosis
+    console.warn('Exchange request is missing its challenge or domain:', vpr)
+    throw new Error("The issuer's request was incomplete, so the credential could not be collected.")
   }
 
   // 2. A fresh DID for this credential, kept in the space's dids collection
