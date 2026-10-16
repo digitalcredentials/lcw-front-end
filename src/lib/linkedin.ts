@@ -1,16 +1,19 @@
 // Builds LinkedIn's add-to-profile URL from a stored credential — the same
 // mechanism as the mobile wallet's "Add to LinkedIn Profile"
-// (learner-credential-wallet app/lib/publicLink.ts linkedinUrlFrom), with two
-// deliberate differences: every parameter is URL-encoded (the mobile version
-// concatenates raw values, which breaks a certUrl containing ? or #), and a
-// credential without an issuer name omits organizationName rather than
-// sending the literal string "undefined".
+// (learner-credential-wallet app/lib/publicLink.ts linkedinUrlFrom), with
+// three deliberate differences: every parameter is URL-encoded (the mobile
+// version concatenates raw values, which breaks a certUrl containing ? or #),
+// a credential without an issuer name omits organizationName rather than
+// sending the literal string "undefined", and the credential's own id fills
+// LinkedIn's Credential ID field (certId), which the mobile version leaves
+// blank.
 
 interface Achievement {
   name?: unknown;
 }
 
 export interface CredentialLike {
+  id?: unknown;
   type?: unknown;
   name?: unknown;
   issuer?: unknown;
@@ -119,6 +122,24 @@ export function issuerImage(credential: CredentialLike): string | null {
   return null;
 }
 
+// LinkedIn's own limit on the certification id field; a longer credential id
+// is left out rather than truncated, since half an id identifies nothing.
+const CERT_ID_MAX_LENGTH = 80;
+
+// The credential's own id, when it fits LinkedIn's field. Null for a
+// credential without one (an id is optional on a VC).
+export function certificationId(credential: CredentialLike): string | null {
+  const id = credential.id;
+  if (typeof id !== 'string') {
+    return null;
+  }
+  const trimmed = id.trim();
+  if (!trimmed || trimmed.length > CERT_ID_MAX_LENGTH) {
+    return null;
+  }
+  return trimmed;
+}
+
 export function linkedinAddToProfileUrl({
   credential,
   certUrl,
@@ -141,6 +162,10 @@ export function linkedinAddToProfileUrl({
   if (expires) {
     params.set('expirationYear', String(expires.getFullYear()));
     params.set('expirationMonth', String(expires.getMonth() + 1));
+  }
+  const certId = certificationId(credential);
+  if (certId) {
+    params.set('certId', certId);
   }
   params.set('certUrl', certUrl);
   return `https://www.linkedin.com/profile/add?${params.toString()}`;
