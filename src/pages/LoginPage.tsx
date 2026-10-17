@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
+import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
 import { setToken, setSpaceUrl, setSessionKey, setCoupon, setEmail as storeEmail } from '../lib/auth';
 import { login } from '../lib/login';
@@ -80,16 +81,7 @@ export default function LoginPage() {
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
               Password
             </label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
+            <PasswordInput id="password" autoComplete="current-password" value={password} onChange={setPassword} />
           </div>
 
           {error && (
@@ -110,7 +102,7 @@ export default function LoginPage() {
         <p className="mt-5 text-sm text-gray-500 text-center">
           Need an account?{' '}
           <Link to="/register" className="text-indigo-600 hover:text-indigo-700 font-medium">
-            Register
+            Create one
           </Link>
         </p>
         </div>
