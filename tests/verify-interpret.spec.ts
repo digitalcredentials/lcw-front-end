@@ -31,6 +31,19 @@ test('a failed check yields its problem text', () => {
     'the signature is invalid',
     'the issuer is not in a known registry',
   ]);
+  expect(result.failed).toEqual(['valid_signature', 'registered_issuer']);
+  expect(result.signatureValid).toBe(false);
+});
+
+test('a passing signature is reported alongside other failures', () => {
+  const result = interpretVerification({
+    log: [
+      { id: 'valid_signature', valid: true },
+      { id: 'expiration', valid: false },
+    ],
+  });
+  expect(result.failed).toEqual(['expiration']);
+  expect(result.signatureValid).toBe(true);
 });
 
 test('an unreachable status list is unchecked, not a failure', () => {
@@ -50,6 +63,7 @@ test('a fatal error reports its message and fails', () => {
   });
   expect(result.ok).toBe(false);
   expect(result.problems).toEqual(['The credential carries no proof.']);
+  expect(result.failed).toEqual(['fatal']);
 });
 
 test('an empty or missing log does not count as verified', () => {

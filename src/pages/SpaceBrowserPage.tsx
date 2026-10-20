@@ -9,6 +9,7 @@ import LoadingLabel from '../components/LoadingLabel';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
+import { createPublicCopy, findPublicCopy, removePublicCopies } from '../lib/publicCopy';
 import JSONInput from '../components/JSONInput';
 import { plugins, useWalletHost } from '../plugins';
 import {
@@ -1641,12 +1642,13 @@ export default function FileBrowserPage() {
 
       {/* Sharing publishes a plaintext copy in the space's dedicated public
           collection (a world-readable ciphertext would be useless), and
-          unsharing deletes the copy. The copy's id names its origin. */}
+          taking the link down deletes it. Each share gets a new copy id, so
+          a link taken down stays down (lib/publicCopy.ts). */}
       {shareTarget && selected && (
         <ShareCredentialModal
           // The credential's title, as the detail header shows it (Share opens
           // from that view), else its card's: an encrypted collection's opaque
-          // storage name reaches the subtitle and the device share sheet only
+          // storage name reaches the heading and the device share sheet only
           // when neither is known
           resourceName={
             viewingSummary?.title
@@ -1654,16 +1656,14 @@ export default function FileBrowserPage() {
             ?? shareTarget.name
             ?? shareTarget.id
           }
-          resourceUrl={`${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${selected.id}--${shareTarget.id}`}
-          onCheckPublic={async () => {
+          onFindPublicLink={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            return s.client.space(s.spaceId)
-              .collection('public', { encryption: 'plaintext' })
-              .resource(`${selected.id}--${shareTarget.id}`)
-              .isPublic();
+            const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
+            const publicId = await findPublicCopy(pub, selected.id, shareTarget.id);
+            return publicId ? `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}` : null;
           }}
           onCreatePublicLink={async () => {
             const s = await session;
@@ -1673,12 +1673,10 @@ export default function FileBrowserPage() {
             // The decrypted (or plaintext) body, copied into the public
             // collection; only that copy becomes world-readable, so the
             // source collection and its members stay private
-            const publicId = `${selected.id}--${shareTarget.id}`;
             const data = await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).get();
             const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
-            await pub.put(publicId, body as ResourceData);
-            await pub.resource(publicId).setPublic();
+            const publicId = await createPublicCopy(pub, selected.id, shareTarget.id, body as ResourceData);
             return `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}`;
           }}
           onUnshare={async () => {
@@ -1686,11 +1684,8 @@ export default function FileBrowserPage() {
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            // Removes the public copy entirely: its policy, then the copy
-            const publicId = `${selected.id}--${shareTarget.id}`;
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
-            await pub.resource(publicId).clearPolicy();
-            await pub.resource(publicId).delete().catch(() => undefined);
+            await removePublicCopies(pub, selected.id, shareTarget.id);
           }}
           onLoadCredential={async () => {
             const s = await session;
