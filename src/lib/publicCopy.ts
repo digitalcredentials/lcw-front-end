@@ -50,12 +50,14 @@ async function copyIds(pub: Collection, collectionId: string, credentialId: stri
 // The id of the credential's current public copy, or null when it is not
 // shared. A copy without a public policy is not a working link, so it does not
 // count. Only one copy should be public at a time; should an earlier failure
-// have left two, a new-style copy wins over an old one.
+// have left two, a new-style copy wins over an old one. Throws when it cannot
+// tell: reporting a live link as "not shared" would hide it from the person
+// who shared it, and sharing again would publish a second one.
 export async function findPublicCopy(
   pub: Collection, collectionId: string, credentialId: string
 ): Promise<string | null> {
   const ids = await copyIds(pub, collectionId, credentialId);
-  const flags = await Promise.all(ids.map((id) => pub.resource(id).isPublic().catch(() => false)));
+  const flags = await Promise.all(ids.map((id) => pub.resource(id).isPublic()));
   const live = ids.filter((_, i) => flags[i]);
   return live.find((id) => !isLegacyPublicCopyId(id, collectionId, credentialId)) ?? live[0] ?? null;
 }
@@ -77,15 +79,20 @@ export async function createPublicCopy(
   return id;
 }
 
-// Takes every copy of the credential down, old-style and new: its policy
-// first, so the link stops working even if the delete then fails, then the
-// copy itself.
+// Takes every copy of the credential down, old-style and new: every policy
+// first, so each link stops working even if a delete then fails, then the
+// copies themselves. One failure does not stop the rest being taken down; the
+// first policy failure is thrown once everything else has been tried.
 export async function removePublicCopies(
   pub: Collection, collectionId: string, credentialId: string
 ): Promise<void> {
   const ids = await copyIds(pub, collectionId, credentialId);
-  for (const id of ids) {
-    await pub.resource(id).clearPolicy();
-    await pub.resource(id).delete().catch(() => undefined);
+  const cleared = await Promise.allSettled(ids.map((id) => pub.resource(id).clearPolicy()));
+  await Promise.allSettled(
+    ids.filter((_, i) => cleared[i].status === 'fulfilled').map((id) => pub.resource(id).delete())
+  );
+  const failed = cleared.find((result) => result.status === 'rejected');
+  if (failed) {
+    throw failed.reason;
   }
 }

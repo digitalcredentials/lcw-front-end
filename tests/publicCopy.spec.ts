@@ -16,7 +16,10 @@ const UUID = '0b5e2c7a-3f41-4d8e-9c2b-6a1f0e9d8c7b';
 
 // The parts of a Collection the helpers use: list, put, and a resource handle
 // with isPublic / setPublic / clearPolicy / delete.
-function fakeCollection(initial: Record<string, boolean> = {}, { failSetPublic = false } = {}) {
+function fakeCollection(
+  initial: Record<string, boolean> = {},
+  { failSetPublic = false, failFor = '' }: { failSetPublic?: boolean; failFor?: string } = {}
+) {
   const resources = new Map(Object.entries(initial));
   const collection = {
     async list() {
@@ -28,6 +31,9 @@ function fakeCollection(initial: Record<string, boolean> = {}, { failSetPublic =
     resource(id: string) {
       return {
         async isPublic() {
+          if (id === failFor) {
+            throw new Error('policy read failed');
+          }
           return resources.get(id) === true;
         },
         async setPublic() {
@@ -37,6 +43,9 @@ function fakeCollection(initial: Record<string, boolean> = {}, { failSetPublic =
           resources.set(id, true);
         },
         async clearPolicy() {
+          if (id === failFor) {
+            throw new Error('clearPolicy failed');
+          }
           if (resources.has(id)) {
             resources.set(id, false);
           }
@@ -118,4 +127,18 @@ test('a copy that cannot be made public is deleted again', async () => {
   const { pub, resources } = fakeCollection({}, { failSetPublic: true });
   await expect(createPublicCopy(pub, 'Employment', 'z1A2j', {})).rejects.toThrow('setPublic failed');
   expect(resources.size).toBe(0);
+});
+
+test('a copy whose policy cannot be read is an error, not "not shared"', async () => {
+  const { pub } = fakeCollection({ [`Employment--z1A2j--${UUID}`]: true }, { failFor: `Employment--z1A2j--${UUID}` });
+  await expect(findPublicCopy(pub, 'Employment', 'z1A2j')).rejects.toThrow('policy read failed');
+});
+
+test('one copy failing to come down does not leave the others up', async () => {
+  const { pub, resources } = fakeCollection(
+    { 'Employment--z1A2j': true, [`Employment--z1A2j--${UUID}`]: true },
+    { failFor: 'Employment--z1A2j' }
+  );
+  await expect(removePublicCopies(pub, 'Employment', 'z1A2j')).rejects.toThrow('clearPolicy failed');
+  expect([...resources.keys()]).toEqual(['Employment--z1A2j']);
 });

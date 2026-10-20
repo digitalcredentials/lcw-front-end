@@ -38,6 +38,8 @@ const SWITCH_LEAD: Record<SendAction, string> = {
   apps: 'To send it with another app',
 };
 
+const LOOKUP_FAILED = 'Could not find out who can see it. Close this and try again.';
+
 const NO_ISSUER =
   "This credential does not name its issuer, so LinkedIn's issuing organization field will be left blank.";
 
@@ -58,8 +60,13 @@ export default function ShareCredentialModal({
   resourceName, onFindPublicLink, onCreatePublicLink, onUnshare, onLoadCredential, onClose,
 }: ShareCredentialModalProps) {
   const ids = useId();
-  // null while the dialog finds out whether the credential is shared
+  // null while the dialog finds out whether the credential is shared, and
+  // when it could not find out
   const [visibility, setVisibility] = useState<Visibility | null>(null);
+  // The lookup failed. Nothing can be changed until the dialog is reopened:
+  // assuming private would let a share publish a second link while the
+  // first stays live and out of sight.
+  const [lookupFailed, setLookupFailed] = useState(false);
   // The choice shown while a switch is under way; on failure it falls back
   // to `visibility`, which only changes once the switch has worked
   const [pending, setPending] = useState<Visibility | null>(null);
@@ -96,8 +103,8 @@ export default function ShareCredentialModal({
       })
       .catch((err) => {
         if (!cancelled) {
-          setVisibility('private');
-          setVisError(errorText(err, 'Could not find out whether it is shared.'));
+          setLookupFailed(true);
+          setVisError(errorText(err, LOOKUP_FAILED));
         }
       });
     return () => {
@@ -190,6 +197,20 @@ export default function ShareCredentialModal({
       setVisMessage('Link taken down. If you share it again, it will get a new link.');
     } catch (err) {
       setVisError(errorText(err, 'Could not take the link down.'));
+      // Some copies may be down and others not: show what is actually live
+      try {
+        const url = await onFindPublicLink();
+        setPublicLink(url);
+        setVisibility(url ? 'public' : 'private');
+        if (!url) {
+          setQrImage(null);
+        }
+      } catch {
+        setVisibility(null);
+        setPublicLink(null);
+        setQrImage(null);
+        setLookupFailed(true);
+      }
     } finally {
       setPending(null);
       setBusy(false);
@@ -339,7 +360,9 @@ export default function ShareCredentialModal({
   const canDeviceShare = typeof navigator.share === 'function';
 
   const shown = pending ?? visibility;
-  const checking = visibility === null;
+  const checking = visibility === null && !lookupFailed;
+  // Nothing can change who can see it until the dialog knows
+  const unknown = visibility === null;
   const isPublic = visibility === 'public' && publicLink !== null;
 
   const issuer = credential ? issuerName(credential) : null;
@@ -378,34 +401,38 @@ export default function ShareCredentialModal({
           </button>
         </div>
 
-        {verification === 'checking' && (
-          <p className="text-xs text-gray-400 px-3 py-2">Checking this credential…</p>
-        )}
-        {status && (
-          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-1.5">
-            <p>
-              {status.line}{' '}
-              <button
-                onClick={() => setWhy(!why)}
-                aria-expanded={why}
-                aria-controls={`${ids}-why`}
-                className="font-semibold underline underline-offset-2"
-              >
-                {why ? 'Hide' : 'Why?'}
-              </button>
-            </p>
-            {why && (
-              <div id={`${ids}-why`} className="text-gray-700 space-y-1.5">
-                {status.list.length > 0 && (
-                  <ul className="list-disc pl-4 space-y-1">
-                    {status.list.map((item) => <li key={item}>{item}</li>)}
-                  </ul>
-                )}
-                <p>{status.detail}</p>
-              </div>
-            )}
-          </div>
-        )}
+        {/* Announced when the check finishes, since the dialog is already
+            open by then */}
+        <div aria-live="polite">
+          {verification === 'checking' && (
+            <p className="text-xs text-gray-400 px-3 py-2">Checking this credential…</p>
+          )}
+          {status && (
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-1.5">
+              <p>
+                {status.line}{' '}
+                <button
+                  onClick={() => setWhy(!why)}
+                  aria-expanded={why}
+                  aria-controls={`${ids}-why`}
+                  className="font-semibold underline underline-offset-2"
+                >
+                  {why ? 'Hide' : 'Why?'}
+                </button>
+              </p>
+              {why && (
+                <div id={`${ids}-why`} className="text-gray-700 space-y-1.5">
+                  {status.list.length > 0 && (
+                    <ul className="list-disc pl-4 space-y-1">
+                      {status.list.map((item) => <li key={item}>{item}</li>)}
+                    </ul>
+                  )}
+                  <p>{status.detail}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Two toggle buttons, not radios: a radio group changes selection
             on the arrow keys, which would share the credential or open the
@@ -422,7 +449,7 @@ export default function ShareCredentialModal({
             description="Nobody else can open it."
             pressed={shown === 'private'}
             target={question?.kind === 'takeDown'}
-            disabled={checking || busy}
+            disabled={unknown || busy}
             onClick={chooseOnlyYou}
           />
           <VisibilityOption
@@ -431,7 +458,7 @@ export default function ShareCredentialModal({
             description="They see the credential and the result of checking it."
             pressed={shown === 'public'}
             target={question?.kind === 'switch'}
-            disabled={checking || busy}
+            disabled={unknown || busy}
             onClick={chooseAnyone}
           />
         </div>
@@ -497,7 +524,7 @@ export default function ShareCredentialModal({
 
         <div className="space-y-2">
           <h3 className="text-sm font-semibold text-gray-800">Send it</h3>
-          {!isPublic && !checking && (
+          {visibility === 'private' && (
             <p className="text-xs text-gray-500">
               Sending switches it to <b className="text-gray-700">Anyone with the link</b>. We'll ask first.
             </p>
@@ -506,14 +533,14 @@ export default function ShareCredentialModal({
             <SendButton
               ref={(el) => { sendRefs.current.linkedin = el; }}
               onClick={() => send('linkedin')}
-              disabled={checking || busy || credential === undefined}
+              disabled={unknown || busy || credential === undefined}
               icon={LINKEDIN_ICON}
               label="LinkedIn"
             />
             <SendButton
               ref={(el) => { sendRefs.current.qr = el; }}
               onClick={() => send('qr')}
-              disabled={checking || busy}
+              disabled={unknown || busy}
               pressed={qrImage !== null}
               icon={QR_ICON}
               label={qrImage ? 'Hide QR' : 'QR code'}
@@ -522,7 +549,7 @@ export default function ShareCredentialModal({
               <SendButton
                 ref={(el) => { sendRefs.current.apps = el; }}
                 onClick={() => send('apps')}
-                disabled={checking || busy}
+                disabled={unknown || busy}
                 icon={APPS_ICON}
                 label="Other apps"
               />
