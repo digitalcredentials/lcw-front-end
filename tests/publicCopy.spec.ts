@@ -92,8 +92,14 @@ test('taking it down leaves other credentials shared', async () => {
   expect([...resources.keys()]).toEqual(['Employment--z1A2j--other']);
 });
 
-test('a copy that cannot be made public is deleted again', async () => {
-  const { pub, resources } = fakeCollection({}, { failSetPublic: true });
+test('a share that cannot be made public fails, and does not count as shared', async () => {
+  const { pub } = fakeCollection({}, { failSetPublic: true });
   await expect(createPublicCopy(pub, 'Employment', 'z1A2j', {})).rejects.toThrow('setPublic failed');
-  expect(resources.size).toBe(0);
+  expect(await findPublicCopy(pub, 'Employment', 'z1A2j')).toBeNull();
+});
+
+test('a failed share does not delete a copy that was already live', async () => {
+  const { pub, resources } = fakeCollection({ 'Employment--z1A2j': true }, { failSetPublic: true });
+  await expect(createPublicCopy(pub, 'Employment', 'z1A2j', {})).rejects.toThrow('setPublic failed');
+  expect(resources.get('Employment--z1A2j')).toBe(true);
 });

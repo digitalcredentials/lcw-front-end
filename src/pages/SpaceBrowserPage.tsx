@@ -734,6 +734,10 @@ export default function FileBrowserPage() {
     ? (selected ? resources.length === 0 : collections.length === 0)
     : (spaces ?? []).length === 0;
 
+  // A shared credential's public URL. Finding and creating the link both build
+  // it here, so sharing again shows the same link the learner already has.
+  const publicCopyUrl = (publicId: string) => `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}`;
+
   return (
     <AppShell>
       <div>
@@ -1664,7 +1668,7 @@ export default function FileBrowserPage() {
             }
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
             const publicId = await findPublicCopy(pub, selected.id, shareTarget.id);
-            return publicId ? `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}` : null;
+            return publicId ? publicCopyUrl(publicId) : null;
           }}
           onCreatePublicLink={async () => {
             const s = await session;
@@ -1678,7 +1682,7 @@ export default function FileBrowserPage() {
             const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
             const publicId = await createPublicCopy(pub, selected.id, shareTarget.id, body as ResourceData);
-            return `${activeSpace?.url ?? getSpaceUrl() ?? ''}/public/${publicId}`;
+            return publicCopyUrl(publicId);
           }}
           onUnshare={async () => {
             const s = await session;

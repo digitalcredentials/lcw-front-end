@@ -166,11 +166,42 @@ export default function ShareCredentialModal({
     }
   }, [focusAfter, busy]);
 
+  // Not while a share or take-down is running: its result, including a
+  // failure, would never be shown
+  function close() {
+    if (!busy) {
+      onClose();
+    }
+  }
+
   function clearMessages() {
     setVisMessage('');
     setVisError('');
     setSendNotice('');
     setSendError('');
+  }
+
+  // After a share or take-down failed: find out what is actually live, so the
+  // dialog shows that rather than what was attempted. Resolves to the live
+  // link, or null; if even that fails, nothing can change until the dialog is
+  // reopened.
+  async function recheck(): Promise<string | null> {
+    try {
+      const url = await onFindPublicLink();
+      setPublicLink(url);
+      setVisibility(url ? 'public' : 'private');
+      if (!url) {
+        setQrImage(null);
+      }
+      return url;
+    } catch {
+      setVisibility(null);
+      setPublicLink(null);
+      setQrImage(null);
+      setLookupFailed(true);
+      setVisError(LOOKUP_FAILED);
+      return null;
+    }
   }
 
   async function makePublic(): Promise<string | null> {
@@ -184,7 +215,13 @@ export default function ShareCredentialModal({
       return url;
     } catch (err) {
       setVisError(errorText(err, 'Could not create the link.'));
-      return null;
+      // The share may have gone through with only its reply lost
+      const live = await recheck();
+      if (live) {
+        setVisError('');
+        setVisMessage('Anyone with the link can now see it.');
+      }
+      return live;
     } finally {
       setPending(null);
       setBusy(false);
@@ -204,20 +241,8 @@ export default function ShareCredentialModal({
       setVisMessage('Link taken down. If you share it again, the same link will work again.');
     } catch (err) {
       setVisError(errorText(err, 'Could not take the link down.'));
-      // Some copies may be down and others not: show what is actually live
-      try {
-        const url = await onFindPublicLink();
-        setPublicLink(url);
-        setVisibility(url ? 'public' : 'private');
-        if (!url) {
-          setQrImage(null);
-        }
-      } catch {
-        setVisibility(null);
-        setPublicLink(null);
-        setQrImage(null);
-        setLookupFailed(true);
-      }
+      // The take-down may have gone through with only its reply lost
+      await recheck();
     } finally {
       setPending(null);
       setBusy(false);
@@ -245,10 +270,15 @@ export default function ShareCredentialModal({
       return;
     }
     const href = linkedinAddToProfileUrl({ credential, certUrl: verifierLinkFor(url) });
+    const opened = tab ?? window.open(href, '_blank');
+    if (!opened) {
+      // Blocked as a popup: the link exists now, so a second click opens it
+      setSendNotice("It's ready to send. Click LinkedIn again.");
+      return;
+    }
+    opened.opener = null;
     if (tab) {
       tab.location.href = href;
-    } else {
-      window.open(href, '_blank', 'noopener');
     }
   }
 
@@ -385,7 +415,7 @@ export default function ShareCredentialModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         role="dialog"
@@ -400,7 +430,8 @@ export default function ShareCredentialModal({
             {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
           </div>
           <button
-            onClick={onClose}
+            onClick={close}
+            disabled={busy}
             aria-label="Close"
             className="shrink-0 w-8 h-8 rounded-md text-xl leading-none text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
           >

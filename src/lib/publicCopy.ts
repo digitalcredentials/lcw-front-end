@@ -26,19 +26,15 @@ export async function findPublicCopy(
 }
 
 // Publishes the credential's body as its public copy and makes it
-// world-readable. Resolves to the copy's id. If the copy cannot be made
-// public, it is deleted again, so a failed share leaves nothing behind.
+// world-readable. Resolves to the copy's id. A failure is not rolled back:
+// with one fixed id, deleting could take down a copy that was already live
+// (shared from another tab), and a copy that is not public is no link at all.
 export async function createPublicCopy(
   pub: Collection, collectionId: string, credentialId: string, body: Parameters<Collection['put']>[1]
 ): Promise<string> {
   const id = publicCopyId(collectionId, credentialId);
   await pub.put(id, body);
-  try {
-    await pub.resource(id).setPublic();
-  } catch (err) {
-    await pub.resource(id).delete().catch(() => undefined);
-    throw err;
-  }
+  await pub.resource(id).setPublic();
   return id;
 }
 
