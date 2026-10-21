@@ -7,7 +7,7 @@ import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
-import { describeError, isSessionEnded, UnreadableCredentialError, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, UnreadableCredentialError, type Failure, type WalletAction } from '../lib/errors';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
@@ -130,15 +130,15 @@ export default function FileBrowserPage() {
   const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
   const host = useWalletHost();
 
-  // Turns a failed request into either a redirect to login or a plain
-  // sentence (src/lib/errors.ts), shown on the page or, given its setter, in
-  // the dialog the action came from.
+  // Turns a failed request into either a redirect to login (no session at
+  // all) or a plain sentence (src/lib/errors.ts), shown on the page or, given
+  // its setter, in the dialog the action came from.
   const handleError = useCallback((
     action: WalletAction,
     err: unknown,
     show: (failure: Failure) => void = setError,
   ) => {
-    if (isSessionEnded(err)) {
+    if (err instanceof Error && err.message === 'UNAUTHORIZED') {
       clearToken();
       navigate('/login', { replace: true });
     } else {
@@ -865,13 +865,14 @@ export default function FileBrowserPage() {
 
         {!loading && error && (
           <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-            <FailureText failure={error} />
-            <button
-              onClick={retry}
-              className="ml-3 underline hover:no-underline"
-            >
-              Retry
-            </button>
+            <FailureText failure={error}>
+              <button
+                onClick={retry}
+                className="ml-3 underline hover:no-underline"
+              >
+                Retry
+              </button>
+            </FailureText>
           </div>
         )}
 

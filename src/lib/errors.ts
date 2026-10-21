@@ -96,19 +96,21 @@ function readFailure(error: unknown): { status?: number; name?: string; message?
 }
 
 // A signed-out session: the wallet's own code throws Error('UNAUTHORIZED')
-// when the session is missing, and the server answers 401. Retrying cannot
-// help; signing in can.
-export function isSessionEnded(error: unknown): boolean {
+// when the session is missing (handleError sends the person to sign in), and
+// the server answers 401. Retrying cannot help; signing in can.
+function isSessionEnded(error: unknown): boolean {
   const { status, message } = readFailure(error)
   return status === 401 || message === 'UNAUTHORIZED'
 }
 
-// No answer from the server at all: fetch's TypeError ("Failed to fetch",
-// "Load failed", "NetworkError…"), or the HTTP client's timeout.
+// No answer from the server at all: the browser's fetch failure ("Failed to
+// fetch", Safari's "Load failed", Firefox's "NetworkError…"), which the WAS
+// client wraps as the cause of a status-less WasError, or the HTTP client's
+// timeout. A TypeError from the wallet's own code is not one of these.
 function isUnreachable(error: unknown): boolean {
-  const { status, name, message, causeName } = readFailure(error)
+  const { status, message, causeName } = readFailure(error)
   return status === undefined
-    && (name === 'TypeError' || causeName === 'TypeError' || /timed out|Failed to fetch/i.test(message ?? ''))
+    && (causeName === 'TypeError' || /Failed to fetch|Load failed|NetworkError|timed out/i.test(message ?? ''))
 }
 
 // The technical text behind a failure, for the details toggle.
@@ -119,6 +121,10 @@ function technicalDetail(error: unknown): string {
     .filter(Boolean)
     .join(' ')
 }
+
+// The actions on one credential, where "its contents" and "moved or deleted"
+// name the thing the person was acting on.
+const ON_A_CREDENTIAL = new Set<WalletAction>(['open', 'delete', 'restore', 'move'])
 
 // Turns a failure into a sentence saying what failed and what the person can
 // do, and logs the raw error so the detail is not lost.
@@ -137,13 +143,15 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   if (name === 'CollectionExistsError' && action === 'create-collection') {
     return { text: 'You already have a collection with this name. Choose a different name.', detail }
   }
-  if (name !== undefined && UNREADABLE.has(name)) {
+  if (ON_A_CREDENTIAL.has(action) && name !== undefined && UNREADABLE.has(name)) {
     return { text: `${FAILED[action]} Its contents couldn't be read. Try again, or add the credential again if this keeps happening.`, detail }
   }
-  if (status === 404 || name === 'NotFoundError') {
+  if ((ON_A_CREDENTIAL.has(action) || action === 'load-credentials') && (status === 404 || name === 'NotFoundError')) {
     return { text: `${FAILED[action]} It may have been moved or deleted. Refresh to see what's there now.`, detail }
   }
-  if ((status !== undefined && status >= 500) || name === 'WasServerError') {
+  // A server fault that may pass; 501 (not supported) and 507 (storage full)
+  // will not, so they are not offered a wait.
+  if ((status !== undefined && status >= 500 && status !== 501 && status !== 507) || name === 'WasServerError') {
     return { text: `${FAILED[action]} Your storage isn't responding right now. Try again in a few minutes.`, detail }
   }
   return { text: `${FAILED[action]} Please try again.`, detail }
