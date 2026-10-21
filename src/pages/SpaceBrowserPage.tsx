@@ -9,7 +9,7 @@ import LoadingLabel from '../components/LoadingLabel';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
-import { createPublicCopy, findPublicCopy, removePublicCopies } from '../lib/publicCopy';
+import { createPublicCopy, findPublicCopy, removePublicCopy } from '../lib/publicCopy';
 import JSONInput from '../components/JSONInput';
 import { plugins, useWalletHost } from '../plugins';
 import {
@@ -1642,8 +1642,9 @@ export default function FileBrowserPage() {
 
       {/* Sharing publishes a plaintext copy in the space's dedicated public
           collection (a world-readable ciphertext would be useless), and
-          taking the link down deletes it. Each share gets a new copy id, so
-          a link taken down stays down (lib/publicCopy.ts). */}
+          taking the link down deletes it. The copy's id is fixed for the
+          credential, so sharing again brings the same link back
+          (lib/publicCopy.ts). */}
       {shareTarget && selected && (
         <ShareCredentialModal
           // The credential's title, as the detail header shows it (Share opens
@@ -1685,7 +1686,7 @@ export default function FileBrowserPage() {
               throw new Error('Your session has expired. Sign in again.');
             }
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
-            await removePublicCopies(pub, selected.id, shareTarget.id);
+            await removePublicCopy(pub, selected.id, shareTarget.id);
           }}
           onLoadCredential={async () => {
             const s = await session;

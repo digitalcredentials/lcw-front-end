@@ -15,9 +15,9 @@ interface ShareCredentialModalProps {
   resourceName: string;
   // The credential's current public URL, or null when it is not shared
   onFindPublicLink: () => Promise<string | null>;
-  // Publishes a new public copy, with a new link, and resolves to its URL
+  // Publishes the public copy and resolves to its URL; the same URL each time
   onCreatePublicLink: () => Promise<string>;
-  // Takes every public copy down, so every link to it stops working
+  // Takes the public copy down, so the link stops working until it is shared again
   onUnshare: () => Promise<void>;
   // Fetches the stored resource body (envelope or bare credential), for the
   // heading, the pre-share check and LinkedIn's add-to-profile form
@@ -49,8 +49,15 @@ function verifierLinkFor(publicUrl: string): string {
   return `https://verifierplus.org/#verify?vc=${publicUrl}`;
 }
 
+// The one error the page's callbacks write for the learner
+// (SpaceBrowserPage.tsx); every other error is the storage client's own text
+const SESSION_EXPIRED = 'Your session has expired. Sign in again.';
+
+// The plain message to show, with the raw error kept in the console for
+// debugging. #158 will replace this with the wallet-wide error mapping.
 function errorText(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
+  console.error(err);
+  return err instanceof Error && err.message === SESSION_EXPIRED ? SESSION_EXPIRED : fallback;
 }
 
 const SECONDARY_BUTTON =
@@ -194,7 +201,7 @@ export default function ShareCredentialModal({
       setVisibility('private');
       setPublicLink(null);
       setQrImage(null);
-      setVisMessage('Link taken down. If you share it again, it will get a new link.');
+      setVisMessage('Link taken down. If you share it again, the same link will work again.');
     } catch (err) {
       setVisError(errorText(err, 'Could not take the link down.'));
       // Some copies may be down and others not: show what is actually live

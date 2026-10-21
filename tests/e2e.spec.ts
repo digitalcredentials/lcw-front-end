@@ -4,7 +4,7 @@ import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
 import { WasClient, type ResourceData } from '@interop/was-client';
 import { deriveKeyPair } from '../src/lib/login';
-import { removePublicCopies } from '../src/lib/publicCopy';
+import { removePublicCopy } from '../src/lib/publicCopy';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -291,10 +291,11 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
   await expect(page.locator('section[aria-label="Credential verification"]')).toBeHidden();
 });
 
-// Sharing. Each share publishes a copy of the credential under a new id in the
-// space's public collection (src/lib/publicCopy.ts). These helpers reach the
-// demo space directly, signed with the demo key, to plant an old-style copy and
-// to clean up whatever a failed test left behind.
+// Sharing. Sharing publishes a copy of the credential in the space's public
+// collection under a fixed id, so sharing again brings the same link back
+// (src/lib/publicCopy.ts). These helpers reach the demo space directly, signed
+// with the demo key, to plant a copy shared before the dialog opens and to
+// clean up whatever a failed test left behind.
 const DEMO_SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
 const DEMO_SPACE_URL = `http://localhost:3000/space/${DEMO_SPACE_ID}`;
 const VERIFIER_PREFIX = 'https://verifierplus.org/#verify?vc=';
@@ -317,7 +318,7 @@ async function lcwExperienceId(): Promise<string> {
 
 async function takeDownLcwExperience() {
   const pub = (await demoSpace()).collection('public', { encryption: 'plaintext' });
-  await removePublicCopies(pub, 'UniversityOfToronto', await lcwExperienceId());
+  await removePublicCopy(pub, 'UniversityOfToronto', await lcwExperienceId());
 }
 
 async function openShareDialog(page: Page): Promise<Locator> {
@@ -359,7 +360,7 @@ test.describe('sharing', () => {
     await expect(modal.getByRole('status').filter({ hasText: 'Anyone with the link can now see it.' })).toBeVisible();
     await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
     const first = await directLink(modal);
-    expect(first).toMatch(new RegExp(`^${DEMO_SPACE_URL}/public/UniversityOfToronto--LCWExperience[^/]*--[0-9a-f-]{36}$`));
+    expect(first).toBe(`${DEMO_SPACE_URL}/public/UniversityOfToronto--${await lcwExperienceId()}`);
     await expect(modal.getByText('Direct link to the credential file')).toBeVisible();
 
     // the link works without any authorization
@@ -387,23 +388,21 @@ test.describe('sharing', () => {
     await option(modal, 'Only you').click();
     await modal.getByRole('button', { name: 'Take it down' }).click();
     await expect(modal.getByRole('status').filter({
-      hasText: 'Link taken down. If you share it again, it will get a new link.',
+      hasText: 'Link taken down. If you share it again, the same link will work again.',
     })).toBeVisible();
     await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
     await expect(modal.getByLabel('Link to share')).toHaveCount(0);
     expect((await page.request.get(first)).status()).not.toBe(200);
 
-    // sharing again gives a different link, and the old one stays down
+    // sharing again brings the same link back, and it works again
     await option(modal, 'Anyone with the link').click();
     await expect(modal.getByLabel('Link to share')).toBeVisible();
-    const second = await directLink(modal);
-    expect(second).not.toBe(first);
-    expect((await page.request.get(second)).status()).toBe(200);
-    expect((await page.request.get(first)).status()).not.toBe(200);
+    expect(await directLink(modal)).toBe(first);
+    expect((await page.request.get(first)).status()).toBe(200);
   });
 
-  test('a credential shared under the old fixed id shows its link and can be taken down', async ({ page }) => {
-    // plant a copy the way the wallet shared before each share got a new id
+  test('a credential shared before the dialog opens shows its link and can be taken down', async ({ page }) => {
+    // plant a copy the way the wallet before this dialog shared, at the same id
     const space = await demoSpace();
     const id = await lcwExperienceId();
     const legacyId = `UniversityOfToronto--${id}`;
@@ -424,6 +423,23 @@ test.describe('sharing', () => {
     await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
     expect((await page.request.get(legacyUrl)).status()).not.toBe(200);
     expect((await pub.list())?.items.some((i) => i.id === legacyId)).toBe(false);
+  });
+
+  test('a share that fails puts the choice back and says so in plain words', async ({ page }) => {
+    // the storage server refuses to write the public copy
+    await page.route(/\/public\/[^/]+$/, (route) =>
+      route.request().method() === 'PUT'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"message":"Internal Server Error"}' })
+        : route.continue()
+    );
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+
+    await option(modal, 'Anyone with the link').click();
+    await expect(modal.getByRole('alert')).toHaveText('Could not create the link.');
+    await expect(modal).not.toContainText(/internal server error/i);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByLabel('Link to share')).toHaveCount(0);
   });
 
   test('the arrow keys never change who can see it; Enter and Space do', async ({ page }) => {
@@ -520,7 +536,8 @@ test.describe('sharing', () => {
     const certUrl = new URL(popup.url()).searchParams.get('certUrl');
     await expect(modal.getByLabel('Link to share')).toBeVisible();
     expect(certUrl).toBe(await modal.getByLabel('Link to share').inputValue());
-    expect(certUrl).not.toBe(readable);
+    // shared again after the take-down, so the same link as before
+    expect(certUrl).toBe(readable);
     // Closed last: closing it first now and then dropped the main page's
     // DevTools session mid-assertion
     await popup.close();
