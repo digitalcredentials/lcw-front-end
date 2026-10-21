@@ -1,0 +1,20 @@
+{
+  "name": "lcw-local-stack",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Seeds the local DynamoDB + S3 substitutes for the LCW local stack",
+  "type": "module",
+  "scripts": {
+    "seed": "node seed.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1127.0",
+    "@aws-sdk/client-s3": "^3.1127.0",
+    "@interop/did-method-key": "^7.3.5",
+    "@interop/ed25519-signature": "^7.2.1",
+    "@interop/ed25519-verification-key": "^8.0.4",
+    "@interop/http-client": "^1.0.5",
+    "@interop/http-signature-zcap-invoke": "^6.2.6",
+    "@interop/jsonld-signatures": "^11.8.5"
+  }
+}
