@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { clearToken } from '../lib/auth';
-import { getSessionWASClient } from '../lib/was';
+import { getSessionKeyClient } from '../lib/was';
 import { createSpace, listSpaces, deleteSpace } from '../lib/spaces';
 import type { WalletHost } from './types';
 
@@ -14,7 +14,9 @@ export function useWalletHost(): WalletHost {
   const navigate = useNavigate();
   return useMemo<WalletHost>(
     () => ({
-      getSession: getSessionWASClient,
+      // Plugins work in batch spaces, which answer to the signing key's
+      // did:key form (the Main Space alone is promoted to the account DID)
+      getSession: getSessionKeyClient,
       spaces: {
         create: createSpace,
         list: listSpaces,

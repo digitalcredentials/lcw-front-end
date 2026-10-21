@@ -61,3 +61,21 @@ export async function getSessionWASClientFor(
   })
   return { client, spaceId: parsed.spaceId }
 }
+
+// A client signed as the key's did:key form, for the spaces that answer to
+// it: the batch spaces a plugin works in, which are created under the
+// did:key and not yet promoted to the account. Null without a session.
+export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceId: string } | null> {
+  const session = getSession()
+  if (!session) {
+    return null
+  }
+  const { asKey } = await sessionAgents(session)
+  const client = await WasClient.fromSigner({
+    serverUrl: spacesUrlOf(session.serverUrl),
+    signer: asKey.signer,
+    encryption: sessionEncryption(session),
+    serviceDescription: await serviceDescriptionFor(session.serverUrl),
+  })
+  return { client, spaceId: session.spaceId }
+}
