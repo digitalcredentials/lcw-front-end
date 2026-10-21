@@ -1,66 +1,37 @@
-const TOKEN_KEY = 'lcw_auth_token';
-const SPACE_KEY = 'lcw_space_url';
-const SESSION_KEY_KEY = 'lcw_session_key';
-const EMAIL_KEY = 'lcw_email';
-const COUPON_KEY = 'lcw_coupon';
+import { getSession, clearSession, sessionSpaceUrl } from './identity/session'
 
+// The signed-in session, as the rest of the wallet asks about it. The
+// session itself (the unwrapped keys, the account pointer) lives in
+// src/lib/identity/session.ts, in this tab's sessionStorage; these are the
+// read-only views the pages and libraries use.
+
+// The signing key's did:key, present while signed in.
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
+  return getSession()?.controller ?? null
 }
 
 export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(SPACE_KEY);
-  localStorage.removeItem(SESSION_KEY_KEY);
-  localStorage.removeItem(EMAIL_KEY);
-  localStorage.removeItem(COUPON_KEY);
+  clearSession()
 }
 
-// The account's registration token, returned by /login. The WAS server
+// The account's registration token, returned by /login. The PWS server
 // requires it as the coupon when creating a space.
 export function getCoupon(): string | null {
-  return localStorage.getItem(COUPON_KEY);
+  return getSession()?.coupon ?? null
 }
 
-export function setCoupon(coupon: string): void {
-  localStorage.setItem(COUPON_KEY, coupon);
-}
-
-// The logged-in account's email, kept for the zcap-authenticated back-end
-// endpoints that identify the account by email (e.g. /spaces).
+// The signed-in account's email, for the back-end endpoints that identify
+// the account by email (the batch issuer's notify, the welcome offer).
 export function getEmail(): string | null {
-  return localStorage.getItem(EMAIL_KEY);
+  return getSession()?.email ?? null
 }
 
-export function setEmail(email: string): void {
-  localStorage.setItem(EMAIL_KEY, email);
-}
-
-// The exported key pair that authenticated at login, kept for signing WAS
-// requests during the session.
-export function getSessionKey(): object | null {
-  const stored = localStorage.getItem(SESSION_KEY_KEY);
-  return stored ? (JSON.parse(stored) as object) : null;
-}
-
-export function setSessionKey(exportedKeyPair: object): void {
-  localStorage.setItem(SESSION_KEY_KEY, JSON.stringify(exportedKeyPair));
-}
-
-// The logged-in account's Wallet Attached Storage space URL, returned by the
-// login API.
+// The account's Main Space URL, from the credential's pointer record.
 export function getSpaceUrl(): string | null {
-  return localStorage.getItem(SPACE_KEY);
-}
-
-export function setSpaceUrl(spaceUrl: string): void {
-  localStorage.setItem(SPACE_KEY, spaceUrl);
+  const session = getSession()
+  return session ? sessionSpaceUrl(session) : null
 }
 
 export function isAuthenticated(): boolean {
-  return Boolean(getToken());
+  return getSession() !== null
 }

@@ -5,7 +5,10 @@ import * as WebCredentialHandler from 'web-credential-handler';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
-import { isAuthenticated, getSessionKey, getEmail } from '../lib/auth';
+import { isAuthenticated, getEmail } from '../lib/auth';
+import { loginWithPassphrase, setSession } from '../lib/identity';
+import { identityConfig } from '../lib/identity/config';
+import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
 import { ensureEncryptedCollection } from '../lib/edv';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
@@ -81,6 +84,10 @@ export default function ChapiPage() {
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
   const claimRef = useRef<ClaimResult | null>(null);
   const requestRef = useRef<ParsedPresentationRequest | null>(null);
+  // An issuer's exchange that arrived before the user signed in here: the
+  // popup has a session of its own (sessionStorage is per window), so it
+  // signs the user in itself and then resumes the claim.
+  const pendingClaimRef = useRef<{ vpr: Record<string, unknown> | undefined; origin: string | undefined } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sharing, setSharing] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -121,21 +128,12 @@ export default function ChapiPage() {
                   return;
                 }
 
+                pendingClaimRef.current = { vpr, origin: event.credentialRequestOrigin };
                 if (!isAuthenticated() || !(await getSessionWASClient())) {
                   setPhase({ step: 'not-signed-in' });
                   return;
                 }
-                const exchangeUrl = exchangeUrlFrom(vpr);
-                if (!exchangeUrl) {
-                  setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
-                  return;
-                }
-
-                setPhase({ step: 'claiming', from: hostOf(event.credentialRequestOrigin) });
-                const claim = await runExchange(exchangeUrl);
-                claimRef.current = claim;
-
-                await loadSaveStep(claim);
+                await claimFrom(vpr, event.credentialRequestOrigin);
               } catch (err) {
                 setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
               }
@@ -147,6 +145,32 @@ export default function ChapiPage() {
       setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not connect to the wallet mediator.' });
     });
   }, []);
+
+  // Runs an issuer's exchange and moves on to the save picker.
+  async function claimFrom(vpr: Record<string, unknown> | undefined, origin: string | undefined) {
+    const exchangeUrl = exchangeUrlFrom(vpr);
+    if (!exchangeUrl) {
+      setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
+      return;
+    }
+    setPhase({ step: 'claiming', from: hostOf(origin) });
+    const claim = await runExchange(exchangeUrl);
+    claimRef.current = claim;
+    await loadSaveStep(claim);
+  }
+
+  // Signed in inside the popup: pick up whichever flow was waiting.
+  async function resumeAfterSignIn() {
+    try {
+      if (requestRef.current) {
+        await continueRequest();
+      } else if (pendingClaimRef.current) {
+        await claimFrom(pendingClaimRef.current.vpr, pendingClaimRef.current.origin);
+      }
+    } catch (err) {
+      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+    }
+  }
 
   // Lists every credential space's collections for the save picker and picks
   // the default. Called once the claim has run, and again by Retry, which
@@ -236,8 +260,7 @@ export default function ChapiPage() {
         }
         collectionName = name;
         const session = await getSessionWASClientFor(spaceUrl);
-        const storedKeyPair = getSessionKey();
-        if (!session || !storedKeyPair) {
+        if (!session) {
           setPhase({ step: 'not-signed-in' });
           return;
         }
@@ -245,7 +268,6 @@ export default function ChapiPage() {
         await ensureEncryptedCollection({
           space: session.client.space(session.spaceId),
           id: targetId,
-          storedKeyPair,
           name,
         });
       }
@@ -382,14 +404,7 @@ export default function ChapiPage() {
         {phase.step === 'starting' && <p className="text-sm"><LoadingLabel label="Waiting for the credential request…" /></p>}
 
         {phase.step === 'not-signed-in' && (
-          <div>
-            <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              You&#39;re not signed in. Open the wallet in another tab, sign in, then retry.
-            </p>
-            <button onClick={cancel} className="mt-4 w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
-              Close
-            </button>
-          </div>
+          <PopupSignIn onSignedIn={resumeAfterSignIn} onCancel={cancel} />
         )}
 
         {phase.step === 'claiming' && (
@@ -625,5 +640,65 @@ export default function ChapiPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// The popup's own sign-in: this window holds no session of the wallet's
+// (sessionStorage is per window), so the user signs in here with the same
+// email and passphrase, and the waiting flow resumes.
+function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>; onCancel: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const session = await loginWithPassphrase({ email, passphrase: password, config: identityConfig() });
+      setSession(session);
+      await onSignedIn();
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      setError(status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3" noValidate>
+      <p className="text-sm text-gray-700">Sign in to continue.</p>
+      <div>
+        <label htmlFor="chapi-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+        <input
+          id="chapi-email"
+          type="email"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+        />
+      </div>
+      <div>
+        <label htmlFor="chapi-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+        <PasswordInput id="chapi-password" autoComplete="current-password" value={password} onChange={setPassword} />
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+      )}
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+      >
+        {loading ? 'Signing in…' : 'Sign in'}
+      </button>
+      <button type="button" onClick={onCancel} className="w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
+        Close
+      </button>
+    </form>
   );
 }

@@ -4,7 +4,6 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient, getSessionWASClientFor } from './was'
 import { ensureEncryptedCollection, writeResource } from './edv'
-import { getSessionKey } from './auth'
 import type { ResourceData } from '@interop/was-client'
 
 const documentLoader = securityLoader().build()
@@ -57,11 +56,7 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   // found again by its content (present.ts scans for the fingerprint).
   const space = session.client.space(session.spaceId)
   const dids = space.collection('dids')
-  const storedKeyPair = getSessionKey()
-  if (!storedKeyPair) {
-    throw new Error('UNAUTHORIZED')
-  }
-  await ensureEncryptedCollection({ space, id: 'dids', storedKeyPair, name: 'dids' })
+  await ensureEncryptedCollection({ space, id: 'dids', name: 'dids' })
   const exported = await key.export({ secretKey: true, includeContext: true })
   await dids.add(exported as unknown as ResourceData)
 
