@@ -90,7 +90,8 @@ shape, written from the directory that holds all three repos as siblings:
 # the space, on :3000
 cd was-server-aws && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
   sam local start-api --port 3000 --region us-east-1 \
-  --docker-network lcw-local --warm-containers EAGER
+  --docker-network lcw-local --warm-containers EAGER \
+  --parameter-overrides SpaceBaseUrl=http://localhost:3000/space
 
 # the login and spaces API, on :3001
 cd lcw-back-end && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \
@@ -103,6 +104,21 @@ cd lcw-front-end && npm run dev
 
 Each path is relative to the repos' shared parent, not to
 `scripts/local-stack` where you ran `up.sh`.
+
+**The space on :3000 does not work under `sam local` since WAS v0.5**
+([was-server-aws#31](https://github.com/digitalcredentials/was-server-aws/issues/31)).
+v0.5 relies on API Gateway sending `/space/{s}/{c}/` to the resource route with
+an empty resource id, which returns the collection's listing. `sam local`
+strips trailing slashes before matching, so the request reaches the space
+route instead, which answers with a `308` to the same URL. Every collection
+listing loops, and nothing that lists credentials works. The issue proposes a
+local runner for was-server-aws built from its own `test/routes.mjs`, which
+matches routes the way the gateway does. Until that exists, sign-in works
+locally but browsing a space does not.
+
+`SpaceBaseUrl` is overridden because v0.5 defaults it to the sandbox, and
+`POST /spaces` would otherwise register a new local space under the sandbox
+URL.
 
 Keep the credentials on both `sam` commands. `sam local` passes the shell's own
 AWS credentials into the Lambda containers, and they beat the `localtest` values
@@ -118,11 +134,16 @@ Sign in at http://localhost:5173:
 | Email | `jc.chartrand@gmail.com` |
 | Passphrase | `my-secret-seed-that-is-long-enou` |
 
-`.env` (gitignored) must point the UI at the local login API:
+`.env` (gitignored) must point the UI at the local login API and the local
+space server, which owns the `/spaces` listing:
 
 ```
 VITE_API_BASE_URL=http://localhost:3001
+VITE_WAS_BASE_URL=http://localhost:3000
 ```
+
+Without `VITE_WAS_BASE_URL`, listing spaces after sign-in fails with
+"Error signing capability invocation … url: "/spaces/"".
 
 ### Signing in as yourself instead of the demo user
 
@@ -154,7 +175,9 @@ instead. Registering on the deployed sandbox is a separate thing and does work.
 `scripts/local-stack/seed.mjs` writes, idempotently:
 
 - the `wallet-test` and `wallet-spaces` tables, with the same keys and
-  `by-email` index as `lcw-back-end`'s template
+  `by-email` index as `lcw-back-end`'s template, and `was-server-aws`'s
+  `was-coupons` table (empty, so local space creation answers
+  "Coupon required")
 - the demo account in `wallet-test` — its `did` is *derived* from the
   passphrase rather than stored, so the tables always agree with whatever the
   login page derives
@@ -164,8 +187,12 @@ instead. Registering on the deployed sandbox is a separate thing and does work.
   (whose space URL points at the deployed WAS) will not drive the local space
 - the space's S3 bucket, named for the space id
   `dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c`, which the e2e tests hard-code
-- the space and `UniversityOfToronto` collection descriptions, plus the
-  `LCWExperience.json` and `Bachelors.json` credentials
+- the Space and `UniversityOfToronto` Collection metadata, in WAS v0.5's
+  layout (`meta/space.json`, `meta/UniversityOfToronto.json`), plus the
+  `LCWExperience.json` and `Bachelors.json` credentials under
+  `collections/UniversityOfToronto/`. The space is written directly rather
+  than through `POST /spaces` because that assigns its own id, and the e2e
+  tests hard-code this one
 
 To reset the space:
 
@@ -228,9 +255,9 @@ two different namespaces — the table is created, and the Lambda still reports
 
 ### The one source change the local stack required
 
-Every S3 client in `was-server-aws` — each handler under `src/collections`,
-`src/resources` and `src/spaces`, plus `src/policies/app.mjs` and
-`src/authorizer/publicRead.mjs` — is constructed as:
+Since WAS v0.5, `was-server-aws` has one S3 client, in its shared layer
+(`layers/was-lib/nodejs/node_modules/was-lib/store.mjs`). It must be
+constructed as:
 
 ```js
 const s3 = new S3Client(
@@ -244,9 +271,10 @@ container name. The installed AWS SDK has no `AWS_S3_FORCE_PATH_STYLE` env var,
 so path style has to be set in code. It is gated on the endpoint override, which
 is never set in a deployed environment, so real S3 behaviour is unchanged.
 
-This change is not committed upstream, so a fresh checkout of `was-server-aws`
-does not have it and **anything new that reaches S3 needs it applied too**.
-`up.sh` checks every file constructing an `S3Client` before it builds, and stops
+This change is not committed upstream (was-server-aws#31 proposes it), so a
+fresh checkout of `was-server-aws` does not have it and **anything new that
+reaches S3 needs it applied too**. `up.sh` checks every file constructing an
+`S3Client` under `src/` and the shared layer before it builds, and stops
 with the list if any lacks it — otherwise the stack comes up, prints `Ready`,
 and hangs on the first space request. A handler that misses it does not fail
 loudly: the request simply hangs until the caller times out, because
