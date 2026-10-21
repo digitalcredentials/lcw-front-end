@@ -18,10 +18,16 @@ const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
 
 async function logIn(page: Page) {
+  // The test browser never has the CHAPI wallet enabled, so suppress the
+  // enable-browser-wallet prompt (same flag its "Not now" button sets) or its
+  // overlay would intercept the tests' clicks.
+  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in' }).click();
+  // Login lands on the spaces card view; open the demo account's space
+  await page.locator('[data-space-type="credential"]').first().click();
 }
 
 async function openUniversityCollection(page: Page) {
@@ -414,6 +420,7 @@ test.describe('sharing', () => {
 
     await option(modal, 'Only you').click();
     await modal.getByRole('button', { name: 'Take it down' }).click();
+    await expect(modal.getByRole('status').filter({ hasText: 'Link taken down.' })).toBeVisible();
     await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
     expect((await page.request.get(legacyUrl)).status()).not.toBe(200);
     expect((await pub.list())?.items.some((i) => i.id === legacyId)).toBe(false);
@@ -477,6 +484,9 @@ test.describe('sharing', () => {
   });
 
   test('LinkedIn and Other apps ask first, then send the readable link', async ({ page }) => {
+    // LinkedIn itself would send a signed-out test browser to its login page;
+    // only the form URL the wallet opens matters here
+    await page.context().route(/linkedin\.com/, (route) => route.fulfill({ body: 'LinkedIn stand-in' }));
     // a stand-in share sheet that records what it was given
     await page.addInitScript(() => {
       const shared: ShareData[] = [];
@@ -500,7 +510,7 @@ test.describe('sharing', () => {
     // take it down, then LinkedIn while private asks too and opens the form
     await option(modal, 'Only you').click();
     await modal.getByRole('button', { name: 'Take it down' }).click();
-    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByRole('status').filter({ hasText: 'Link taken down.' })).toBeVisible();
     await modal.getByRole('button', { name: 'LinkedIn' }).click();
     await expect(modal).toContainText('To add it to LinkedIn, switch to Anyone with the link?');
     const popupPromise = page.waitForEvent('popup');
@@ -508,10 +518,12 @@ test.describe('sharing', () => {
     const popup = await popupPromise;
     await popup.waitForURL(/linkedin\.com\/profile\/add/, { waitUntil: 'commit' });
     const certUrl = new URL(popup.url()).searchParams.get('certUrl');
-    await popup.close();
     await expect(modal.getByLabel('Link to share')).toBeVisible();
     expect(certUrl).toBe(await modal.getByLabel('Link to share').inputValue());
     expect(certUrl).not.toBe(readable);
+    // Closed last: closing it first now and then dropped the main page's
+    // DevTools session mid-assertion
+    await popup.close();
   });
 });
 
