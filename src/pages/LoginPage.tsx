@@ -2,8 +2,8 @@ import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken, setSpaceUrl, setSessionKey, setCoupon, setEmail as storeEmail } from '../lib/auth';
-import { login } from '../lib/login';
+import { loginWithPassphrase, setSession } from '../lib/identity';
+import { identityConfig } from '../lib/identity/config';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -16,21 +16,12 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
-      const { result, keyPair } = await login(email, password);
-
-      setToken(result.controller);
-      storeEmail(result.email);
-      if (result.token) {
-        // The WAS server requires this as the coupon when creating a space
-        setCoupon(result.token);
-      }
-      if (result.space) {
-        setSpaceUrl(result.space);
-      }
-      // Keep the authenticated key pair for signing WAS requests this session
-      setSessionKey(await keyPair.export({ secretKey: true, includeContext: true }));
+      // The passphrase derives the unlock identity, whose space holds the
+      // account pointer and the credential's keys; the signing key then
+      // proves the account to the back end (src/lib/identity).
+      const session = await loginWithPassphrase({ email, passphrase: password, config: identityConfig() });
+      setSession(session);
       navigate('/files');
     } catch (err) {
       const status = (err as { status?: number }).status;
@@ -59,7 +50,6 @@ export default function LoginPage() {
         <div className="w-full bg-white rounded-2xl shadow-md p-8">
         <h2 className="text-2xl font-semibold text-gray-800 mb-1">Sign in</h2>
         <p className="text-sm text-gray-500 mb-6">Enter your credentials to continue</p>
-
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
@@ -76,20 +66,17 @@ export default function LoginPage() {
               placeholder="you@example.com"
             />
           </div>
-
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
               Password
             </label>
             <PasswordInput id="password" autoComplete="current-password" value={password} onChange={setPassword} />
           </div>
-
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
             </p>
           )}
-
           <button
             type="submit"
             disabled={loading}
@@ -98,7 +85,6 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-
         <p className="mt-5 text-sm text-gray-500 text-center">
           Need an account?{' '}
           <Link to="/register" className="text-indigo-600 hover:text-indigo-700 font-medium">

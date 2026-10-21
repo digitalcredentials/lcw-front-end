@@ -1,61 +1,27 @@
-import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key'
-import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import { createEdvEncryption, ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
+import { ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
 import type { Collection, ResourceData, Space } from '@interop/was-client'
+import { getSession, sessionKeyAgreementKey } from './identity/session'
 
 // EDV-over-WAS (end-to-end encryption) support: collections declared with an
 // `encryption: { scheme: 'edv' }` descriptor store JWE envelopes the server
 // cannot read, and the ordinary collection handles encrypt on write and
 // decrypt on read (the was-client pass-through model).
 //
-// The key-agreement key is the standard X25519 conversion of the session's
-// passphrase-derived Ed25519 key, so no new credential or key store is
-// involved: whoever can sign for the space can decrypt its envelopes.
+// The recipient of every encrypted collection is the account's user key,
+// which whichever credential opened the session unwrapped
+// (src/lib/identity): one key per account, shared by every credential, so a
+// collection encrypted in one session decrypts in any other.
 
-// The exported session key pair, as stored by login
-type StoredKeyPair = object
-
-export async function keyAgreementFromSession(storedKeyPair: StoredKeyPair) {
-  const edKey = await Ed25519VerificationKey.from(storedKeyPair)
-  const controller = `did:key:${edKey.fingerprint()}`
-  const exported = (await edKey.export({ secretKey: true })) as {
-    publicKeyMultibase: string
-    secretKeyMultibase?: string
+function currentKeyAgreementKey() {
+  const session = getSession()
+  if (!session) {
+    throw new Error('UNAUTHORIZED')
   }
-  // The converter's field name differs from our key library's export
-  // (privateKeyMultibase vs secretKeyMultibase); mapped explicitly so the
-  // private half is actually converted.
-  const keyAgreementKey = X25519KeyAgreementKey2020.fromEd25519({
-    controller,
-    publicKeyMultibase: exported.publicKeyMultibase,
-    privateKeyMultibase: exported.secretKeyMultibase,
-  })
-  if (!keyAgreementKey.privateKeyMultibase) {
-    throw new Error('The session key could not be converted for decryption.')
-  }
-  keyAgreementKey.id ??= `${controller}#${keyAgreementKey.fingerprint()}`
-  return keyAgreementKey as typeof keyAgreementKey & { id: string }
-}
-
-// The encryption provider handed to WasClient: a pure keystore returning the
-// session's key-agreement key for any collection that declares the edv
-// scheme. Plaintext collections are untouched. The keyResolver member is
-// required by the type but never invoked: the codec resolves epoch-key
-// recipients through its own built-in did:key resolver.
-export async function sessionEncryption(storedKeyPair: StoredKeyPair) {
-  const keyAgreementKey = await keyAgreementFromSession(storedKeyPair)
-  return createEdvEncryption({
-    resolveKeys: async () => ({
-      keyAgreementKey,
-      keyResolver: async ({ id }: { id?: string }) => {
-        throw new Error(`Unexpected keystore resolver call for ${id ?? 'unknown key'}.`)
-      },
-    }),
-  })
+  return sessionKeyAgreementKey(session)
 }
 
 // Declares a collection encrypted and installs its first key epoch, wrapped
-// to the session key. A missing collection is created through the server's
+// to the user key. A missing collection is created through the server's
 // create-collection route with the edv descriptor. Safe to call repeatedly:
 // an existing encrypted collection is left alone, and ensureFirstEpoch
 // adopts a roster another provisioner already installed. The display name
@@ -64,13 +30,11 @@ export async function sessionEncryption(storedKeyPair: StoredKeyPair) {
 export async function ensureEncryptedCollection({
   space,
   id,
-  storedKeyPair,
   name,
   description,
 }: {
   space: Space
   id: string
-  storedKeyPair: StoredKeyPair
   name: string
   description?: string
 }): Promise<void> {
@@ -83,7 +47,7 @@ export async function ensureEncryptedCollection({
   } else if (!described.encryption) {
     throw new Error(`The collection "${id}" exists and is not encrypted.`)
   }
-  const keyAgreementKey = await keyAgreementFromSession(storedKeyPair)
+  const keyAgreementKey = currentKeyAgreementKey()
   await ensureFirstEpoch({
     collection,
     recipients: [ownerRecipient({ keyAgreementKey })],

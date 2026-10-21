@@ -2,7 +2,8 @@ import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link } from 'react-router-dom';
-import { register } from '../lib/register';
+import { registerAccount } from '../lib/identity';
+import { identityConfig } from '../lib/identity/config';
 import { markWelcomePending } from '../lib/welcome';
 
 export default function RegisterPage() {
@@ -15,6 +16,9 @@ export default function RegisterPage() {
   // to a "Check your email" state, so a second click cannot register again
   const [submitted, setSubmitted] = useState<{ message: string; email: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  // Registration mints the account's keys, creates its space and publishes
+  // its identity, so it takes a few seconds; the stage names what is happening
+  const [stage, setStage] = useState('');
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -30,7 +34,13 @@ export default function RegisterPage() {
     try {
       // Registration finishes by email: the back end starts the registration
       // flow, which sends a confirmation link.
-      const message = await register(email, password, registrationCode);
+      const message = await registerAccount({
+        email,
+        passphrase: password,
+        registrationCode,
+        config: identityConfig(),
+        onStage: setStage,
+      });
       setSubmitted({ message, email });
       // The first signed-in open on this browser offers the welcome credential.
       // Best effort: the registration has gone through, so blocked storage
@@ -130,7 +140,7 @@ export default function RegisterPage() {
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
           >
-            {loading ? 'Creating account…' : 'Create account'}
+            {loading ? `${stage || 'Creating account'}…` : 'Create account'}
           </button>
         </form>
         </>
