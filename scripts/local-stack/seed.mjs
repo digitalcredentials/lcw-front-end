@@ -36,6 +36,10 @@ const REGION = "us-east-1";
 // registry.
 const TABLE_NAME = "wallet-test";
 const SPACES_TABLE_NAME = "wallet-spaces";
+// was-server-aws's own table: POST /spaces redeems a coupon from it before
+// creating a space. Nothing here seeds a coupon, so local space creation
+// answers 403 "Coupon required" rather than failing on a missing table.
+const COUPONS_TABLE_NAME = "was-coupons";
 const DEMO_EMAIL = "jc.chartrand@gmail.com";
 const DEMO_PASSPHRASE = "my-secret-seed-that-is-long-enou";
 
@@ -217,6 +221,13 @@ const SPACES_TABLE = {
   }],
 };
 
+// Mirrors WasCouponsTable in was-server-aws's template.yaml.
+const COUPONS_TABLE = {
+  TableName: COUPONS_TABLE_NAME,
+  AttributeDefinitions: [{ AttributeName: "coupon", AttributeType: "S" }],
+  KeySchema: [{ AttributeName: "coupon", KeyType: "HASH" }],
+};
+
 async function ensureBucket(bucket) {
   try {
     await s3.send(new HeadBucketCommand({ Bucket: bucket }));
@@ -275,18 +286,29 @@ async function seedAccount({ email, passphrase, spaceId }) {
 
   await ensureBucket(spaceId);
 
-  // The space description supplies the name the collections page shows.
-  await putJson(spaceId, "metadata/description.json", {
+  // Written in was-server-aws's WAS v0.5 layout (layers/was-lib/.../store.mjs):
+  // meta/space.json for the Space, meta/{c}.json for each Collection, and
+  // collections/{c}/{r} for content. The space id is fixed because the e2e
+  // tests hard-code it, so the Space cannot be created through POST /spaces,
+  // which assigns ids. The Space Metadata supplies the name the collections
+  // page shows.
+  const stamp = new Date().toISOString();
+  await putJson(spaceId, "meta/space.json", {
     id: spaceId,
     type: ["Space"],
     name: "Verifiable Credentials Collection",
     controller: key.controller,
     createdBy: key.controller,
+    createdAt: stamp,
+    updatedAt: stamp,
   });
-  await putJson(spaceId, `collections/${COLLECTION_ID}/description.json`, {
+  await putJson(spaceId, `meta/${COLLECTION_ID}.json`, {
     id: COLLECTION_ID,
     type: ["Collection"],
     name: COLLECTION_ID,
+    createdAt: stamp,
+    updatedAt: stamp,
+    createdBy: key.controller,
   });
 
   // LCWExperience is the repo's own signed fixture, whose issuer is one of the
@@ -296,12 +318,13 @@ async function seedAccount({ email, passphrase, spaceId }) {
   );
   await putJson(spaceId, `collections/${COLLECTION_ID}/LCWExperience.json`, fixture);
   await putJson(spaceId, `collections/${COLLECTION_ID}/Bachelors.json`, await signBachelorsCredential());
-  console.log(`  wrote the descriptions, LCWExperience.json and Bachelors.json`);
+  console.log(`  wrote the Space and Collection metadata, LCWExperience.json and Bachelors.json`);
 }
 
 console.log("Seeding the LCW local stack");
 await ensureTable(ACCOUNTS_TABLE);
 await ensureTable(SPACES_TABLE);
+await ensureTable(COUPONS_TABLE);
 
 // The demo account is always seeded: the e2e tests hard-code its email and
 // space id.

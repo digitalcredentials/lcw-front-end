@@ -79,10 +79,17 @@ nc -z localhost 8000 >/dev/null 2>&1 || { echo "dynamodb-local did not become re
 # upstream, so a fresh checkout does not have it -- and the failure is silent:
 # the stack comes up, prints Ready, and then every space request hangs until
 # the caller times out. Check before building rather than after.
+#
+# Since WAS v0.5 the one S3 client lives in the shared layer, whose code sits
+# under a node_modules directory (layers/was-lib/nodejs/node_modules/was-lib),
+# so that directory is searched explicitly alongside src/.
 missing_path_style=$(
-  grep -rl --include='*.mjs' --include='*.js' --exclude-dir=node_modules \
-    'new S3Client' "$WAS_REPO/src" 2>/dev/null \
-    | while read -r f; do grep -q 'forcePathStyle' "$f" || echo "$f"; done
+  {
+    grep -rl --include='*.mjs' --include='*.js' --exclude-dir=node_modules \
+      'new S3Client' "$WAS_REPO/src" 2>/dev/null
+    grep -rl --include='*.mjs' --include='*.js' \
+      'new S3Client' "$WAS_REPO/layers/was-lib/nodejs/node_modules/was-lib" 2>/dev/null
+  } | while read -r f; do grep -q 'forcePathStyle' "$f" || echo "$f"; done
 )
 if [ -n "$missing_path_style" ]; then
   echo "was-server-aws has S3 clients without forcePathStyle:" >&2
@@ -153,7 +160,8 @@ and MinIO rejects anything else.
   # 1. was-server-aws (the space) on :3000
   cd $WAS_REPO && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \\
     sam local start-api --port 3000 --region us-east-1 \\
-    --docker-network lcw-local --warm-containers EAGER
+    --docker-network lcw-local --warm-containers EAGER \\
+    --parameter-overrides SpaceBaseUrl=http://localhost:3000/space
 
   # 2. lcw-back-end (login and /spaces) on :3001
   cd $BE_REPO && AWS_ACCESS_KEY_ID=localtest AWS_SECRET_ACCESS_KEY=localtest AWS_SESSION_TOKEN= \\
