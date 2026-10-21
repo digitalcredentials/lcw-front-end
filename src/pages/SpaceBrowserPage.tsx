@@ -734,13 +734,15 @@ export default function FileBrowserPage() {
     : (spaces ?? []).length === 0;
 
   // The Delete dialog names the credential by its title, from the detail view
-  // when it opened there, else its card's: an encrypted collection's opaque
-  // storage name shows only when neither is known
+  // when it opened there, else its card's (loading until the card's body
+  // arrives, as in the Move dialog): an encrypted collection's opaque storage
+  // name shows only when neither is known
+  const deleteTargetSummary = deleteTarget && summaries[`${selected?.id}/${deleteTarget.id}`];
   const deleteTargetTitle = deleteTarget && (
     (viewing?.resource.id === deleteTarget.id ? viewingSummary?.title : undefined)
-    ?? summaries[`${selected?.id}/${deleteTarget.id}`]?.title
-    ?? deleteTarget.name
-    ?? deleteTarget.id
+    ?? (deleteTargetSummary === undefined
+      ? <LoadingLabel />
+      : deleteTargetSummary?.title ?? deleteTarget.name ?? deleteTarget.id)
   );
 
   return (
