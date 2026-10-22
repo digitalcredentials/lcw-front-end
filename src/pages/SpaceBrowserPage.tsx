@@ -270,10 +270,10 @@ export default function FileBrowserPage() {
         return;
       }
       const data = await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).get();
-      // The WAS client answers a missing resource with null, not a 404 error
+      // The WAS client answers a missing resource (a 404) with null rather
+      // than an error, so null reads as not found here and in restore and move
       if (data === null) {
-        setError(describeError('open', new NotFoundError('The credential is no longer stored here.', { status: 404 })));
-        return;
+        throw new NotFoundError('The storage returned nothing for this credential.', { status: 404 });
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc, mode });
@@ -345,7 +345,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new NotFoundError('The credential is no longer in Trash.', { status: 404 });
+        throw new NotFoundError('The storage returned nothing for this credential in Trash.', { status: 404 });
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({
@@ -384,7 +384,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new NotFoundError('The credential is no longer stored here.', { status: 404 });
+        throw new NotFoundError('The storage returned nothing for this credential.', { status: 404 });
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({
