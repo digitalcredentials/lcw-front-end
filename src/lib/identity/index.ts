@@ -1,6 +1,6 @@
 import { WasClient } from '@interop/was-client'
 import { collectionDescriptorStore, ownerRecipient, replaceRecipient } from '@interop/was-client/edv'
-import { deriveUnlockIdentity, deleteUnlockSpace, recordSignerFromAgent } from '@interop/wallet-core/keyring'
+import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
 import { userKeyVaultKeys } from '@interop/wallet-core/keys'
 import { webvhZcapClient } from '@interop/wallet-core/webvh'
 import { createAccountLog, ensureProjection, publishAccountLog, promoteSpace } from './account'
@@ -9,7 +9,8 @@ import { readCatalogue, updateCatalogue, type CatalogueEntry, type CredentialKin
 import { RECOVERY_KDF, mintRecoveryCode, recoverySecretOf } from './recoveryCode'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys, type UserKey } from './keys'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
-import { bindCredential, openPassphrase, readCredential, retireCredentialRecords, rewrapUserKey, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
+import { bindCredential, openPassphrase, readCredential, retireCredentialRecords, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
+import { addRosterRecipient, readRoster, recipientOf, unlockKeyAgreementKeyOf, wrapUserKey, writeRoster } from './roster'
 import { sessionAgents, type Session } from './session'
 
 // The identity layer's entry points: registration, sign-in with either kind
@@ -140,9 +141,10 @@ export async function registerAccount({
     controller,
     email,
     pointer: { did, spaceId, host: config.serverUrl },
-    keys: { credential, userKey },
+    credential,
   })
   const session: Session = { email, did, controller, serverUrl: config.serverUrl, spaceId, signingSeed: credential.signingSeed, userKey }
+  await addRosterRecipient({ was: await accountClient(session), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
   await catalogueCredential({ session, keys: credential, kind: 'passphrase', unlock, capability })
 
   return body.message ?? 'Registration started. Check your email for a confirmation link.'
@@ -253,9 +255,9 @@ export async function loginWithPasskey(options: { config: Pick<IdentityConfig, '
 // Adds a credential to the signed-in account: mints its signing and update
 // keys, publishes them to the account document (signed by the acting
 // credential's update key, unwrapped for this operation alone), binds its
-// unlock space with the pointer record and the sealed records, and
-// catalogues it with the management capability the binding delegated.
-// Resolves to the new credential's keys.
+// unlock space with the pointer record and the sealed keys record, makes it
+// a recipient of the user-key roster, and catalogues it with the management
+// capability the binding delegated. Resolves to the new credential's keys.
 export async function addCredential({
   session,
   acting,
@@ -280,8 +282,9 @@ export async function addCredential({
     controller: agents.controllerDid,
     email: session.email,
     pointer: { did: session.did, spaceId: session.spaceId, host: session.serverUrl },
-    keys: { credential: keys, userKey: session.userKey },
+    credential: keys,
   })
+  await addRosterRecipient({ was: await accountClient(session), spaceId: session.spaceId, userKey: session.userKey, recipient: recipientOf(unlock.keyAgreementKey) })
   await catalogueCredential({ session, keys, kind, label, unlock, capability })
   return keys
 }
@@ -376,9 +379,9 @@ async function accountSpaceIds(session: Session): Promise<string[]> {
 // nothing the server serves from now on. Records are not re-encrypted: a
 // copy of ciphertext taken before the rotation stays readable to a copy of
 // the old key. When a collection fails, the ones already rotated are rotated
-// back and the error propagates, so the account is never left half on each
-// key.
-async function rotateCollections({ session, from, to }: { session: Session; from: UserKey; to: UserKey }): Promise<number> {
+// back and the error propagates; the caller gets the same rollback for its
+// own later failures, so the account is never left half on each key.
+async function rotateCollections({ session, from, to }: { session: Session; from: UserKey; to: UserKey }): Promise<{ count: number; rollback: () => Promise<void> }> {
   const was = await accountClient(session)
   const fromKey = userKeyVaultKeys({ userKey: from }).keyAgreementKey
   const toKey = userKeyVaultKeys({ userKey: to }).keyAgreementKey
@@ -406,6 +409,11 @@ async function rotateCollections({ session, from, to }: { session: Session; from
     }
   }
   const rotated: EncryptedCollection[] = []
+  const rollback = async () => {
+    for (const collection of rotated.splice(0)) {
+      await swap(collection, toKey, fromKey).catch((undo) => console.error('A collection could not be rotated back:', undo))
+    }
+  }
   try {
     for (const spaceId of await accountSpaceIds(session)) {
       const space = was.space(spaceId)
@@ -424,12 +432,10 @@ async function rotateCollections({ session, from, to }: { session: Session; from
       }
     }
   } catch (err) {
-    for (const collection of rotated) {
-      await swap(collection, toKey, fromKey).catch((undo) => console.error('A collection could not be rotated back:', undo))
-    }
+    await rollback()
     throw err
   }
-  return rotated.length
+  return { count: rotated.length, rollback }
 }
 
 // Removes a credential from the account and rotates the user key it held:
@@ -440,9 +446,10 @@ async function rotateCollections({ session, from, to }: { session: Session; from
 //   2. The removed credential's records are retired from its unlock space
 //      under the management capability the catalogue holds (or the space
 //      deleted outright when the caller holds its unlock identity).
-//   3. Every remaining credential's user-key record is rewritten with the
-//      new key under its capability, so its next sign-in opens with it.
-//   4. Every encrypted collection of every Space is rotated to the new key.
+//   3. Every encrypted collection of every Space is rotated to the new key.
+//   4. A fresh user-key roster for the new key names the remaining
+//      credentials as its recipients, in one write; should it fail, the
+//      collections are rotated back.
 //   5. The catalogue forgets the credential and is re-sealed to the new key.
 //
 // Resolves to the session on the new user key (the caller stores it) and
@@ -472,9 +479,10 @@ export async function removeCredential({
   const removedEntry = catalogue.credentials[credential.signingMultibase]
   const remaining = Object.entries(catalogue.credentials).filter(([signing]) => signing !== credential.signingMultibase)
   const newUserKey = await mintUserKey()
+  const was = await accountClient(session)
 
   await removeCredentialFromLog({
-    was: await accountClient(session),
+    was,
     spaceId: session.spaceId,
     did: session.did,
     acting,
@@ -483,7 +491,7 @@ export async function removeCredential({
   })
 
   let retired = false
-  const { agents, asAccount } = await sessionAgents(session)
+  const { asAccount } = await sessionAgents(session)
   if (unlock) {
     await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
     retired = true
@@ -491,19 +499,15 @@ export async function removeCredential({
     retired = (await retireCredentialRecords({ serverUrl: config.serverUrl, zcapClient: asAccount.zcapClient, spaceId: removedEntry.unlockSpaceId, capability: removedEntry.capability })).retired
   }
 
-  const signer = recordSignerFromAgent({ keyAgent: agents.keyAgent })
-  for (const [, entry] of remaining) {
-    await rewrapUserKey({
-      serverUrl: config.serverUrl,
-      zcapClient: asAccount.zcapClient,
-      spaceId: entry.unlockSpaceId,
-      capability: entry.capability,
-      unlockDid: entry.unlockDid,
-      userKey: newUserKey,
-      signer,
-    })
+  const { count: rotatedCollections, rollback } = await rotateCollections({ session, from: session.userKey, to: newUserKey })
+  try {
+    const current = await readRoster({ was, spaceId: session.spaceId })
+    const recipients = remaining.map(([, entry]) => recipientOf(unlockKeyAgreementKeyOf(entry.unlockDid)))
+    await writeRoster({ was, spaceId: session.spaceId, roster: await wrapUserKey({ userKey: newUserKey, recipients }), ifMatch: current?.etag })
+  } catch (err) {
+    await rollback()
+    throw err
   }
-  const rotatedCollections = await rotateCollections({ session, from: session.userKey, to: newUserKey })
 
   const rotated: Session = { ...session, userKey: newUserKey }
   await updateCatalogue(
@@ -669,4 +673,5 @@ export { passkeySupported, PasskeyCancelledError, PasskeyUnsupportedError } from
 export { recoverySecretOf } from './recoveryCode'
 export { removeCredentialFromLog } from './credentials'
 export { acceptedMethodsOf, chooseAccountMethod, accountDid, accountMethodOf, holderSigner, webDidOf } from './holder'
+export { addRosterRecipient, readRoster, recipientOf } from './roster'
 export type { AccountDidMethod, HolderSigner } from './holder'
