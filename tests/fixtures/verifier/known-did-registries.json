@@ -1,0 +1,7 @@
+[
+  {
+    "name": "Test Registry",
+    "type": "dcc-legacy",
+    "url": "https://registry.example.test/registry.json"
+  }
+]
