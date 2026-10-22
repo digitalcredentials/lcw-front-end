@@ -60,6 +60,12 @@ function errorText(err: unknown, fallback: string): string {
   return err instanceof Error && err.message === SESSION_EXPIRED ? SESSION_EXPIRED : fallback;
 }
 
+// When a share or take-down failed and the dialog can't find out what is live
+// either: nothing can change until it is reopened
+function closeAndRetry(failed: string): string {
+  return failed === SESSION_EXPIRED ? failed : `${failed} Close this and try again.`;
+}
+
 const SECONDARY_BUTTON =
   'border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-3 py-1.5 transition-colors';
 
@@ -183,9 +189,10 @@ export default function ShareCredentialModal({
 
   // After a share or take-down failed: find out what is actually live, so the
   // dialog shows that rather than what was attempted. Resolves to the live
-  // link, or null; if even that fails, nothing can change until the dialog is
-  // reopened.
-  async function recheck(): Promise<string | null> {
+  // link (null when private), or undefined when even that fails; nothing can
+  // change then until the dialog is reopened. The caller writes the one
+  // message, once this has settled, so a first message never flashes.
+  async function recheck(): Promise<string | null | undefined> {
     try {
       const url = await onFindPublicLink();
       setPublicLink(url);
@@ -199,8 +206,7 @@ export default function ShareCredentialModal({
       setPublicLink(null);
       setQrImage(null);
       setLookupFailed(true);
-      setVisError(LOOKUP_FAILED);
-      return null;
+      return undefined;
     }
   }
 
@@ -214,14 +220,15 @@ export default function ShareCredentialModal({
       setVisMessage('Anyone with the link can now see it.');
       return url;
     } catch (err) {
-      setVisError(errorText(err, 'Could not create the link.'));
+      const failed = errorText(err, 'Could not create the link.');
       // The share may have gone through with only its reply lost
       const live = await recheck();
       if (live) {
-        setVisError('');
         setVisMessage('Anyone with the link can now see it.');
+        return live;
       }
-      return live;
+      setVisError(live === undefined ? closeAndRetry(failed) : failed);
+      return null;
     } finally {
       setPending(null);
       setBusy(false);
@@ -240,9 +247,14 @@ export default function ShareCredentialModal({
       setQrImage(null);
       setVisMessage('Link taken down. If you share it again, the same link will work again.');
     } catch (err) {
-      setVisError(errorText(err, 'Could not take the link down.'));
+      const failed = errorText(err, 'Could not take the link down.');
       // The take-down may have gone through with only its reply lost
-      await recheck();
+      const live = await recheck();
+      if (live === null) {
+        setVisMessage('Link taken down. If you share it again, the same link will work again.');
+      } else {
+        setVisError(live === undefined ? closeAndRetry(failed) : failed);
+      }
     } finally {
       setPending(null);
       setBusy(false);
