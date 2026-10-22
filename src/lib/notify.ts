@@ -14,8 +14,8 @@ export async function notifyRecipients(batch: Batch): Promise<NotifyResult> {
     throw new Error('UNAUTHORIZED')
   }
   // The batch issuer verifies against the DID registered for the email, the
-  // signing key's did:key form
-  const zcapClient = (await sessionAgents(session)).asKey.zcapClient
+  // account's did:webvh, whose document lists this session's key
+  const zcapClient = (await sessionAgents(session)).asAccount.zcapClient
   const base = (import.meta.env.VITE_BATCH_API_BASE ?? '').replace(/\/+$/, '')
   const response = await zcapClient.request({
     url: `${base}/notify`,

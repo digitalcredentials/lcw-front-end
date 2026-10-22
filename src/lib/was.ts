@@ -38,11 +38,9 @@ export async function getSessionWASClient(): Promise<{ client: WasClient; spaceI
   return getSessionWASClientFor(`${session.serverUrl}/space/${session.spaceId}`)
 }
 
-// A client for a specific space. The Main Space answers to the account's
-// did:webvh, so requests to it sign under the account; every other space
-// (a batch space) is still controlled by the signing key's did:key form
-// and is signed as that. Encrypted collections decrypt with the user key
-// either way.
+// A client for a specific space, signed as the account's did:webvh, which
+// every Space is promoted to at creation. Encrypted collections decrypt
+// with the user key.
 export async function getSessionWASClientFor(
   spaceUrl: string
 ): Promise<{ client: WasClient; spaceId: string } | null> {
@@ -51,20 +49,18 @@ export async function getSessionWASClientFor(
   if (!session || !parsed) {
     return null
   }
-  const { asAccount, asKey } = await sessionAgents(session)
-  const signer = parsed.spaceId === session.spaceId ? asAccount.signer : asKey.signer
+  const { asAccount } = await sessionAgents(session)
   const client = await WasClient.fromSigner({
     serverUrl: spacesUrlOf(parsed.serverUrl),
-    signer,
+    signer: asAccount.signer,
     encryption: sessionEncryption(session),
     serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
   })
   return { client, spaceId: parsed.spaceId }
 }
 
-// A client signed as the key's did:key form, for the spaces that answer to
-// it: the batch spaces a plugin works in, which are created under the
-// did:key and not yet promoted to the account. Null without a session.
+// A client signed as the key's did:key form, for a Space whose promotion to
+// the account tore and that still answers to the key. Null without a session.
 export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceId: string } | null> {
   const session = getSession()
   if (!session) {

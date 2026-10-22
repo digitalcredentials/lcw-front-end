@@ -33,7 +33,10 @@ export async function createAccountLog({
     paths: [spaceId],
     signer: updateKey.logSigner,
     updateKeys: [updateKey.didKey],
-    nextKeyHashes: [await deriveNextKeyHash(stagedMultibase)],
+    // The carry-over convention: the active key's own hash beside the staged
+    // key's, so a later entry may re-state the active key (an addition
+    // commit) as well as rotate to the staged one.
+    nextKeyHashes: [await deriveNextKeyHash(updateKey.multibase), await deriveNextKeyHash(stagedMultibase)],
     verificationMethods: [
       { type: 'Multikey', publicKeyMultibase: signingMultibase },
       { type: 'Multikey', publicKeyMultibase: userKeyMultibase },
