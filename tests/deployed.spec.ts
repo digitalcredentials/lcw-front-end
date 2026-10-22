@@ -15,6 +15,15 @@ const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
 
 test.skip(!DEPLOYED_URL, 'set DEPLOYED_URL to run the deployed smoke tests');
 
+// Signing in on a browser with passkey support offers to add a passkey
+// before continuing; the suite signs in with the passphrase alone, so the
+// offer is marked dismissed for the demo account, as "Not now" does.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((email) => {
+    localStorage.setItem(`lcw_passkey_offer_dismissed:${email.toLowerCase()}`, 'true');
+  }, DEMO_EMAIL);
+});
+
 // Surface everything the browser complains about: console errors, page
 // errors, and requests that fail or come back >= 400.
 function capture(page: Page): string[] {
@@ -50,7 +59,7 @@ async function logIn(page: Page) {
   await page.goto(`${DEPLOYED_URL}/`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   // Login lands on the spaces card view; every test works inside the demo
   // account's credential space (a batch space's card opens a batch-view or
   // space-view prompt instead of the space)
@@ -200,7 +209,7 @@ test('offers the welcome credential on first open after registration', async ({ 
   await page.goto(`${DEPLOYED_URL}/`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   try {
     // The offer, with the name that goes on the credential
     const dialog = page.getByRole('dialog', { name: 'Welcome Credential' });
@@ -233,7 +242,7 @@ test('creates, saves, and deletes a batch', async ({ page }) => {
   await page.goto(`${DEPLOYED_URL}/`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   try {
     await page.getByRole('link', { name: 'Credential issuer' }).click();
     await page.getByRole('button', { name: 'New batch' }).click();
@@ -251,6 +260,26 @@ test('creates, saves, and deletes a batch', async ({ page }) => {
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible({ timeout: 20000 });
     await expect(page.getByText(name)).toBeHidden();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
+
+test('lists the sign-in credentials under Settings', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Sign-in credentials' }).click();
+    // The demo account signed in with its password, so that credential is
+    // listed as the session's and cannot be removed from it
+    const current = page.locator('[data-credential-current="true"]');
+    await expect(current).toBeVisible();
+    await expect(current).toContainText('Password');
+    await expect(current).toContainText('This session');
+    await expect(current.getByRole('button', { name: 'Remove' })).toHaveCount(0);
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

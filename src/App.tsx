@@ -1,8 +1,10 @@
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
+import ForgotPage from './pages/ForgotPage'
 import FileBrowserPage from './pages/SpaceBrowserPage'
 import PluginPage from './pages/PluginPage'
+import CredentialsPage from './pages/CredentialsPage'
 import RequireAuth from './components/RequireAuth'
 import { pluginPages } from './plugins'
 import './App.css'
@@ -13,11 +15,20 @@ function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot" element={<ForgotPage />} />
         <Route
           path="/files"
           element={
             <RequireAuth>
               <FileBrowserPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/credentials"
+          element={
+            <RequireAuth>
+              <CredentialsPage />
             </RequireAuth>
           }
         />
