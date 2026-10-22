@@ -1,4 +1,4 @@
-import { readLogFromString, resolveDIDFromLog, updateDID, deriveNextKeyHash, logToJsonlString } from '@interop/did-method-webvh'
+import { readLogFromString, resolveDIDFromLog, updateDID, deriveNextKeyHash, logToJsonlString, type DIDLog } from '@interop/did-method-webvh'
 import type { WasClient } from '@interop/was-client'
 import { multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys } from './keys'
 
@@ -50,6 +50,90 @@ function relativeIds(doc: Doc, relation: string): string[] {
     .map((entry) => (typeof entry === 'string' ? entry : (entry as { id?: string })?.id))
     .filter((id): id is string => typeof id === 'string')
     .map((id) => (id.includes('#') ? `#${id.split('#')[1]}` : id))
+}
+
+// The log lists update keys as bare multikeys; a did:key form may precede
+// the multibase when one is stated, so comparisons are made bare.
+const bare = (key: string) => key.replace(/^did:key:/, '')
+
+// The account log, read with its validator for a compare-and-swap write.
+export async function readAccountLog({ was, spaceId }: { was: WasClient; spaceId: string }): Promise<{ log: DIDLog; etag?: string }> {
+  const resource = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' }).resource(LOG_RESOURCE)
+  const read = await resource.getWithEtag()
+  if (!read) {
+    throw new Error('The account log could not be read.')
+  }
+  const text = typeof read.data === 'string' ? read.data : read.data instanceof Blob ? await read.data.text() : JSON.stringify(read.data)
+  return { log: readLogFromString(text), etag: read.etag }
+}
+
+// A credential as the log records it: the signing key the current document
+// lists, the update key that joined the log in the same entry, the staged
+// key's commitment, and when that entry was made. The document does not say
+// what kind of credential a key belongs to; the account's catalogue
+// (catalogue.ts) does, and the two are joined by signing key.
+export interface LoggedCredential {
+  signingMultibase: string
+  // Null when the entry that added the signing key did not add exactly one
+  // update key, in which case the credential cannot be removed by this code.
+  updateMultibase: string | null
+  stagedHash: string | null
+  addedAt: string
+}
+
+// The credentials the log's current document lists, each paired with the
+// update key and the staged-key commitment that joined the log with it.
+// Parameters are inherited along the log when an entry omits them, so the
+// effective update keys and commitments are tracked entry by entry.
+export async function credentialsInLog(log: DIDLog): Promise<LoggedCredential[]> {
+  const signingKeysOf = (state: Doc | undefined) => (state ? relativeIds(state, 'capabilityInvocation').map((id) => id.replace(/^#/, '')) : [])
+  let updateKeys: string[] = []
+  let nextKeyHashes: string[] = []
+  const history: { signing: string[]; updateKeys: string[]; nextKeyHashes: string[] }[] = []
+  for (const entry of log) {
+    if (entry.parameters?.updateKeys !== undefined) {
+      updateKeys = entry.parameters.updateKeys.map(bare)
+    }
+    if (entry.parameters?.nextKeyHashes !== undefined) {
+      nextKeyHashes = entry.parameters.nextKeyHashes
+    }
+    history.push({ signing: signingKeysOf(entry.state as Doc | undefined), updateKeys, nextKeyHashes })
+  }
+  const last = history[history.length - 1]
+  if (!last) {
+    return []
+  }
+  const found: LoggedCredential[] = []
+  for (const signingMultibase of last.signing) {
+    const at = history.findIndex((step) => step.signing.includes(signingMultibase))
+    const before = history[at - 1] ?? { signing: [], updateKeys: [], nextKeyHashes: [] }
+    const addedUpdate = history[at].updateKeys.filter((key) => !before.updateKeys.includes(key) && last.updateKeys.includes(key))
+    const updateMultibase = addedUpdate.length === 1 ? addedUpdate[0] : null
+    let stagedHash: string | null = null
+    if (updateMultibase) {
+      // The commitments that arrived with this credential (its commit entry,
+      // when one preceded, and its add entry), less its update key's own hash
+      // and every current update key's hash: the one left is its staged key's.
+      const earlier = history[at - 2] ?? { nextKeyHashes: [] as string[] }
+      const arrived = new Set([...history[at].nextKeyHashes, ...before.nextKeyHashes].filter((hash) => !earlier.nextKeyHashes.includes(hash)))
+      for (const key of last.updateKeys) {
+        arrived.delete(await deriveNextKeyHash(key))
+      }
+      const staged = [...arrived].filter((hash) => last.nextKeyHashes.includes(hash))
+      stagedHash = staged.length === 1 ? staged[0] : null
+    }
+    found.push({ signingMultibase, updateMultibase, stagedHash, addedAt: log[at]?.versionTime ?? '' })
+  }
+  return found
+}
+
+// What removing a credential needs: its signing and update keys, and the
+// staged key's commitment (as a hash, or as the key it was derived from).
+export interface RemovableCredential {
+  signingMultibase: string
+  updateMultibase: string
+  stagedMultibase?: string
+  stagedHash?: string | null
 }
 
 export async function addCredentialToLog({
@@ -126,23 +210,15 @@ export async function removeCredentialFromLog({
   spaceId: string
   did: string
   acting: Pick<CredentialKeys, 'updateSeed'>
-  removed: NewCredentialPublicKeys
+  removed: RemovableCredential
 }): Promise<void> {
   const resource = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' }).resource(LOG_RESOURCE)
-  const read = await resource.getWithEtag()
-  if (!read) {
-    throw new Error('The account log could not be read.')
-  }
-  const text = typeof read.data === 'string' ? read.data : read.data instanceof Blob ? await read.data.text() : JSON.stringify(read.data)
-  const log = readLogFromString(text)
+  const { log, etag } = await readAccountLog({ was, spaceId })
   const current = await resolveDIDFromLog(log)
   if (current.did !== did || !current.doc) {
     throw new Error('The account log does not resolve to the account.')
   }
   const doc = current.doc as Doc
-  // The log lists update keys as bare multikeys; a did:key form may precede
-  // the multibase when one is stated, so both sides are compared bare.
-  const bare = (key: string) => key.replace(/^did:key:/, '')
   const remainingUpdateKeys = current.meta.updateKeys.filter((key: string) => bare(key) !== removed.updateMultibase)
   if (remainingUpdateKeys.length === current.meta.updateKeys.length) {
     throw new Error('That credential is not part of the account.')
@@ -151,7 +227,8 @@ export async function removeCredentialFromLog({
   if (actingMultibase === removed.updateMultibase || !remainingUpdateKeys.some((key: string) => bare(key) === actingMultibase)) {
     throw new Error('A credential cannot be removed by itself.')
   }
-  const dropped = new Set([await deriveNextKeyHash(removed.updateMultibase), await deriveNextKeyHash(removed.stagedMultibase)])
+  const stagedHash = removed.stagedHash ?? (removed.stagedMultibase ? await deriveNextKeyHash(removed.stagedMultibase) : null)
+  const dropped = new Set([await deriveNextKeyHash(removed.updateMultibase), ...(stagedHash ? [stagedHash] : [])])
   const nextKeyHashes = (current.meta.nextKeyHashes ?? []).filter((hash: string) => !dropped.has(hash))
   const signer = (await updateKeyFromSeed(acting.updateSeed)).logSigner
 
@@ -171,5 +248,5 @@ export async function removeCredentialFromLog({
     keyAgreement: relativeIds(doc, 'keyAgreement'),
     ...relations,
   })
-  await resource.put(new TextEncoder().encode(logToJsonlString(next.log)), { contentType: 'text/jsonl', ifMatch: read.etag })
+  await resource.put(new TextEncoder().encode(logToJsonlString(next.log)), { contentType: 'text/jsonl', ifMatch: etag })
 }
