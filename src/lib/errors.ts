@@ -73,12 +73,12 @@ const SERVICE: Partial<Record<WalletAction, string | null>> = {
 }
 const STORAGE = 'Your storage'
 
-// What a signed-out learner is told. A claim cannot pick up where it stopped
-// (the issuer's exchange is usually single-use), so it is started again.
-const CLAIM_AGAIN = "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again."
+// What a signed-out learner is told. A claim cannot pick up where its
+// exchange stopped (the issuer's exchange is usually single-use), so it is
+// started again; saving a collected credential goes back to sign-in instead
+// (ChapiPage), so it has no message here.
 const SIGNED_OUT: Partial<Record<WalletAction, string>> = {
-  claim: CLAIM_AGAIN,
-  'save-claim': CLAIM_AGAIN,
+  claim: "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again.",
   share: "You've been signed out. Sign in to your wallet, then share again from the site that asked.",
 }
 
