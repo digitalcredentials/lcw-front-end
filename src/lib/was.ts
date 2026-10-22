@@ -1,9 +1,10 @@
 import { WasClient, discoverService } from '@interop/was-client'
 import type { ServiceDescription } from '@interop/was-client'
-import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import { deriveKeyPair } from './login'
-import { getSessionKey, getSpaceUrl } from './auth'
-import { sessionEncryption } from './edv'
+import { getSession, sessionAgents, sessionEncryption } from './identity/session'
+
+// The spaces repository URL a was-client is built with (0.96+ takes the
+// repository, not the server base).
+export const spacesUrlOf = (serverUrl: string) => `${serverUrl.replace(/\/+$/, '')}/spaces/`
 
 // The server's service description, discovered once per server for the
 // session: a client reads it before its first signed request, and the
@@ -11,7 +12,7 @@ import { sessionEncryption } from './edv'
 // otherwise repeat the discovery round trip.
 const serviceDescriptions = new Map<string, Promise<ServiceDescription>>()
 
-function serviceDescriptionFor(serverUrl: string): Promise<ServiceDescription> {
+export function serviceDescriptionFor(serverUrl: string): Promise<ServiceDescription> {
   let pending = serviceDescriptions.get(serverUrl)
   if (!pending) {
     pending = discoverService({ url: serverUrl }).then((info) => info.description)
@@ -21,52 +22,56 @@ function serviceDescriptionFor(serverUrl: string): Promise<ServiceDescription> {
   return pending
 }
 
-export const getWASClient = async (seed: string, serverUrl: string): Promise<WasClient> => {
-  const keyPair = await deriveKeyPair(seed)
-
-  return WasClient.fromSigner({
-    serverUrl,
-    signer: keyPair.signer(),
-    serviceDescription: await serviceDescriptionFor(serverUrl),
-  })
-}
-
-// Splits a space URL (as returned by the login API) into the WAS server base
-// URL and the space id: everything before /space/{space_id}, and the id.
+// Splits a space URL into the PWS server base URL and the space id:
+// everything before /space/{space_id}, and the id.
 export function parseSpaceUrl(spaceUrl: string): { serverUrl: string; spaceId: string } | null {
   const match = spaceUrl.match(/^(.+)\/space\/([^/?#]+)\/?$/)
   return match ? { serverUrl: match[1], spaceId: match[2] } : null
 }
 
-// Builds a WAS client for the logged-in session: the space URL and the key
-// pair stored at login. Returns null when there is no complete session.
+// A client for the session's Main Space, or null when there is no session.
 export async function getSessionWASClient(): Promise<{ client: WasClient; spaceId: string } | null> {
-  const spaceUrl = getSpaceUrl()
-  if (!spaceUrl) {
+  const session = getSession()
+  if (!session) {
     return null
   }
-  return getSessionWASClientFor(spaceUrl)
+  return getSessionWASClientFor(`${session.serverUrl}/space/${session.spaceId}`)
 }
 
-// Builds a WAS client for a specific space (multi-space support): the stored
-// session key signs, the server URL and space id come from the given space
-// URL. Returns null when there is no complete session.
+// A client for a specific space, signed as the account's did:webvh, which
+// every Space is promoted to at creation. Encrypted collections decrypt
+// with the user key.
 export async function getSessionWASClientFor(
   spaceUrl: string
 ): Promise<{ client: WasClient; spaceId: string } | null> {
-  const storedKeyPair = getSessionKey()
+  const session = getSession()
   const parsed = parseSpaceUrl(spaceUrl)
-  if (!storedKeyPair || !parsed) {
+  if (!session || !parsed) {
     return null
   }
-  const keyPair = await Ed25519VerificationKey.from(storedKeyPair)
+  const { asAccount } = await sessionAgents(session)
   const client = await WasClient.fromSigner({
-    serverUrl: parsed.serverUrl,
-    signer: keyPair.signer(),
-    // Pass-through EDV: collections whose metadata declares the edv scheme
-    // encrypt on write and decrypt on read with the session key
-    encryption: await sessionEncryption(storedKeyPair),
+    serverUrl: spacesUrlOf(parsed.serverUrl),
+    signer: asAccount.signer,
+    encryption: sessionEncryption(session),
     serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
   })
   return { client, spaceId: parsed.spaceId }
+}
+
+// A client signed as the key's did:key form, for a Space whose promotion to
+// the account tore and that still answers to the key. Null without a session.
+export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceId: string } | null> {
+  const session = getSession()
+  if (!session) {
+    return null
+  }
+  const { asKey } = await sessionAgents(session)
+  const client = await WasClient.fromSigner({
+    serverUrl: spacesUrlOf(session.serverUrl),
+    signer: asKey.signer,
+    encryption: sessionEncryption(session),
+    serviceDescription: await serviceDescriptionFor(session.serverUrl),
+  })
+  return { client, spaceId: session.spaceId }
 }

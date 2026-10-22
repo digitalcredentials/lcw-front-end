@@ -1,8 +1,6 @@
-import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import { Ed25519Signature2020 } from '@interop/ed25519-signature'
-import { ZcapClient } from '@interop/ezcap'
 import type { Batch, NotifyResult } from '@digitalcredentials/batch-issuer-ui'
-import { getEmail, getSessionKey } from './auth'
+import { getEmail } from './auth'
+import { getSession, sessionAgents } from './identity/session'
 
 // The batch issuer back end's (batch-issuer-backend) POST /notify: emails
 // every recipient in a batch a collection link, staging the encrypted
@@ -10,16 +8,14 @@ import { getEmail, getSessionKey } from './auth'
 // /spaces calls: a zcap invocation of the request URL with the session key
 // that authenticated at login.
 export async function notifyRecipients(batch: Batch): Promise<NotifyResult> {
-  const stored = getSessionKey()
+  const session = getSession()
   const email = getEmail()
-  if (!stored || !email) {
+  if (!session || !email) {
     throw new Error('UNAUTHORIZED')
   }
-  const keyPair = await Ed25519VerificationKey.from(stored)
-  const zcapClient = new ZcapClient({
-    SuiteClass: Ed25519Signature2020,
-    invocationSigner: keyPair.signer(),
-  })
+  // The batch issuer verifies against the DID registered for the email, the
+  // account's did:webvh, whose document lists this session's key
+  const zcapClient = (await sessionAgents(session)).asAccount.zcapClient
   const base = (import.meta.env.VITE_BATCH_API_BASE ?? '').replace(/\/+$/, '')
   const response = await zcapClient.request({
     url: `${base}/notify`,

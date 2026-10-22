@@ -1,8 +1,8 @@
 # lcw-front-end
 
 The web front end for the Learner Credential Wallet (LCW): a React + TypeScript
-+ Vite app for logging in with a passphrase-derived
-[did:key](https://w3c-ccg.github.io/did-key-spec/), browsing the account's
++ Vite app for signing in with a passphrase that unlocks the account's keys,
+browsing the account's
 [Wallet Attached Storage](https://w3c-ccg.github.io/wallet-attached-storage-spec/)
 spaces, adding, viewing, sharing, moving, deleting, and verifying Verifiable
 Credentials, claiming and presenting them over [CHAPI](https://chapi.io/), and
@@ -13,14 +13,53 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
 
 ## How it works
 
-- **Login** (`src/lib/login.ts`): the password is the seed — SHA-256 of it is
-  the Ed25519 key, so the same password always derives the same `did:key`. The
-  page signs a [zCap capability invocation](https://github.com/interop-alliance/http-signature-zcap-verify)
-  of the lcw-back-end's `POST /login`, which verifies it against the DID
-  registered for the email and returns the account's registration token (the
-  WAS server's space-creation coupon) and its spaces. The key pair, controller
-  DID, email, coupon, and credential-space URL are kept in `localStorage` for
-  the session (cleared on sign-out). On the first open after registering, the
+- **Identity** (`src/lib/identity/`): nothing about the account derives from
+  the passphrase. Registration mints the account's keys at random: a user
+  key (X25519, the recipient of every encrypted collection, one per account)
+  and, for the passphrase credential, a signing key and a did:webvh update
+  key. It records the email against the signing key's `did:key` with the
+  lcw-back-end (`POST /register`, which emails the confirmation link),
+  creates the Main Space on the PWS server with the registration code as
+  coupon, publishes the account's `did:webvh` log into the space's
+  world-readable `id` collection (served through the identity domain,
+  `VITE_ID_DOMAIN`) and promotes the space to it, then binds the passphrase:
+  the passphrase derives an unlock identity (wallet-core's derivation, the
+  same as FreeWallet's) whose own small unlock space on the server holds
+  FreeWallet's signed pointer record and a sealed record of the credential's
+  keys and the user key. Any browser holding the passphrase can open the
+  account; a credential that is lost is removed and its keys rotated. Sign-in
+  derives the unlock identity, opens those records, and proves the signing
+  key to the back end's `POST /login` under the account's `did:webvh` (the
+  back end verifies it against the account document), which returns the
+  registration token (the PWS server's space-creation coupon). The back
+  end registers the account's `did:webvh`, so any credential's key signs
+  for it. **Passkeys** (`src/lib/identity/passkey.ts`): after a passphrase
+  sign-in on a browser that supports them, the login page offers to add a
+  passkey, and offers **Sign in with a passkey** beside the form. A passkey
+  is a credential of its own: the WebAuthn PRF extension (FreeWallet's
+  input and derivation) gives it an unlock secret, it gets its own signing
+  and update keys, published to the account document in two log entries
+  signed by the passphrase credential's update key (held for that step
+  alone), and its own unlock space. Authenticators without PRF support are
+  refused. Every Space is promoted to the account DID at creation, so a
+  session opened by any credential signs for all of them. **Recovery**
+  (`src/lib/identity/recovery`, `src/pages/ForgotPage.tsx`): the account's
+  recovery code is a credential of its own (uppercase base32 in groups of
+  four, derived with HKDF under a salt of its own, its own signing and update
+  keys and unlock space). After any sign-in, an account with no code stored
+  at the back end gets one, minted and stored (`PUT /recovery`, encrypted
+  there); the user never sees it, because it reaches them by email.
+  **Forgot your password?** on the login page asks the back end to mail the
+  code (`POST /forgot`); the recovery page takes the code and a new password,
+  opens the account through the recovery credential, adds the new password
+  as a credential, signs in with it, replaces the used code (it is in a
+  mailbox) with a fresh credential and removes the old one from the account
+  document and its unlock space from the server. The session (the unwrapped keys
+  and the account pointer) lives in this tab's `sessionStorage`: it is gone
+  when the tab closes, and the CHAPI popup, a window of its own, signs the
+  user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
+  creation of a Space uses the key's `did:key` form, which the server
+  requires, before the Space is promoted. On the first open after registering, the
   wallet offers to issue a **welcome credential** (the test issuer's LCW
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
@@ -34,7 +73,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   whether to open the batch view or the standard space view.
 - **Space browser**: a space's collections and resources through
   [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
-  signing every request with the login key. Collections and credentials are
+  signing every request with the account's signing key. Collections and credentials are
   cards; a collection's display name and description come from its `/meta`
   sub-resource (`collectionDisplay` in `src/lib/edv.ts`, with the description
   document as the fallback for collections that predate `/meta`). **New
@@ -59,9 +98,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   same way, and encrypted collections mint opaque resource ids (`add()`)
   rather than taking a name. Deleting out of an encrypted collection
   re-encrypts the body into `Trash` under `Trash`'s own epoch before the
-  permanent delete. Only the session key can decrypt, so the passphrase is
-  the only secret. The client is `@interop/was-client` 0.93, which speaks WAS
-  v0.5 and reads the server's service description before its first request.
+  permanent delete. Only the account's user key can decrypt, and whichever
+  credential opened the session unwrapped it. The client is
+  `@interop/was-client` 0.98, which speaks WAS v0.5 and reads the server's
+  service description before its first request.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
   [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)
@@ -160,8 +200,8 @@ is:
 
 - **lcw-back-end** `sam local start-api --port 3001 ...` — the login API
 - **was-server-aws** `sam local start-api` (port 3000) — the spaces
-- a demo account registered in the `wallet-test` DynamoDB table with a space
-  registered under `http://localhost:3000` in `wallet-spaces`
+- a demo account registered through the wallet against those two, so its
+  Main Space and unlock space exist on the local PWS server
 
 ## Tests
 
@@ -210,11 +250,18 @@ scratch batch space) — with console errors and failed requests captured for
 debugging. Skipped unless `DEPLOYED_URL` is set. Run it after every deploy.
 
 The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
-passphrase in the spec file) is registered through the wallet like any
-other, and its Main Space is seeded by `tests/scripts/seed-demo.mjs`
-(`DEMO_EMAIL=... node tests/scripts/seed-demo.mjs`): an encrypted
-`UniversityOfToronto` collection holding the LCW Experience Badge fixture,
-created the way the wallet creates collections. The script is idempotent.
+passphrase in the spec file) is registered by `npm run register:demo`
+(`DEMO_EMAIL=... REGISTRATION_CODE=...`), which runs the wallet's own
+registration from the shell; its confirmation email still has to be clicked.
+Its Main Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`): an
+encrypted `UniversityOfToronto` collection holding the LCW Experience Badge
+fixture, created the way the wallet creates collections. Both scripts run the
+identity layer under `tsx`, and both are idempotent. `npm run test:identity`
+(`WAS_URL=... COUPON=... ID_DOMAIN=...`) exercises the identity layer against
+a deployed PWS server without the back end, on scratch spaces it deletes.
+`tests/scripts/recovery-demo.ts` (`DEMO_EMAIL=...`) runs account recovery
+against the deployed back end on the demo account, once, right after it is
+registered: later its code is known only to the stored copy and the mailbox.
 
 ## Deploy
 

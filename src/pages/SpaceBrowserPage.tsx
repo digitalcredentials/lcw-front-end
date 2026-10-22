@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
-import { getToken, clearToken, getSpaceUrl, getSessionKey } from '../lib/auth';
+import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
@@ -301,9 +301,8 @@ export default function FileBrowserPage() {
       if (selected.id !== 'Trash') {
         const data = await source.resource(resource.id).get();
         const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
-        const storedKeyPair = getSessionKey();
-        if (body !== null && storedKeyPair) {
-          await ensureEncryptedCollection({ space, id: 'Trash', storedKeyPair, name: 'Trash' });
+        if (body !== null) {
+          await ensureEncryptedCollection({ space, id: 'Trash', name: 'Trash' });
           await space.collection('Trash').add(body as ResourceData);
         }
       }
@@ -510,16 +509,9 @@ export default function FileBrowserPage() {
       // custom — nothing readable lands in the plaintext Description.
       const description = newCollectionDescription.trim();
       const collectionId = name.replace(/\s+/g, '-');
-      const storedKeyPair = getSessionKey();
-      if (!storedKeyPair) {
-        clearToken();
-        navigate('/login', { replace: true });
-        return;
-      }
       await ensureEncryptedCollection({
         space: s.client.space(s.spaceId),
         id: collectionId,
-        storedKeyPair,
         name,
         ...(description && { description }),
       });

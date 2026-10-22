@@ -1,9 +1,63 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
-import { setToken, setSpaceUrl, setSessionKey, setCoupon, setEmail as storeEmail } from '../lib/auth';
-import { login } from '../lib/login';
+import {
+  openWithPassphrase,
+  openWithPasskey,
+  ensureRecoveryCredential,
+  addPasskey,
+  setSession,
+  passkeySupported,
+  PasskeyCancelledError,
+  PasskeyUnsupportedError,
+  type CredentialKeys,
+  type Session,
+} from '../lib/identity';
+import { identityConfig } from '../lib/identity/config';
+
+const RP_NAME = 'Learner Credential Wallet';
+const DISMISSED_KEY = (email: string) => `lcw_passkey_offer_dismissed:${email.trim().toLowerCase()}`;
+
+function offerDismissed(email: string): boolean {
+  try {
+    return localStorage.getItem(DISMISSED_KEY(email)) === 'true';
+  } catch {
+    return true;
+  }
+}
+
+function dismissOffer(email: string): void {
+  try {
+    localStorage.setItem(DISMISSED_KEY(email), 'true');
+  } catch {
+    // Nothing to remember with; the offer shows again next time.
+  }
+}
+
+// After a sign-in, an account with no stored recovery code gets one. Best
+// effort: the user is signed in either way, and the next sign-in tries again.
+async function ensureRecovery(session: Session, acting: CredentialKeys): Promise<void> {
+  try {
+    await ensureRecoveryCredential({ session, acting, config: identityConfig() });
+  } catch (err) {
+    console.error('Could not set up account recovery:', err);
+  }
+}
+
+function describe(err: unknown, fallback: string): string {
+  if (err instanceof PasskeyCancelledError) {
+    return 'The passkey step was cancelled.';
+  }
+  if (err instanceof PasskeyUnsupportedError) {
+    return err.message;
+  }
+  const status = (err as { status?: number }).status;
+  if (status === 400 || status === 401) {
+    return 'Invalid email or password.';
+  }
+  return fallback;
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -11,37 +65,79 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // After a passphrase sign-in on a browser with passkey support, the page
+  // offers to add a passkey before continuing. The passphrase credential's
+  // keys (its update key among them) are held only for that step.
+  const [offering, setOffering] = useState<Session | null>(null);
+  const actingRef = useRef<CredentialKeys | null>(null);
+
+  function enter(session: Session) {
+    setSession(session);
+    navigate('/files');
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
-      const { result, keyPair } = await login(email, password);
-
-      setToken(result.controller);
-      storeEmail(result.email);
-      if (result.token) {
-        // The WAS server requires this as the coupon when creating a space
-        setCoupon(result.token);
-      }
-      if (result.space) {
-        setSpaceUrl(result.space);
-      }
-      // Keep the authenticated key pair for signing WAS requests this session
-      setSessionKey(await keyPair.export({ secretKey: true, includeContext: true }));
-      navigate('/files');
-    } catch (err) {
-      const status = (err as { status?: number }).status;
-      if (status === 400 || status === 401) {
-        setError('Invalid email or password.');
+      // The passphrase derives the unlock identity, whose space holds the
+      // account pointer and the credential's keys; the signing key then
+      // proves the account to the back end (src/lib/identity).
+      const { session, keys } = await openWithPassphrase({ email, passphrase: password, config: identityConfig() });
+      await ensureRecovery(session, keys.credential);
+      if (passkeySupported() && !offerDismissed(session.email)) {
+        actingRef.current = keys.credential;
+        setOffering(session);
       } else {
-        setError('Unable to connect. Please try again.');
+        enter(session);
       }
+    } catch (err) {
+      setError(describe(err, 'Unable to connect. Please try again.'));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handlePasskeySignIn() {
+    setError('');
+    setLoading(true);
+    try {
+      const { session, keys } = await openWithPasskey({ config: identityConfig() });
+      await ensureRecovery(session, keys.credential);
+      enter(session);
+    } catch (err) {
+      setError(describe(err, 'Unable to sign in with a passkey. Please try again.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAddPasskey() {
+    if (!offering || !actingRef.current) {
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await addPasskey({ session: offering, acting: actingRef.current, config: identityConfig(), rpName: RP_NAME });
+      dismissOffer(offering.email);
+      actingRef.current = null;
+      enter(offering);
+    } catch (err) {
+      setError(describe(err, 'The passkey could not be added. You can try again next time you sign in.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleNotNow() {
+    if (!offering) {
+      return;
+    }
+    dismissOffer(offering.email);
+    actingRef.current = null;
+    enter(offering);
   }
 
   return (
@@ -57,9 +153,39 @@ export default function LoginPage() {
           </p>
         </header>
         <div className="w-full bg-white rounded-2xl shadow-md p-8">
+        {offering ? (
+          <div role="status">
+            <h2 className="text-2xl font-semibold text-gray-800 mb-1">Add a passkey?</h2>
+            <p className="text-sm text-gray-500 mb-6">
+              A passkey lets you sign in to this account with your device&#39;s screen lock instead of
+              your password. You can add one now or the next time you sign in.
+            </p>
+            {error && (
+              <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4">
+                {error}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={handleAddPasskey}
+              disabled={loading}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              {loading ? 'Adding the passkey…' : 'Add a passkey'}
+            </button>
+            <button
+              type="button"
+              onClick={handleNotNow}
+              disabled={loading}
+              className="mt-3 w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5"
+            >
+              Not now
+            </button>
+          </div>
+        ) : (
+        <>
         <h2 className="text-2xl font-semibold text-gray-800 mb-1">Sign in</h2>
         <p className="text-sm text-gray-500 mb-6">Enter your credentials to continue</p>
-
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
@@ -76,20 +202,17 @@ export default function LoginPage() {
               placeholder="you@example.com"
             />
           </div>
-
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
               Password
             </label>
             <PasswordInput id="password" autoComplete="current-password" value={password} onChange={setPassword} />
           </div>
-
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
             </p>
           )}
-
           <button
             type="submit"
             disabled={loading}
@@ -98,7 +221,25 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-
+        {passkeySupported() && (
+          <button
+            type="button"
+            onClick={handlePasskeySignIn}
+            disabled={loading}
+            className="mt-3 w-full border border-gray-300 hover:bg-gray-50 disabled:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2.5"
+          >
+            Sign in with a passkey
+          </button>
+        )}
+        </>
+        )}
+        {!offering && (
+          <p className="mt-4 text-sm text-center">
+            <Link to="/forgot" className="text-indigo-600 hover:text-indigo-700 font-medium">
+              Forgot your password?
+            </Link>
+          </p>
+        )}
         <p className="mt-5 text-sm text-gray-500 text-center">
           Need an account?{' '}
           <Link to="/register" className="text-indigo-600 hover:text-indigo-700 font-medium">

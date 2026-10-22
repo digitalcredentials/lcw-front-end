@@ -9,7 +9,11 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:claim": "node tests/scripts/claim-wire.mjs"
+    "test:claim": "node tests/scripts/claim-wire.mjs",
+    "register:demo": "tsx tests/scripts/register-demo.ts",
+    "seed:demo": "tsx tests/scripts/seed-demo.ts",
+    "test:identity": "tsx tests/scripts/identity-roundtrip.ts",
+    "test:recovery": "tsx tests/scripts/recovery-demo.ts"
   },
   "dependencies": {
     "@digitalcredentials/batch-issuer-ui": "github:digitalcredentials/batch-issuer-ui#release",
@@ -22,8 +26,10 @@
     "@interop/ezcap": "^7.4.3",
     "@interop/jsonld-signatures": "^11.8.5",
     "@interop/security-document-loader": "^10.1.2",
-    "@interop/was-client": "^0.93.1",
+    "@interop/wallet-core": "^0.107.0",
+    "@interop/was-client": "^0.98.0",
     "@interop/x25519-key-agreement-key": "^5.4.1",
+    "@scure/base": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "credential-handler-polyfill": "^4.1.0",
     "qr-scanner": "^1.4.2",
@@ -43,6 +49,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "oxlint": "^1.75.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
   }
