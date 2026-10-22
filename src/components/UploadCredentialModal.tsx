@@ -79,6 +79,10 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
       const scanner = new QrScanner(
         videoRef.current,
         async (result) => {
+          // An empty match (qr-scanner, on a busy view) is no QR code yet
+          if (!result.data) {
+            return;
+          }
           stopCamera();
           try {
             await stageQrText(result.data);

@@ -6,7 +6,6 @@ import { getSessionWASClient } from './was'
 import { getSession, accountMethodOf, holderSigner, type HolderSigner } from './identity'
 import { credentialFrom } from './linkedin'
 import { buildPresentation } from './vpRequest'
-import { PlainError } from './errors'
 
 const documentLoader = securityLoader().build()
 
@@ -49,7 +48,7 @@ export interface WalletCredential {
 export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   const session = await getSessionWASClient()
   if (!session) {
-    throw new PlainError('Sign in to your wallet first.')
+    throw new Error('UNAUTHORIZED')
   }
   const space = session.client.space(session.spaceId)
   const list = await space.collections()

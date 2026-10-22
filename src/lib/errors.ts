@@ -75,9 +75,11 @@ const STORAGE = 'Your storage'
 
 // What a signed-out learner is told. A claim cannot pick up where it stopped
 // (the issuer's exchange is usually single-use), so it is started again.
+const CLAIM_AGAIN = "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again."
 const SIGNED_OUT: Partial<Record<WalletAction, string>> = {
-  claim: "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again.",
-  'save-claim': "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again.",
+  claim: CLAIM_AGAIN,
+  'save-claim': CLAIM_AGAIN,
+  share: "You've been signed out. Sign in to your wallet, then share again from the site that asked.",
 }
 
 // What to do when nothing more specific applies. A claim is started from the
@@ -167,15 +169,24 @@ function readFailure(error: unknown): { status?: number; name?: string; message?
 // issuer's 401 says nothing about the wallet's session, so only a 401 from
 // the learner's own storage counts.
 export function isSessionEnded(action: WalletAction, error: unknown): boolean {
-  const { status, message } = readFailure(error)
+  const { status, name, message } = readFailure(error)
+  if (name === 'IssuerError') {
+    return false
+  }
   return (status === 401 && serviceFor(action, error) === STORAGE) || message === 'UNAUTHORIZED'
 }
 
 function serviceFor(action: WalletAction, error: unknown): string | null {
-  if (readFailure(error).name === 'IssuerError') {
+  const { name } = readFailure(error)
+  if (name === 'IssuerError') {
     return 'The issuer'
   }
-  return action in SERVICE ? SERVICE[action] ?? null : STORAGE
+  // A claim's storage writes fail as WasErrors; a bare fetch TypeError there
+  // came from something else it looked up (a context, a DID), so stays unnamed
+  if (action === 'claim' && name === 'TypeError') {
+    return null
+  }
+  return action in SERVICE ? (SERVICE[action] as string | null) : STORAGE
 }
 
 // The browser refused the permission the wallet asked for (registering as a
@@ -235,7 +246,7 @@ export function describeError(action: WalletAction, error: unknown): Failure {
     return { text: `${FAILED[action]} Your browser blocked it. Allow it when your browser asks, or check this site's permissions, then try again.`, detail }
   }
   if (action === 'start-camera' && isCameraUnavailable(error)) {
-    return { text: "We couldn't use a camera. Allow the camera for this site in your browser, or upload a photo of the QR code instead.", detail }
+    return { text: "We couldn't use a camera. Check that this site is allowed to use it and that no other app is using it, or upload a photo of the QR code instead.", detail }
   }
   // qr-scanner rejects with this bare string when an image holds no QR code
   if (action === 'read-file' && String(error).includes('No QR code found')) {
@@ -246,8 +257,11 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   }
   // Only a collection the person is naming can clash (a new one, or one made
   // while saving a claim); elsewhere (Trash, say) it is no fault of theirs.
-  if (name === 'CollectionExistsError' && (action === 'create-collection' || action === 'save-claim')) {
+  if (name === 'CollectionExistsError' && action === 'create-collection') {
     return { text: 'You already have a collection with this name. Choose a different name.', detail }
+  }
+  if (name === 'CollectionExistsError' && action === 'save-claim') {
+    return { text: "You already have a collection with this name. Go back to the issuer's page, claim the credential again, and choose another collection or name.", detail }
   }
   if (ON_A_CREDENTIAL.has(action) && name !== undefined && UNREADABLE.has(name)) {
     return { text: `${FAILED[action]} Its contents couldn't be read. Try again, or add the credential again if this keeps happening.`, detail }

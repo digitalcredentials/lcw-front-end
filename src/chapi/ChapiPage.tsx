@@ -163,12 +163,13 @@ export default function ChapiPage() {
     await loadSaveStep(claim);
   }
 
-  // Shows a failure in the popup. A share signed out midway goes back to the
-  // sign-in step, which picks the request up again once signed in; a claim
-  // cannot resume (the issuer's exchange is usually single-use), so its
-  // message says to start again.
+  // Shows a failure in the popup. Signed out while loading the credentials to
+  // share, it goes back to the sign-in step, which picks the request up again;
+  // a claim cannot resume (the issuer's exchange is usually single-use) and a
+  // half-sent share would resume with stale choices, so their messages say to
+  // start again.
   function fail(action: WalletAction, err: unknown) {
-    if ((action === 'load-for-share' || action === 'share') && isSessionEnded(action, err)) {
+    if (action === 'load-for-share' && isSessionEnded(action, err)) {
       setPhase({ step: 'not-signed-in' });
       return;
     }
