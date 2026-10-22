@@ -54,7 +54,24 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   opens the account through the recovery credential, adds the new password
   as a credential, signs in with it, replaces the used code (it is in a
   mailbox) with a fresh credential and removes the old one from the account
-  document and its unlock space from the server. The session (the unwrapped keys
+  document and its unlock space from the server. **Credential management**
+  (`src/lib/identity/catalogue.ts`, `src/pages/CredentialsPage.tsx`, under
+  **Settings → Sign-in credentials**): the account document says which keys
+  sign for the account, not what they are, so the wallet keeps a catalogue
+  (the Main Space's encrypted `account` collection, `credentials.json`) that
+  records, per signing key, the credential's kind, when it was added, the
+  keys that remove it, and the management capability its unlock identity
+  delegated to the account at binding (GET, PUT and DELETE on its unlock
+  space, ten years). The settings page lists the document's credentials
+  joined with the catalogue (one the catalogue does not know shows as a
+  plain credential until it next signs in, which catalogues it). Removing one
+  needs an update key, which a session does not hold: the user confirms with
+  a password or a passkey of the account, that credential's keys sign the
+  one log entry dropping the removed keys, the removed credential's records
+  are deleted from its unlock space under the delegated capability (the
+  space itself is root-only to delete and stays, empty), and the catalogue
+  forgets it. The session's own credential and the recovery code are not
+  removable from the page. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
   user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
@@ -262,6 +279,10 @@ a deployed PWS server without the back end, on scratch spaces it deletes.
 `tests/scripts/recovery-demo.ts` (`DEMO_EMAIL=...`) runs account recovery
 against the deployed back end on the demo account, once, right after it is
 registered: later its code is known only to the stored copy and the mailbox.
+`npm run test:credentials` (`DEMO_EMAIL=...`) lists the demo account's
+credentials, adds a stand-in passkey, removes it, and checks the document,
+the catalogue and the unlock space. It is idempotent and leaves the
+account's other credentials alone.
 
 ## Deploy
 

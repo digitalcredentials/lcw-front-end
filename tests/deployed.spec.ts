@@ -266,3 +266,23 @@ test('creates, saves, and deletes a batch', async ({ page }) => {
     }
   }
 });
+
+test('lists the sign-in credentials under Settings', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Sign-in credentials' }).click();
+    // The demo account signed in with its password, so that credential is
+    // listed as the session's and cannot be removed from it
+    const current = page.locator('[data-credential-current="true"]');
+    await expect(current).toBeVisible();
+    await expect(current).toContainText('Password');
+    await expect(current).toContainText('This session');
+    await expect(current.getByRole('button', { name: 'Remove' })).toHaveCount(0);
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
