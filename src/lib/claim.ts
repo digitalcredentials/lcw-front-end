@@ -4,6 +4,7 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient, getSessionWASClientFor } from './was'
 import { ensureEncryptedCollection, writeResource } from './edv'
+import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
 import type { ResourceData } from '@interop/was-client'
 
 const documentLoader = securityLoader().build()
@@ -19,12 +20,16 @@ export interface ClaimResult {
 
 // Runs a VC API (VCALM) exchange against the issuer:
 //   1. POST {} -> a DIDAuthentication presentation request (challenge/domain)
-//   2. generate a fresh did:key and persist it in the space's "dids" collection
+//   2. choose the holder DID: the account's did:webvh or did:web projection
+//      when the request's acceptedMethods allow one (any credential of the
+//      account then signs for it later), else a fresh did:key kept in the
+//      space's "dids" collection
 //   3. sign a DIDAuth presentation with it and POST it back
 //   4. receive the issued credential, bound to that DID
 export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   const session = await getSessionWASClient()
-  if (!session) {
+  const account = getSession()
+  if (!session || !account) {
     throw new Error('Sign in to your wallet first, then retry the claim.')
   }
 
@@ -44,21 +49,29 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     throw new Error("The issuer's request was incomplete, so the credential could not be collected.")
   }
 
-  // 2. A fresh DID for this credential, kept in the space's dids collection
-  const key = await Ed25519VerificationKey.generate()
-  const holderDid = `did:key:${key.fingerprint()}`
-  key.controller = holderDid
-  key.id = `${holderDid}#${key.fingerprint()}`
-
-  // The dids collection holds key secrets, so it is end-to-end encrypted:
-  // declared with the edv descriptor (set-once; adopted if already present)
-  // and written through add(), which mints an opaque EDV id — the key is
-  // found again by its content (present.ts scans for the fingerprint).
-  const space = session.client.space(session.spaceId)
-  const dids = space.collection('dids')
-  await ensureEncryptedCollection({ space, id: 'dids', name: 'dids' })
-  const exported = await key.export({ secretKey: true, includeContext: true })
-  await dids.add(exported as unknown as ResourceData)
+  // 2. The holder DID and its signer
+  const method = chooseAccountMethod(acceptedMethodsOf(vpr))
+  let holderDid: string
+  let signer: HolderSigner
+  if (method) {
+    ;({ did: holderDid, signer } = await holderSigner(account, method))
+  } else {
+    // A fresh DID for this credential, kept in the space's dids collection.
+    // The collection holds key secrets, so it is end-to-end encrypted:
+    // declared with the edv descriptor (set-once; adopted if already
+    // present) and written through add(), which mints an opaque EDV id; the
+    // key is found again by its content (present.ts scans for the DID).
+    const key = await Ed25519VerificationKey.generate()
+    holderDid = `did:key:${key.fingerprint()}`
+    key.controller = holderDid
+    key.id = `${holderDid}#${key.fingerprint()}`
+    const space = session.client.space(session.spaceId)
+    const dids = space.collection('dids')
+    await ensureEncryptedCollection({ space, id: 'dids', name: 'dids' })
+    const exported = await key.export({ secretKey: true, includeContext: true })
+    await dids.add(exported as unknown as ResourceData)
+    signer = key.signer()
+  }
 
   // 3. DIDAuth: prove control of the DID against the issuer's challenge
   // The suite context defines the proof terms (challenge, domain); the
@@ -72,7 +85,7 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     holder: holderDid
   }
   const signedVp = await jsigs.sign(presentation, {
-    suite: new Ed25519Signature2020({ signer: key.signer() }),
+    suite: new Ed25519Signature2020({ signer }),
     purpose: new jsigs.purposes.AuthenticationProofPurpose({
       challenge: vpr.challenge,
       domain: vpr.domain

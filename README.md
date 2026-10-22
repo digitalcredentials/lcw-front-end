@@ -63,15 +63,34 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   keys that remove it, and the management capability its unlock identity
   delegated to the account at binding (GET, PUT and DELETE on its unlock
   space, ten years). The settings page lists the document's credentials
-  joined with the catalogue (one the catalogue does not know shows as a
-  plain credential until it next signs in, which catalogues it). Removing one
-  needs an update key, which a session does not hold: the user confirms with
-  a password or a passkey of the account, that credential's keys sign the
-  one log entry dropping the removed keys, the removed credential's records
-  are deleted from its unlock space under the delegated capability (the
-  space itself is root-only to delete and stays, empty), and the catalogue
-  forgets it. The session's own credential and the recovery code are not
-  removable from the page. The session (the unwrapped keys
+  joined with the catalogue. Removing one needs an update key, which a
+  session does not hold: the user confirms with a password or a passkey of
+  the account, and that credential's keys sign the one log entry dropping
+  the removed keys. The same entry **rotates the user key** the removed
+  credential held: a fresh user key replaces it under `keyAgreement`; the
+  removed credential's records are deleted from its unlock space under the
+  delegated capability (the space itself is root-only to delete and stays,
+  empty); every encrypted collection of every Space gets a fresh epoch
+  wrapped to the new key, its earlier epochs re-wrapped to it, and the old
+  key's wraps dropped (records are not re-encrypted: a copy of ciphertext
+  taken before the rotation stays readable to a copy of the old key); a
+  fresh **user-key roster** is written; and the catalogue forgets the
+  credential and is re-sealed to the new key. The roster
+  (`src/lib/identity/roster.ts`, the Main Space's `account/user-key.json`)
+  is how every credential holds the one user key: a JWE-style record whose
+  `recipients` array wraps the key to each credential's unlock
+  key-agreement key, the way an encrypted collection's epoch key is wrapped
+  to its readers. Adding a credential appends a recipient; a rotation
+  writes a new roster for the new key with the remaining credentials, in
+  one compare-and-swap. A credential signing in reads its own keys record
+  from its unlock space, signs as the account, unwraps its roster entry,
+  and accepts the key only if its public half is the one the account
+  document names under `keyAgreement`, read from the Space's public log.
+  The session
+  continues on the new key; a session open elsewhere signs in again. The
+  session's own credential and the recovery code are not removable from the
+  page; recovery itself removes the used recovery credential the same way,
+  so an emailed code reaches nothing once used. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
   user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
@@ -149,8 +168,15 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   page offers a credential, the mediator opens `chapi.html` (a second Vite
   entry rendering `src/chapi/ChapiPage.tsx`), which runs the
   [VC API exchange](https://www.w3.org/TR/vcalm-1.0/#workflows-and-exchanges):
-  a fresh `did:key` (stored in the space's encrypted `dids` collection) signs
-  the DIDAuth presentation, and the issued credential is saved to a
+  the holder DID is chosen from the issuer's `acceptedMethods`
+  (`src/lib/identity/holder.ts`): the account's `did:webvh` when accepted,
+  else its `did:web` projection (`did:web:{id domain}:{space id}`, the same
+  document published as `id/did.json` beside the log and served by the
+  identity domain, which any did:web resolver reads), else a fresh `did:key`
+  stored in the space's encrypted `dids` collection. The session's key signs
+  the DIDAuth presentation for an account DID, and later any credential of
+  the account can present what was bound to it; a `did:key` credential is
+  presented with its stored key. The issued credential is saved to a
   collection the user picks from every credential space of the account
   (grouped by space; `Trash`, `dids` and `public` excluded), or to a new
   collection created on the spot in the chosen space. An incoming
@@ -283,6 +309,10 @@ registered: later its code is known only to the stored copy and the mailbox.
 credentials, adds a stand-in passkey, removes it, and checks the document,
 the catalogue and the unlock space. It is idempotent and leaves the
 account's other credentials alone.
+`npm run test:holder` (`DEMO_EMAIL=...`) claims a badge from the deployed
+test issuer as the demo account's `did:web` projection, checking the
+projection the identity domain serves, the issuer's `acceptedMethods`, and
+that the issued credential is bound to the account DID; nothing is stored.
 
 ## Deploy
 

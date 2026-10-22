@@ -14,7 +14,8 @@
     "seed:demo": "tsx tests/scripts/seed-demo.ts",
     "test:identity": "tsx tests/scripts/identity-roundtrip.ts",
     "test:recovery": "tsx tests/scripts/recovery-demo.ts",
-    "test:credentials": "tsx tests/scripts/credentials-demo.ts"
+    "test:credentials": "tsx tests/scripts/credentials-demo.ts",
+    "test:holder": "tsx tests/scripts/claim-web-holder.ts"
   },
   "dependencies": {
     "@digitalcredentials/batch-issuer-ui": "github:digitalcredentials/batch-issuer-ui#release",

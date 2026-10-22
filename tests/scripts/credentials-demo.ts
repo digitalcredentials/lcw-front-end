@@ -51,14 +51,19 @@ check('it is paired with its update key and staged-key commitment', Boolean(row?
 const opened = await readCredential({ unlock, serverUrl: config.serverUrl })
 check('its secret opens the account', opened?.contents.pointer?.did === session.did)
 
-const { retired } = await removeCredential({ session, acting: keys.credential, credential: row!, config })
+const { retired, session: rotated, rotatedCollections } = await removeCredential({ session, acting: keys.credential, credential: row!, config })
 check('it is removed and its unlock records retired under the delegated capability', retired)
-const after = await listCredentials({ session })
+check("the account's user key was rotated", rotated.userKey.id !== session.userKey.id, `${rotatedCollections} collection(s) rotated`)
+const after = await listCredentials({ session: rotated })
 check('it is no longer listed', !after.some((c) => c.signingMultibase === addedMultibase))
 check('its secret no longer opens anything', (await readCredential({ unlock, serverUrl: config.serverUrl })) === null)
-const resolved = await resolveDID(session.did)
+const resolved = await resolveDID(rotated.did)
 const doc = resolved.didDocument as { capabilityInvocation?: unknown[] } | null
 check('the account document lists exactly the remaining credentials', doc?.capabilityInvocation?.length === after.length, `${doc?.capabilityInvocation?.length} vs ${after.length}`)
+const agreement = (doc as { keyAgreement?: unknown[] } | null)?.keyAgreement?.map((entry) => (typeof entry === 'string' ? entry : (entry as { id?: string }).id)) ?? []
+check('the document names the new user key under keyAgreement', agreement.length === 1 && String(agreement[0]).endsWith(`#${rotated.userKey.id.split(':')[2]}`), agreement.join(', '))
+const reopened = await openWithPassphrase({ email, passphrase, config })
+check("the password credential now opens with the new user key", reopened.session.userKey.id === rotated.userKey.id)
 const meta = resolved.didDocumentMetadata as { updateKeys?: unknown[]; nextKeyHashes?: unknown[] }
 check('the log authorizes one update key per credential', meta?.updateKeys?.length === after.length, meta?.updateKeys?.length)
 check('the log commits exactly two hashes per credential', meta?.nextKeyHashes?.length === after.length * 2, meta?.nextKeyHashes?.length)
