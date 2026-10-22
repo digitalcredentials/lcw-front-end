@@ -149,8 +149,15 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   page offers a credential, the mediator opens `chapi.html` (a second Vite
   entry rendering `src/chapi/ChapiPage.tsx`), which runs the
   [VC API exchange](https://www.w3.org/TR/vcalm-1.0/#workflows-and-exchanges):
-  a fresh `did:key` (stored in the space's encrypted `dids` collection) signs
-  the DIDAuth presentation, and the issued credential is saved to a
+  the holder DID is chosen from the issuer's `acceptedMethods`
+  (`src/lib/identity/holder.ts`): the account's `did:webvh` when accepted,
+  else its `did:web` projection (`did:web:{id domain}:{space id}`, the same
+  document published as `id/did.json` beside the log and served by the
+  identity domain, which any did:web resolver reads), else a fresh `did:key`
+  stored in the space's encrypted `dids` collection. The session's key signs
+  the DIDAuth presentation for an account DID, and later any credential of
+  the account can present what was bound to it; a `did:key` credential is
+  presented with its stored key. The issued credential is saved to a
   collection the user picks from every credential space of the account
   (grouped by space; `Trash`, `dids` and `public` excluded), or to a new
   collection created on the spot in the chosen space. An incoming
@@ -283,6 +290,10 @@ registered: later its code is known only to the stored copy and the mailbox.
 credentials, adds a stand-in passkey, removes it, and checks the document,
 the catalogue and the unlock space. It is idempotent and leaves the
 account's other credentials alone.
+`npm run test:holder` (`DEMO_EMAIL=...`) claims a badge from the deployed
+test issuer as the demo account's `did:web` projection, checking the
+projection the identity domain serves, the issuer's `acceptedMethods`, and
+that the issued credential is bound to the account DID; nothing is stored.
 
 ## Deploy
 

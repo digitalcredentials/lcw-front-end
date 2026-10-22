@@ -1,6 +1,7 @@
 import { readLogFromString, resolveDIDFromLog, updateDID, deriveNextKeyHash, logToJsonlString, type DIDLog } from '@interop/did-method-webvh'
 import type { WasClient } from '@interop/was-client'
 import { multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys } from './keys'
+import { publishProjection } from './account'
 
 // Adding a credential to the account: its signing key joins the account
 // document, and its update key joins the log's update keys, in two entries,
@@ -191,6 +192,7 @@ export async function addCredentialToLog({
   })
 
   await resource.put(new TextEncoder().encode(logToJsonlString(add.log)), { contentType: 'text/jsonl', ifMatch: read.etag })
+  await publishProjection({ was, spaceId, log: add.log })
 }
 
 // Removing a credential: one entry that drops its signing key from the
@@ -249,4 +251,5 @@ export async function removeCredentialFromLog({
     ...relations,
   })
   await resource.put(new TextEncoder().encode(logToJsonlString(next.log)), { contentType: 'text/jsonl', ifMatch: etag })
+  await publishProjection({ was, spaceId, log: next.log })
 }
