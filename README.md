@@ -63,15 +63,27 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   keys that remove it, and the management capability its unlock identity
   delegated to the account at binding (GET, PUT and DELETE on its unlock
   space, ten years). The settings page lists the document's credentials
-  joined with the catalogue (one the catalogue does not know shows as a
-  plain credential until it next signs in, which catalogues it). Removing one
-  needs an update key, which a session does not hold: the user confirms with
-  a password or a passkey of the account, that credential's keys sign the
-  one log entry dropping the removed keys, the removed credential's records
-  are deleted from its unlock space under the delegated capability (the
-  space itself is root-only to delete and stays, empty), and the catalogue
-  forgets it. The session's own credential and the recovery code are not
-  removable from the page. The session (the unwrapped keys
+  joined with the catalogue. Removing one needs an update key, which a
+  session does not hold: the user confirms with a password or a passkey of
+  the account, and that credential's keys sign the one log entry dropping
+  the removed keys. The same entry **rotates the user key** the removed
+  credential held: a fresh user key replaces it under `keyAgreement`; the
+  removed credential's records are deleted from its unlock space under the
+  delegated capability (the space itself is root-only to delete and stays,
+  empty); every remaining credential's user-key record
+  (`keyring/lcw-user-key.json`, sealed to its unlock identity's public key,
+  which its `did:key` yields, and signed by the session's account key, which
+  a reader accepts beside its own unlock key because the account document
+  lists it) is rewritten with the new key under its capability; every
+  encrypted collection of every Space gets a fresh epoch wrapped to the new
+  key, its earlier epochs re-wrapped to it, and the old key's wraps dropped
+  (records are not re-encrypted: a copy of ciphertext taken before the
+  rotation stays readable to a copy of the old key); and the catalogue
+  forgets the credential and is re-sealed to the new key. The session
+  continues on the new key; a session open elsewhere signs in again. The
+  session's own credential and the recovery code are not removable from the
+  page; recovery itself removes the used recovery credential the same way,
+  so an emailed code reaches nothing once used. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
   user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
