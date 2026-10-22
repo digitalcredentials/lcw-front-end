@@ -5,6 +5,8 @@ import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi'
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
 import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
+import FailureText from './FailureText';
+import { describeError, type Failure } from '../lib/errors';
 
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Spaces, one link per registered plugin such as Credential
@@ -18,20 +20,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
   // 'unknown' until the CHAPI permission is queried; then reflects reality
   const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
   const [walletBusy, setWalletBusy] = useState(false);
-  const [walletError, setWalletError] = useState('');
+  const [walletError, setWalletError] = useState<Failure | null>(null);
 
   // Shown when the wallet opens while the browser wallet is not enabled; at
   // most once per tab session
   const [enablePromptOpen, setEnablePromptOpen] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
-  const [promptError, setPromptError] = useState('');
+  const [promptError, setPromptError] = useState<Failure | null>(null);
 
   // The welcome-credential flow, offered on the first open after this
   // browser registered the account: offer (name entry) -> chapi (enable the
   // browser wallet, skipped when already enabled) -> sending -> sent.
   const [welcomeStep, setWelcomeStep] = useState<'offer' | 'chapi' | 'sending' | 'sent' | null>(null);
   const [welcomeName, setWelcomeName] = useState('');
-  const [welcomeError, setWelcomeError] = useState('');
+  const [welcomeError, setWelcomeError] = useState<Failure | null>(null);
 
   // Queried at mount AND every time Settings opens: the mount-time query can
   // race the CHAPI mediator's setup and mis-report, so opening the menu
@@ -71,13 +73,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
       return;
     }
     setWelcomeStep('sending');
-    setWelcomeError('');
+    setWelcomeError(null);
     try {
       await requestWelcomeCredential(welcomeName.trim(), email);
       clearWelcomePending();
       setWelcomeStep('sent');
     } catch (err) {
-      setWelcomeError(err instanceof Error ? err.message : 'The email could not be sent.');
+      setWelcomeError(describeError('welcome-email', err));
       setWelcomeStep('offer');
     }
   }
@@ -88,18 +90,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (walletState === 'enabled') {
       void sendWelcomeCredential();
     } else {
-      setWelcomeError('');
+      setWelcomeError(null);
       setWelcomeStep('chapi');
     }
   }
 
   async function enableWalletForWelcome() {
-    setWelcomeError('');
+    setWelcomeError(null);
     try {
       await registerWallet();
       setWalletState('enabled');
     } catch (err) {
-      setWelcomeError(err instanceof Error ? err.message : 'Could not enable the browser wallet.');
+      setWelcomeError(describeError('enable-wallet', err));
       return;
     }
     await sendWelcomeCredential();
@@ -117,13 +119,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   async function enableFromPrompt() {
     setPromptBusy(true);
-    setPromptError('');
+    setPromptError(null);
     try {
       await registerWallet();
       setWalletState('enabled');
       dismissEnablePrompt();
     } catch (err) {
-      setPromptError(err instanceof Error ? err.message : 'Could not enable the browser wallet.');
+      setPromptError(describeError('enable-wallet', err));
     } finally {
       setPromptBusy(false);
     }
@@ -140,7 +142,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   async function toggleBrowserWallet() {
     setWalletBusy(true);
-    setWalletError('');
+    setWalletError(null);
     try {
       if (walletState === 'enabled') {
         await unregisterWallet();
@@ -155,7 +157,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         navigate('/login', { replace: true });
         return;
       }
-      setWalletError(err instanceof Error ? err.message : 'Could not update the browser wallet registration.');
+      setWalletError(describeError('update-wallet', err));
     } finally {
       setWalletBusy(false);
     }
@@ -255,9 +257,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </button>
               )}
               {walletError && (
-                <p role="alert" className="px-3 text-xs text-red-600">
-                  {walletError}
-                </p>
+                <div role="alert" className="px-3 text-xs text-red-600">
+                  <FailureText failure={walletError} />
+                </div>
               )}
             </div>
           )}
@@ -311,9 +313,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent mb-4"
                 />
                 {welcomeError && (
-                  <p role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    {welcomeError}
-                  </p>
+                  <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <FailureText failure={welcomeError} />
+                  </div>
                 )}
                 <div className="flex justify-end gap-2">
                   <button
@@ -349,9 +351,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   You can enable or disable this at any time under Settings.
                 </p>
                 {welcomeError && (
-                  <p role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                    {welcomeError}
-                  </p>
+                  <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <FailureText failure={welcomeError} />
+                  </div>
                 )}
                 <div className="flex justify-end gap-2">
                   <button
@@ -428,9 +430,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
               under Settings.
             </p>
             {promptError && (
-              <p role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                {promptError}
-              </p>
+              <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <FailureText failure={promptError} />
+              </div>
             )}
             <div className="flex justify-end gap-2">
               <button

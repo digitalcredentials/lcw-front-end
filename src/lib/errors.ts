@@ -21,6 +21,17 @@ export type WalletAction =
   | 'create-collection'
   | 'save-description'
   | 'create-space'
+  | 'claim'
+  | 'save-claim'
+  | 'load-for-share'
+  | 'share'
+  | 'connect-mediator'
+  | 'welcome-email'
+  | 'enable-wallet'
+  | 'update-wallet'
+  | 'read-file'
+  | 'read-qr'
+  | 'start-camera'
 
 const FAILED: Record<WalletAction, string> = {
   'load-spaces': "We couldn't load your spaces.",
@@ -34,6 +45,36 @@ const FAILED: Record<WalletAction, string> = {
   'create-collection': "We couldn't create the collection.",
   'save-description': "We couldn't save the description.",
   'create-space': "We couldn't create the space.",
+  claim: "We couldn't collect your credential.",
+  'save-claim': "We couldn't save your credential.",
+  'load-for-share': "We couldn't load your credentials.",
+  share: "We couldn't share your credentials.",
+  'connect-mediator': "We couldn't connect to your browser wallet.",
+  'welcome-email': "We couldn't send your welcome credential email.",
+  'enable-wallet': "We couldn't turn on the browser wallet.",
+  'update-wallet': "We couldn't change the browser wallet setting.",
+  'read-file': "We couldn't read a credential from that file.",
+  'read-qr': "We couldn't read a credential from that QR code.",
+  'start-camera': "We couldn't start the camera.",
+}
+
+// Who the person was waiting on, named when it can't be reached or isn't
+// responding. Every action not listed talks to the learner's own storage.
+const SERVICE: Partial<Record<WalletAction, string>> = {
+  claim: 'The issuer',
+  'welcome-email': 'The issuer',
+  'connect-mediator': 'The browser wallet service',
+  'enable-wallet': 'The browser wallet service',
+  'update-wallet': 'The browser wallet service',
+  'read-qr': 'The link in this QR code',
+}
+
+// What to do when nothing more specific applies. A claim is started from the
+// issuer's page, so that is where it is retried.
+const AGAIN: Partial<Record<WalletAction, string>> = {
+  claim: "Go back to the issuer's page and try again.",
+  'read-file': "Check that it's a credential file or a picture of a credential's QR code.",
+  'read-qr': 'Try scanning it again, or ask whoever gave it to you for a new one.',
 }
 
 // A failure as the wallet shows it: the sentence, and the technical text
@@ -41,6 +82,17 @@ const FAILED: Record<WalletAction, string> = {
 export interface Failure {
   text: string
   detail?: string
+}
+
+// Thrown with a message already written for the learner, which is shown as
+// it is; `detail` keeps whatever technical text explains it.
+export class PlainError extends Error {
+  detail?: string
+  constructor(message: string, detail?: string) {
+    super(message)
+    this.name = 'PlainError'
+    this.detail = detail
+  }
 }
 
 // Thrown when a new collection's id is already taken by a collection the
@@ -88,10 +140,32 @@ function readFailure(error: unknown): { status?: number; name?: string; message?
 
 // A signed-out session: the wallet's own code throws Error('UNAUTHORIZED')
 // when the session is missing (handleError sends the person to sign in), and
-// the server answers 401. Retrying cannot help; signing in can.
-function isSessionEnded(error: unknown): boolean {
+// the storage server answers 401. Retrying cannot help; signing in can. An
+// issuer's 401 says nothing about the wallet's session, so only a 401 from
+// the learner's own storage counts.
+function isSessionEnded(action: WalletAction, error: unknown): boolean {
   const { status, message } = readFailure(error)
-  return status === 401 || message === 'UNAUTHORIZED'
+  return (status === 401 && SERVICE[action] === undefined) || message === 'UNAUTHORIZED'
+}
+
+// The browser refused the permission the wallet asked for (registering as a
+// credential handler, or the camera): only the person can change that.
+function isRefused(error: unknown): boolean {
+  const { name, message } = readFailure(error)
+  return name === 'NotAllowedError' || /permission denied/i.test(message ?? '')
+}
+
+// The browser's camera refusals (DOMException names from getUserMedia):
+// blocked by the person or the browser, or no usable camera at all.
+function cameraProblem(error: unknown): string | undefined {
+  const { name } = readFailure(error)
+  if (isRefused(error) || name === 'SecurityError') {
+    return "Camera access is blocked. Allow the camera for this site in your browser, or upload a photo of the QR code instead."
+  }
+  if (name === 'NotFoundError' || name === 'NotReadableError' || name === 'OverconstrainedError') {
+    return 'No camera is available. Upload a photo of the QR code instead.'
+  }
+  return undefined
 }
 
 // No answer from the server at all: the browser's fetch failure ("Failed to
@@ -123,11 +197,28 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   console.error(`Wallet: ${action} failed`, error)
   const detail = technicalDetail(error)
   const { status, name } = readFailure(error)
-  if (isSessionEnded(error)) {
+  const service = SERVICE[action] ?? 'Your storage'
+  if (error instanceof PlainError) {
+    return { text: error.message, detail: error.detail ?? detail }
+  }
+  if (isSessionEnded(action, error)) {
     return { text: "You've been signed out. Sign in again to keep going.", detail }
   }
+  if ((action === 'enable-wallet' || action === 'update-wallet') && isRefused(error)) {
+    return { text: `${FAILED[action]} Your browser blocked it. Allow it when your browser asks, or check this site's permissions, then try again.`, detail }
+  }
+  if (action === 'start-camera') {
+    const problem = cameraProblem(error)
+    if (problem) {
+      return { text: problem, detail }
+    }
+  }
+  // qr-scanner rejects with this bare string when an image holds no QR code
+  if (action === 'read-file' && String(error).includes('No QR code found')) {
+    return { text: "We couldn't find a QR code in that image. Try a clearer picture, or paste the credential's text instead.", detail }
+  }
   if (isUnreachable(error)) {
-    return { text: `${FAILED[action]} Your storage can't be reached right now. Check your connection and try again.`, detail }
+    return { text: `${FAILED[action]} ${service} can't be reached right now. Check your connection and try again.`, detail }
   }
   // Only a new collection's own name can clash; elsewhere (Trash, say) the
   // same error is no fault of the person's.
@@ -143,7 +234,7 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   // A server fault that may pass; 501 (not supported) and 507 (storage full)
   // will not, so they are not offered a wait.
   if ((status !== undefined && status >= 500 && status !== 501 && status !== 507) || name === 'WasServerError') {
-    return { text: `${FAILED[action]} Your storage isn't responding right now. Try again in a few minutes.`, detail }
+    return { text: `${FAILED[action]} ${service} isn't responding right now. Try again in a few minutes.`, detail }
   }
-  return { text: `${FAILED[action]} Please try again.`, detail }
+  return { text: `${FAILED[action]} ${AGAIN[action] ?? 'Please try again.'}`, detail }
 }

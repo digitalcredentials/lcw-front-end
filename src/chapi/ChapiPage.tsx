@@ -16,6 +16,8 @@ import { loadWalletCredentials, presentationFor, type WalletCredential } from '.
 import { credentialName, issuerName } from '../lib/linkedin';
 import { verifyForSharing } from '../lib/verify';
 import { suggestCollectionName, collectionIdFor, lastCollection, rememberLastCollection } from '../lib/collectionName';
+import FailureText from '../components/FailureText';
+import { describeError, type Failure } from '../lib/errors';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -51,7 +53,7 @@ type Phase =
   | { step: 'loading-credentials' }
   | { step: 'pick'; matches: WalletCredential[] }
   | { step: 'shared' }
-  | { step: 'error'; message: string };
+  | { step: 'error'; failure: Failure };
 
 function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | undefined {
   const interact = vpr?.interact as { service?: { type?: string; serviceEndpoint?: string }[] } | undefined;
@@ -135,14 +137,14 @@ export default function ChapiPage() {
                 }
                 await claimFrom(vpr, event.credentialRequestOrigin);
               } catch (err) {
-                setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+                setPhase({ step: 'error', failure: describeError('claim', err) });
               }
             })();
           });
         },
       });
     })().catch((err) => {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not connect to the wallet mediator.' });
+      setPhase({ step: 'error', failure: describeError('connect-mediator', err) });
     });
   }, []);
 
@@ -150,7 +152,13 @@ export default function ChapiPage() {
   async function claimFrom(vpr: Record<string, unknown> | undefined, origin: string | undefined) {
     const exchangeUrl = exchangeUrlFrom(vpr);
     if (!exchangeUrl) {
-      setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
+      setPhase({
+        step: 'error',
+        failure: {
+          text: "This wallet can't collect a credential from this kind of request. Go back to the issuer's page and try another way.",
+          detail: 'The request carries no exchange endpoint this wallet understands.',
+        },
+      });
       return;
     }
     setPhase({ step: 'claiming', from: hostOf(origin) });
@@ -161,6 +169,7 @@ export default function ChapiPage() {
 
   // Signed in inside the popup: pick up whichever flow was waiting.
   async function resumeAfterSignIn() {
+    const action = requestRef.current ? 'load-for-share' : 'claim';
     try {
       if (requestRef.current) {
         await continueRequest();
@@ -168,7 +177,7 @@ export default function ChapiPage() {
         await claimFrom(pendingClaimRef.current.vpr, pendingClaimRef.current.origin);
       }
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+      setPhase({ step: 'error', failure: describeError(action, err) });
     }
   }
 
@@ -290,7 +299,7 @@ export default function ChapiPage() {
         space: space?.spaceName ?? '',
       });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
+      setPhase({ step: 'error', failure: describeError('save-claim', err) });
     } finally {
       setSaving(false);
     }
@@ -317,7 +326,7 @@ export default function ChapiPage() {
       setSelected(new Set(matches.length === 1 ? [`${matches[0].collectionId}/${matches[0].resourceId}`] : []));
       setPhase({ step: 'pick', matches });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not load your credentials.' });
+      setPhase({ step: 'error', failure: describeError('load-for-share', err) });
     }
   }
 
@@ -387,7 +396,7 @@ export default function ChapiPage() {
       resolveRef.current?.({ type: 'response', dataType: 'VerifiablePresentation', data: vp });
       setPhase({ step: 'shared' });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Sharing failed.' });
+      setPhase({ step: 'error', failure: describeError('share', err) });
     } finally {
       setSharing(false);
     }
@@ -630,9 +639,9 @@ export default function ChapiPage() {
 
         {phase.step === 'error' && (
           <div>
-            <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              {phase.message}
-            </p>
+            <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <FailureText failure={phase.failure} />
+            </div>
             <button onClick={cancel} className="mt-4 w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
               Close
             </button>

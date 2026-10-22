@@ -4,6 +4,7 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient, getSessionWASClientFor } from './was'
 import { ensureEncryptedCollection, writeResource } from './edv'
+import { PlainError } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
 import type { ResourceData } from '@interop/was-client'
 
@@ -30,7 +31,7 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   const session = await getSessionWASClient()
   const account = getSession()
   if (!session || !account) {
-    throw new Error('Sign in to your wallet first, then retry the claim.')
+    throw new PlainError('Sign in to your wallet first, then retry the claim.')
   }
 
   // 1. The issuer's DIDAuthentication request
@@ -40,13 +41,13 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     body: '{}'
   })
   if (!vprResponse.ok) {
-    throw new Error(`The issuer rejected the exchange (${vprResponse.status}).`)
+    throw Object.assign(new Error(`The issuer rejected the exchange (${vprResponse.status}).`), { status: vprResponse.status })
   }
   const { verifiablePresentationRequest: vpr } = await vprResponse.json()
   if (!vpr?.challenge || !vpr?.domain) {
     // The message stays plain; the request itself is kept for diagnosis
     console.warn('Exchange request is missing its challenge or domain:', vpr)
-    throw new Error("The issuer's request was incomplete, so the credential could not be collected.")
+    throw new PlainError("The issuer's request was incomplete, so we couldn't collect the credential. Go back to the issuer's page and try again.")
   }
 
   // 2. The holder DID and its signer
@@ -101,12 +102,12 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   })
   const result = await issueResponse.json().catch(() => ({}))
   if (!issueResponse.ok) {
-    throw new Error(result.error ?? `The issuer rejected the presentation (${issueResponse.status}).`)
+    throw Object.assign(new Error(result.error ?? `The issuer rejected the presentation (${issueResponse.status}).`), { status: issueResponse.status })
   }
   const envelope = result.verifiablePresentation
   const credential = envelope?.verifiableCredential?.[0]
   if (!credential) {
-    throw new Error('The issuer returned no credential.')
+    throw new PlainError("The issuer didn't send a credential. Go back to the issuer's page and try again.")
   }
   return { credential, envelope, holderDid }
 }
@@ -127,7 +128,7 @@ export async function saveCredential(
     ? await getSessionWASClientFor(spaceUrl)
     : await getSessionWASClient()
   if (!session) {
-    throw new Error('Sign in to your wallet first.')
+    throw new PlainError('Sign in to your wallet first.')
   }
   return writeResource({
     collection: session.client.space(session.spaceId).collection(collectionId),
