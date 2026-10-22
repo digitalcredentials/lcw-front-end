@@ -13,7 +13,8 @@ import { pluginPages } from '../plugins';
 export default function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Open on a settings page, so the page's own link shows as the active item
+  const [settingsOpen, setSettingsOpen] = useState(pathname.startsWith('/settings'));
   // 'unknown' until the CHAPI permission is queried; then reflects reality
   const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
   const [walletBusy, setWalletBusy] = useState(false);
@@ -217,7 +218,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </button>
           {settingsOpen && (
             <div className="ml-3 border-l border-gray-200 pl-3 space-y-1">
-              <p className="px-3 text-xs uppercase tracking-wide">
+              <Link
+                to="/settings/credentials"
+                className={itemClass(pathname === '/settings/credentials')}
+                title="The passwords, passkeys and recovery code that open this account"
+              >
+                Sign-in credentials
+              </Link>
+              <p className="px-3 pt-2 text-xs uppercase tracking-wide">
                 <span className="text-gray-400">Browser wallet: </span>
                 {walletState === 'enabled' && (
                   <span className="font-semibold text-green-700">Enabled</span>

@@ -19,6 +19,8 @@ import {
   type KeyringRecordContents,
   type UnlockIdentity,
 } from '@interop/wallet-core/keyring'
+import type { ZcapClient } from '@interop/ezcap'
+import type { IZcap } from '@interop/data-integrity-core/zcap'
 import { fromBase64url, toBase64url } from './bytes'
 import type { CredentialKeys, UserKey } from './keys'
 
@@ -33,9 +35,66 @@ import type { CredentialKeys, UserKey } from './keys'
 // browser holding the credential can open the account.
 
 const KEYRING = 'keyring'
+const POINTER_RESOURCE = 'keyring.json'
 export const KEYS_RESOURCE = 'lcw-keys.json'
 const KEYS_LABEL = 'lcw-keys'
 const KEYS_VERSION = 1
+// How long the management capability an unlock identity delegates to the
+// account stays valid. The account uses it to retire the credential's
+// records when the credential is removed; past this, a removal leaves the
+// unlock space in place (reported, not fatal).
+const MANAGEMENT_YEARS = 10
+
+export type { IZcap }
+
+// The URL of an unlock space on its server, the capability's target.
+export const unlockSpaceUrl = (serverUrl: string, spaceId: string) => `${serverUrl}/space/${spaceId}/`
+
+// Delegates a management capability on the unlock space from the unlock
+// identity (the space's controller) to the account DID: GET, PUT and DELETE
+// below the space, so a session signed as the account can retire the
+// credential's records later without its secret. Deleting the space itself
+// is a root-only operation on the server, so the space stays; emptied, it
+// opens nothing. Signed with eddsa-jcs-2022, which the server verifies.
+export async function delegateManagement({ unlock, serverUrl, did }: { unlock: UnlockIdentity; serverUrl: string; did: string }): Promise<IZcap> {
+  const expires = new Date()
+  expires.setUTCFullYear(expires.getUTCFullYear() + MANAGEMENT_YEARS)
+  return unlock.zcapClient.delegate({
+    invocationTarget: unlockSpaceUrl(serverUrl, unlock.spaceId),
+    controller: did,
+    allowedActions: ['GET', 'PUT', 'DELETE'],
+    expires,
+  })
+}
+
+// Retires a credential's records under the management capability its unlock
+// identity delegated: the pointer record and the keys record are deleted,
+// so the credential's secret no longer opens the account or yields the user
+// key. `zcapClient` signs as the account (the capability's controller).
+// Resolves to whether the records were there to delete: the server answers
+// a refused capability with the same 404 as an absent record, and a delete
+// is idempotent, so the pointer record is read first to tell the two apart.
+export async function retireCredentialRecords({
+  serverUrl,
+  zcapClient,
+  spaceId,
+  capability,
+}: {
+  serverUrl: string
+  zcapClient: ZcapClient
+  spaceId: string
+  capability: IZcap
+}): Promise<{ retired: boolean }> {
+  const was = new WasClient({ serverUrl: `${serverUrl}/spaces/`, zcapClient })
+  const keyring = was.space(spaceId, { capability }).collection(KEYRING, { encryption: 'plaintext' })
+  const pointer = await keyring.resource(POINTER_RESOURCE).getWithEtag()
+  if (!pointer) {
+    return { retired: false }
+  }
+  await keyring.resource(KEYS_RESOURCE).delete()
+  await keyring.resource(POINTER_RESOURCE).delete()
+  return { retired: true }
+}
 
 export interface UnlockedKeys {
   credential: CredentialKeys
@@ -102,6 +161,8 @@ function decodeKeys(data: unknown): UnlockedKeys {
 // server accepts a space whose id is derived from the signing unlock
 // did:key without a coupon), writes the pointer record, and writes the
 // sealed keys record. Idempotent: re-binding overwrites both records.
+// Resolves to the management capability delegated to the account DID the
+// pointer names, for the account's catalogue.
 export async function bindCredential({
   unlock,
   serverUrl,
@@ -117,7 +178,7 @@ export async function bindCredential({
   email: string
   pointer: AccountPointer
   keys: UnlockedKeys
-}): Promise<void> {
+}): Promise<{ capability: IZcap }> {
   await ensureUnlockSpace({
     storageServerUrl: serverUrl,
     zcapClient: unlock.zcapClient,
@@ -139,6 +200,10 @@ export async function bindCredential({
   const signed = await signRecordFrame({ version: KEYS_VERSION, encryption, wrapped: envelope, signer: unlock.recordSigner })
   const was = unlockClient(unlock, serverUrl)
   await keysResource(was, unlock).put(new TextEncoder().encode(JSON.stringify(signed)), { contentType: 'application/json' })
+  if (!pointer.did) {
+    throw new Error('The account pointer names no DID.')
+  }
+  return { capability: await delegateManagement({ unlock, serverUrl, did: pointer.did }) }
 }
 
 // Opens the account a credential is bound to: the pointer record's contents

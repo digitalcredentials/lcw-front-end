@@ -4,6 +4,7 @@ import RegisterPage from './pages/RegisterPage'
 import ForgotPage from './pages/ForgotPage'
 import FileBrowserPage from './pages/SpaceBrowserPage'
 import PluginPage from './pages/PluginPage'
+import CredentialsPage from './pages/CredentialsPage'
 import RequireAuth from './components/RequireAuth'
 import { pluginPages } from './plugins'
 import './App.css'
@@ -20,6 +21,14 @@ function App() {
           element={
             <RequireAuth>
               <FileBrowserPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/credentials"
+          element={
+            <RequireAuth>
+              <CredentialsPage />
             </RequireAuth>
           }
         />
