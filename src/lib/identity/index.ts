@@ -2,7 +2,7 @@ import { WasClient } from '@interop/was-client'
 import { deriveUnlockIdentity } from '@interop/wallet-core/keyring'
 import { webvhZcapClient } from '@interop/wallet-core/webvh'
 import { deleteUnlockSpace } from '@interop/wallet-core/keyring'
-import { createAccountLog, publishAccountLog, promoteSpace } from './account'
+import { createAccountLog, ensureProjection, publishAccountLog, promoteSpace } from './account'
 import { addCredentialToLog, credentialsInLog, publicKeysOf, readAccountLog, removeCredentialFromLog, type RemovableCredential } from './credentials'
 import { readCatalogue, updateCatalogue, type CatalogueEntry, type CredentialKind } from './catalogue'
 import { RECOVERY_KDF, mintRecoveryCode, recoverySecretOf } from './recoveryCode'
@@ -234,6 +234,13 @@ async function openCredential({
     userKey: keys.userKey,
   }
   await ensureCatalogued({ session, keys: keys.credential, kind, unlock, config })
+  // An account from before did:web projections were published gets one
+  // now; best effort, the sign-in stands either way.
+  try {
+    await ensureProjection({ was: await accountClient(session), spaceId: session.spaceId })
+  } catch (err) {
+    console.warn('The did:web projection could not be checked:', err)
+  }
   return { session, keys }
 }
 
@@ -563,3 +570,5 @@ export { getSession, setSession, clearSession, sessionAgents, sessionEncryption,
 export { passkeySupported, PasskeyCancelledError, PasskeyUnsupportedError } from './passkey'
 export { recoverySecretOf } from './recoveryCode'
 export { removeCredentialFromLog } from './credentials'
+export { acceptedMethodsOf, chooseAccountMethod, accountDid, accountMethodOf, holderSigner, webDidOf } from './holder'
+export type { AccountDidMethod, HolderSigner } from './holder'
