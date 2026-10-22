@@ -44,7 +44,8 @@ check('the recovery credential opens before use', (await readCredential({ unlock
 
 const recovered = await recoverAccount({ email, code, newPassphrase: passphrase, config })
 check('recovery signs in with the new passphrase', recovered.email === email && recovered.did === session.did)
-check('the recovered session keeps the same user key', recovered.userKey.id === session.userKey.id)
+// Removing the used recovery credential rotates the user key the code could reach
+check('the recovered session is on a new user key', recovered.userKey.id !== session.userKey.id)
 check('the used code no longer opens an account', (await readCredential({ unlock: oldUnlock, serverUrl: config.serverUrl })) === null)
 const reopened = await openWithPassphrase({ email, passphrase, config })
 check('the passphrase signs in afterwards', reopened.session.did === session.did)
