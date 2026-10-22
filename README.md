@@ -42,7 +42,19 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   signed by the passphrase credential's update key (held for that step
   alone), and its own unlock space. Authenticators without PRF support are
   refused. Every Space is promoted to the account DID at creation, so a
-  session opened by any credential signs for all of them. The session (the unwrapped keys
+  session opened by any credential signs for all of them. **Recovery**
+  (`src/lib/identity/recovery`, `src/pages/ForgotPage.tsx`): the account's
+  recovery code is a credential of its own (uppercase base32 in groups of
+  four, derived with HKDF under a salt of its own, its own signing and update
+  keys and unlock space). After any sign-in, an account with no code stored
+  at the back end gets one, minted and stored (`PUT /recovery`, encrypted
+  there); the user never sees it, because it reaches them by email.
+  **Forgot your password?** on the login page asks the back end to mail the
+  code (`POST /forgot`); the recovery page takes the code and a new password,
+  opens the account through the recovery credential, adds the new password
+  as a credential, signs in with it, replaces the used code (it is in a
+  mailbox) with a fresh credential and removes the old one from the account
+  document and its unlock space from the server. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
   user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
@@ -247,6 +259,9 @@ fixture, created the way the wallet creates collections. Both scripts run the
 identity layer under `tsx`, and both are idempotent. `npm run test:identity`
 (`WAS_URL=... COUPON=... ID_DOMAIN=...`) exercises the identity layer against
 a deployed PWS server without the back end, on scratch spaces it deletes.
+`tests/scripts/recovery-demo.ts` (`DEMO_EMAIL=...`) runs account recovery
+against the deployed back end on the demo account, once, right after it is
+registered: later its code is known only to the stored copy and the mailbox.
 
 ## Deploy
 

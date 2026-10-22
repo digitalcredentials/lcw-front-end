@@ -4,7 +4,8 @@ import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   openWithPassphrase,
-  loginWithPasskey,
+  openWithPasskey,
+  ensureRecoveryCredential,
   addPasskey,
   setSession,
   passkeySupported,
@@ -31,6 +32,16 @@ function dismissOffer(email: string): void {
     localStorage.setItem(DISMISSED_KEY(email), 'true');
   } catch {
     // Nothing to remember with; the offer shows again next time.
+  }
+}
+
+// After a sign-in, an account with no stored recovery code gets one. Best
+// effort: the user is signed in either way, and the next sign-in tries again.
+async function ensureRecovery(session: Session, acting: CredentialKeys): Promise<void> {
+  try {
+    await ensureRecoveryCredential({ session, acting, config: identityConfig() });
+  } catch (err) {
+    console.error('Could not set up account recovery:', err);
   }
 }
 
@@ -74,6 +85,7 @@ export default function LoginPage() {
       // account pointer and the credential's keys; the signing key then
       // proves the account to the back end (src/lib/identity).
       const { session, keys } = await openWithPassphrase({ email, passphrase: password, config: identityConfig() });
+      await ensureRecovery(session, keys.credential);
       if (passkeySupported() && !offerDismissed(session.email)) {
         actingRef.current = keys.credential;
         setOffering(session);
@@ -91,7 +103,9 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      enter(await loginWithPasskey({ config: identityConfig() }));
+      const { session, keys } = await openWithPasskey({ config: identityConfig() });
+      await ensureRecovery(session, keys.credential);
+      enter(session);
     } catch (err) {
       setError(describe(err, 'Unable to sign in with a passkey. Please try again.'));
     } finally {
@@ -218,6 +232,13 @@ export default function LoginPage() {
           </button>
         )}
         </>
+        )}
+        {!offering && (
+          <p className="mt-4 text-sm text-center">
+            <Link to="/forgot" className="text-indigo-600 hover:text-indigo-700 font-medium">
+              Forgot your password?
+            </Link>
+          </p>
         )}
         <p className="mt-5 text-sm text-gray-500 text-center">
           Need an account?{' '}
