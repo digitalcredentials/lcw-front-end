@@ -36,9 +36,14 @@ export async function decodeQrPayload(text: string): Promise<object> {
   }
 }
 
-// Reads the QR code out of an image file (drag-and-drop or file picker)
+// Reads the QR code out of an image file (drag-and-drop or file picker).
+// On a busy image (a screenshot, say) qr-scanner can report a match with no
+// content; that is no QR code either, said the way qr-scanner says it.
 export async function scanImageFile(file: File): Promise<string> {
   const result = await QrScanner.scanImage(file, { returnDetailedScanResult: true });
+  if (!result.data) {
+    throw new Error('No QR code found');
+  }
   return result.data;
 }
 
