@@ -18,7 +18,7 @@ async function logIn(page: Page) {
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 }
 
 async function openUniversityCollection(page: Page) {
@@ -38,7 +38,7 @@ test('rejects a wrong password', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill('not the passphrase');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('Invalid email or password.');
 });
 
