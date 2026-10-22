@@ -4,7 +4,7 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient, getSessionWASClientFor } from './was'
 import { ensureEncryptedCollection, writeResource } from './edv'
-import { PlainError } from './errors'
+import { IssuerError, PlainError } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
 import type { ResourceData } from '@interop/was-client'
 
@@ -39,9 +39,11 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}'
+  }).catch((err) => {
+    throw new IssuerError('The issuer could not be reached.', undefined, err)
   })
   if (!vprResponse.ok) {
-    throw Object.assign(new Error(`The issuer rejected the exchange (${vprResponse.status}).`), { status: vprResponse.status })
+    throw new IssuerError(`The issuer rejected the exchange (${vprResponse.status}).`, vprResponse.status)
   }
   const { verifiablePresentationRequest: vpr } = await vprResponse.json()
   if (!vpr?.challenge || !vpr?.domain) {
@@ -99,10 +101,12 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ verifiablePresentation: signedVp })
+  }).catch((err) => {
+    throw new IssuerError('The issuer could not be reached.', undefined, err)
   })
   const result = await issueResponse.json().catch(() => ({}))
   if (!issueResponse.ok) {
-    throw Object.assign(new Error(result.error ?? `The issuer rejected the presentation (${issueResponse.status}).`), { status: issueResponse.status })
+    throw new IssuerError(result.error ?? `The issuer rejected the presentation (${issueResponse.status}).`, issueResponse.status)
   }
   const envelope = result.verifiablePresentation
   const credential = envelope?.verifiableCredential?.[0]

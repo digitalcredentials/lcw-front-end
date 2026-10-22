@@ -17,7 +17,7 @@ import { credentialName, issuerName } from '../lib/linkedin';
 import { verifyForSharing } from '../lib/verify';
 import { suggestCollectionName, collectionIdFor, lastCollection, rememberLastCollection } from '../lib/collectionName';
 import FailureText from '../components/FailureText';
-import { describeError, type Failure } from '../lib/errors';
+import { describeError, isSessionEnded, PlainError, type Failure, type WalletAction } from '../lib/errors';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -137,14 +137,14 @@ export default function ChapiPage() {
                 }
                 await claimFrom(vpr, event.credentialRequestOrigin);
               } catch (err) {
-                setPhase({ step: 'error', failure: describeError('claim', err) });
+                fail('claim', err);
               }
             })();
           });
         },
       });
     })().catch((err) => {
-      setPhase({ step: 'error', failure: describeError('connect-mediator', err) });
+      fail('connect-mediator', err);
     });
   }, []);
 
@@ -152,19 +152,27 @@ export default function ChapiPage() {
   async function claimFrom(vpr: Record<string, unknown> | undefined, origin: string | undefined) {
     const exchangeUrl = exchangeUrlFrom(vpr);
     if (!exchangeUrl) {
-      setPhase({
-        step: 'error',
-        failure: {
-          text: "This wallet can't collect a credential from this kind of request. Go back to the issuer's page and try another way.",
-          detail: 'The request carries no exchange endpoint this wallet understands.',
-        },
-      });
-      return;
+      throw new PlainError(
+        "This wallet can't collect a credential from this kind of request. Go back to the issuer's page and try another way.",
+        'The request carries no exchange endpoint this wallet understands.',
+      );
     }
     setPhase({ step: 'claiming', from: hostOf(origin) });
     const claim = await runExchange(exchangeUrl);
     claimRef.current = claim;
     await loadSaveStep(claim);
+  }
+
+  // Shows a failure in the popup. A share signed out midway goes back to the
+  // sign-in step, which picks the request up again once signed in; a claim
+  // cannot resume (the issuer's exchange is usually single-use), so its
+  // message says to start again.
+  function fail(action: WalletAction, err: unknown) {
+    if ((action === 'load-for-share' || action === 'share') && isSessionEnded(action, err)) {
+      setPhase({ step: 'not-signed-in' });
+      return;
+    }
+    setPhase({ step: 'error', failure: describeError(action, err) });
   }
 
   // Signed in inside the popup: pick up whichever flow was waiting.
@@ -177,7 +185,7 @@ export default function ChapiPage() {
         await claimFrom(pendingClaimRef.current.vpr, pendingClaimRef.current.origin);
       }
     } catch (err) {
-      setPhase({ step: 'error', failure: describeError(action, err) });
+      fail(action, err);
     }
   }
 
@@ -299,7 +307,7 @@ export default function ChapiPage() {
         space: space?.spaceName ?? '',
       });
     } catch (err) {
-      setPhase({ step: 'error', failure: describeError('save-claim', err) });
+      fail('save-claim', err);
     } finally {
       setSaving(false);
     }
@@ -326,7 +334,7 @@ export default function ChapiPage() {
       setSelected(new Set(matches.length === 1 ? [`${matches[0].collectionId}/${matches[0].resourceId}`] : []));
       setPhase({ step: 'pick', matches });
     } catch (err) {
-      setPhase({ step: 'error', failure: describeError('load-for-share', err) });
+      fail('load-for-share', err);
     }
   }
 
@@ -396,7 +404,7 @@ export default function ChapiPage() {
       resolveRef.current?.({ type: 'response', dataType: 'VerifiablePresentation', data: vp });
       setPhase({ step: 'shared' });
     } catch (err) {
-      setPhase({ step: 'error', failure: describeError('share', err) });
+      fail('share', err);
     } finally {
       setSharing(false);
     }
