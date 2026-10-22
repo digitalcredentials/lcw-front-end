@@ -322,12 +322,14 @@ export default function ChapiPage() {
   // Consent given: gate on sign-in, then offer the credentials that match the
   // request's examples.
   async function continueRequest() {
-    if (!isAuthenticated() || !(await getSessionWASClient())) {
-      setPhase({ step: 'not-signed-in' });
-      return;
-    }
-    setPhase({ step: 'loading-credentials' });
+    // The session check reaches the storage server too, so it fails like the
+    // loading after it rather than leaving Continue doing nothing
     try {
+      if (!isAuthenticated() || !(await getSessionWASClient())) {
+        setPhase({ step: 'not-signed-in' });
+        return;
+      }
+      setPhase({ step: 'loading-credentials' });
       const request = requestRef.current;
       const all = await loadWalletCredentials();
       const matches = request ? all.filter(({ credential }) => matchesAnyExample(credential, request)) : [];
