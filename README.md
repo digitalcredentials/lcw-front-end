@@ -29,13 +29,25 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   keys and the user key. Any browser holding the passphrase can open the
   account; a credential that is lost is removed and its keys rotated. Sign-in
   derives the unlock identity, opens those records, and proves the signing
-  key to the back end's `POST /login`, which returns the registration token
-  (the PWS server's space-creation coupon). The session (the unwrapped keys
+  key to the back end's `POST /login` under the account's `did:webvh` (the
+  back end verifies it against the account document), which returns the
+  registration token (the PWS server's space-creation coupon). The back
+  end registers the account's `did:webvh`, so any credential's key signs
+  for it. **Passkeys** (`src/lib/identity/passkey.ts`): after a passphrase
+  sign-in on a browser that supports them, the login page offers to add a
+  passkey, and offers **Sign in with a passkey** beside the form. A passkey
+  is a credential of its own: the WebAuthn PRF extension (FreeWallet's
+  input and derivation) gives it an unlock secret, it gets its own signing
+  and update keys, published to the account document in two log entries
+  signed by the passphrase credential's update key (held for that step
+  alone), and its own unlock space. Authenticators without PRF support are
+  refused. Every Space is promoted to the account DID at creation, so a
+  session opened by any credential signs for all of them. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
-  user in itself. Requests to the Main Space sign as
-  `<did:webvh>#<multibase>`; spaces not yet promoted (batch spaces) and the
-  back end are signed as the key's `did:key` form. On the first open after registering, the
+  user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
+  creation of a Space uses the key's `did:key` form, which the server
+  requires, before the Space is promoted. On the first open after registering, the
   wallet offers to issue a **welcome credential** (the test issuer's LCW
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).

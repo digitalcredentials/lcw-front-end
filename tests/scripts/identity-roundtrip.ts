@@ -13,6 +13,10 @@ import { resolveDID } from '@interop/did-method-webvh'
 import { createAccountLog, publishAccountLog, promoteSpace } from '../../src/lib/identity/account'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed } from '../../src/lib/identity/keys'
 import { bindCredential, openPassphrase, readCredential } from '../../src/lib/identity/unlock'
+import { addCredentialToLog, publicKeysOf } from '../../src/lib/identity/credentials'
+import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
+import { randomBytes } from '../../src/lib/identity/bytes'
+import { deriveUnlockIdentity } from '@interop/wallet-core/keyring'
 import { sessionAgents, sessionEncryption, sessionKeyAgreementKey, type Session } from '../../src/lib/identity/session'
 import { deleteUnlockSpace } from '@interop/wallet-core/keyring'
 
@@ -100,9 +104,32 @@ const added = await vault.add({ hello: 'world' })
 const back = (await vault.get(added.id)) as { hello?: string } | null
 check('an encrypted collection round-trips under the user key', back?.hello === 'world')
 
+// --- a second credential: a passkey stands in for by a random PRF output ------
+const prfOutput = randomBytes(32)
+const passkeyUnlock = await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF })
+const passkeyKeys = mintCredentialKeys()
+await addCredentialToLog({ was: asAccountClient, spaceId, did, acting: credential, added: await publicKeysOf(passkeyKeys) })
+const passkeyAgents = await signingAgents(passkeyKeys.signingSeed)
+await bindCredential({ unlock: passkeyUnlock, serverUrl, controller: passkeyAgents.controllerDid, email, pointer: { did, spaceId, host: serverUrl }, keys: { credential: passkeyKeys, userKey } })
+const grown = await resolveDID(did)
+const grownDoc = grown.didDocument as { capabilityInvocation?: unknown[]; verificationMethod?: unknown[] } | null
+check('the document lists both credentials\' signing keys', (grownDoc?.capabilityInvocation?.length ?? 0) === 2, grown.didResolutionMetadata?.error)
+check('the log authorizes both update keys', (grown.didDocumentMetadata as { updateKeys?: unknown[] })?.updateKeys?.length === 2)
+const reopenedPasskey = await readCredential({ unlock: await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF }), serverUrl })
+check('the passkey credential opens to the same account and user key', reopenedPasskey?.contents.pointer?.did === did && reopenedPasskey?.keys.userKey.id === userKey.id)
+const passkeySession: Session = { ...session, controller: passkeyAgents.controllerDid, signingSeed: passkeyKeys.signingSeed }
+const { asAccount: asAccount2 } = await sessionAgents(passkeySession)
+const asPasskeyClient = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccount2.signer, encryption: sessionEncryption(passkeySession) })
+check('the passkey\'s key reads the Space as the account', (await asPasskeyClient.space(spaceId).describe())?.controller === did)
+const vaultAsPasskey = asPasskeyClient.space(spaceId).collection('vault')
+const backAsPasskey = (await vaultAsPasskey.get(added.id)) as { hello?: string } | null
+check('the passkey session decrypts what the passphrase session wrote', backAsPasskey?.hello === 'world')
+
 // --- clean up -----------------------------------------------------------------
 const gone = await space.deleteWithOutcome()
 check('scratch Main Space deleted', gone.outcome === 'deleted')
 const unlockGone = await deleteUnlockSpace({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
 check('unlock space deleted', unlockGone.outcome === 'deleted')
+const passkeyUnlockGone = await deleteUnlockSpace({ storageServerUrl: serverUrl, zcapClient: passkeyUnlock.zcapClient, spaceId: passkeyUnlock.spaceId })
+check('passkey unlock space deleted', passkeyUnlockGone.outcome === 'deleted')
 process.exit(failures ? 1 : 0)
