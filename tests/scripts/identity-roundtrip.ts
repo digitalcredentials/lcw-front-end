@@ -16,7 +16,7 @@ import { resolveDID } from '@interop/did-method-webvh'
 import { createAccountLog, publishAccountLog, promoteSpace } from '../../src/lib/identity/account'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed } from '../../src/lib/identity/keys'
 import { bindCredential, openPassphrase, readCredential } from '../../src/lib/identity/unlock'
-import { addCredential, catalogueCredential, listCredentials, removeCredential } from '../../src/lib/identity'
+import { addCredential, addRosterRecipient, catalogueCredential, listCredentials, readRoster, recipientOf, removeCredential } from '../../src/lib/identity'
 import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
 import { randomBytes } from '../../src/lib/identity/bytes'
 import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
@@ -77,8 +77,11 @@ const promotion = await promoteSpace({ was, spaceId, did, name: 'Roundtrip' })
 check('the Main Space is promoted to the did:webvh', promotion === 'promoted', promotion)
 
 const unlock = await openPassphrase(passphrase)
-const { capability } = await bindCredential({ unlock, serverUrl, controller, email, pointer: { did, spaceId, host: serverUrl }, keys: { credential, userKey } })
-check('the passphrase is bound (unlock space, pointer, keys and user-key records, capability)', Boolean(capability), unlock.spaceId)
+const { capability } = await bindCredential({ unlock, serverUrl, controller, email, pointer: { did, spaceId, host: serverUrl }, credential })
+check('the passphrase is bound (unlock space, pointer and keys records, capability)', Boolean(capability), unlock.spaceId)
+const asAccountEarly = (await sessionAgents({ email, did, controller, serverUrl, spaceId, signingSeed: credential.signingSeed, userKey })).asAccount
+await addRosterRecipient({ was: await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccountEarly.signer }), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
+check('the user-key roster names the passphrase as its one recipient', (await readRoster({ was: await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccountEarly.signer }), spaceId }))?.roster.recipients.length === 1)
 
 // --- open the account from the passphrase alone, as loginWithPassphrase does
 const reopened = await readCredential({ unlock: await openPassphrase(passphrase), serverUrl })
@@ -122,6 +125,7 @@ check("the document lists both credentials' signing keys", (grownDoc?.capability
 check('the log authorizes both update keys', (grown.didDocumentMetadata as { updateKeys?: unknown[] })?.updateKeys?.length === 2)
 const reopenedPasskey = await readCredential({ unlock: await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF }), serverUrl })
 check('the passkey credential opens to the same account and user key', reopenedPasskey?.contents.pointer?.did === did && reopenedPasskey?.keys.userKey.id === userKey.id)
+check('the roster now names both credentials', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 2)
 const passkeySession: Session = { ...session, controller: passkeyAgents.controllerDid, signingSeed: passkeyKeys.signingSeed }
 const { asAccount: asAccount2 } = await sessionAgents(passkeySession)
 const asPasskeyClient = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccount2.signer, encryption: sessionEncryption(passkeySession) })
@@ -142,7 +146,9 @@ const agreement = shrunkDoc?.keyAgreement?.map((entry) => (typeof entry === 'str
 check('the document lists one signing key and the new user key', shrunkDoc?.capabilityInvocation?.length === 1 && agreement.length === 1 && String(agreement[0]).endsWith(`#${multibaseOf(rotated.userKey.id)}`))
 check('the removed passkey secret opens nothing', (await readCredential({ unlock: await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF }), serverUrl })) === null)
 const afterRotation = await readCredential({ unlock: await openPassphrase(passphrase), serverUrl })
-check('the passphrase credential now opens with the new user key (rewritten by the account)', afterRotation?.keys.userKey.id === rotated.userKey.id)
+check('the passphrase credential now opens with the new user key (from the fresh roster)', afterRotation?.keys.userKey.id === rotated.userKey.id)
+const freshRoster = (await readRoster({ was: asAccountClient, spaceId }))?.roster
+check('the fresh roster carries the new key and names the passphrase alone', freshRoster?.userKey === rotated.userKey.id && freshRoster?.recipients.length === 1 && freshRoster.recipients[0].header.kid === unlock.keyAgreementKey.id)
 const vaultDescriptor = ((await space.collection('vault').describe()) as { encryption?: CollectionEncryption } | null)?.encryption
 const oldKid = userKeyVaultKeys({ userKey: session.userKey }).keyAgreementKey.id
 const newKid = userKeyVaultKeys({ userKey: rotated.userKey }).keyAgreementKey.id

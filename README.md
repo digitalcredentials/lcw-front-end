@@ -70,16 +70,23 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   credential held: a fresh user key replaces it under `keyAgreement`; the
   removed credential's records are deleted from its unlock space under the
   delegated capability (the space itself is root-only to delete and stays,
-  empty); every remaining credential's user-key record
-  (`keyring/lcw-user-key.json`, sealed to its unlock identity's public key,
-  which its `did:key` yields, and signed by the session's account key, which
-  a reader accepts beside its own unlock key because the account document
-  lists it) is rewritten with the new key under its capability; every
-  encrypted collection of every Space gets a fresh epoch wrapped to the new
-  key, its earlier epochs re-wrapped to it, and the old key's wraps dropped
-  (records are not re-encrypted: a copy of ciphertext taken before the
-  rotation stays readable to a copy of the old key); and the catalogue
-  forgets the credential and is re-sealed to the new key. The session
+  empty); every encrypted collection of every Space gets a fresh epoch
+  wrapped to the new key, its earlier epochs re-wrapped to it, and the old
+  key's wraps dropped (records are not re-encrypted: a copy of ciphertext
+  taken before the rotation stays readable to a copy of the old key); a
+  fresh **user-key roster** is written; and the catalogue forgets the
+  credential and is re-sealed to the new key. The roster
+  (`src/lib/identity/roster.ts`, the Main Space's `account/user-key.json`)
+  is how every credential holds the one user key: a JWE-style record whose
+  `recipients` array wraps the key to each credential's unlock
+  key-agreement key, the way an encrypted collection's epoch key is wrapped
+  to its readers. Adding a credential appends a recipient; a rotation
+  writes a new roster for the new key with the remaining credentials, in
+  one compare-and-swap. A credential signing in reads its own keys record
+  from its unlock space, signs as the account, unwraps its roster entry,
+  and accepts the key only if its public half is the one the account
+  document names under `keyAgreement`, read from the Space's public log.
+  The session
   continues on the new key; a session open elsewhere signs in again. The
   session's own credential and the recovery code are not removable from the
   page; recovery itself removes the used recovery credential the same way,
