@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
+import { NotFoundError, type ResourceSummary, type CollectionSummary, type ResourceData } from '@interop/was-client';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
-import { describeError, UnreadableCredentialError, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, type Failure, type WalletAction } from '../lib/errors';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
@@ -270,8 +270,9 @@ export default function FileBrowserPage() {
         return;
       }
       const data = await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).get();
+      // The WAS client answers a missing resource with null, not a 404 error
       if (data === null) {
-        setError(describeError('open', new UnreadableCredentialError('The stored body was empty.')));
+        setError(describeError('open', new NotFoundError('The credential is no longer stored here.', { status: 404 })));
         return;
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
@@ -344,7 +345,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new UnreadableCredentialError('The credential could not be read from Trash.');
+        throw new NotFoundError('The credential is no longer in Trash.', { status: 404 });
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({
@@ -383,7 +384,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new UnreadableCredentialError();
+        throw new NotFoundError('The credential is no longer stored here.', { status: 404 });
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({

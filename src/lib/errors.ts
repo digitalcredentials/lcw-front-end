@@ -43,15 +43,6 @@ export interface Failure {
   detail?: string
 }
 
-// Thrown when a stored credential's body is missing or cannot be parsed, so it
-// reads as "couldn't be read" rather than as a generic failure.
-export class UnreadableCredentialError extends Error {
-  constructor(message = 'The credential could not be read.') {
-    super(message)
-    this.name = 'UnreadableCredentialError'
-  }
-}
-
 // Thrown when a new collection's id is already taken by a collection the
 // wallet cannot reuse.
 export class CollectionExistsError extends Error {
@@ -61,10 +52,10 @@ export class CollectionExistsError extends Error {
   }
 }
 
-// The WAS client's encryption failures (EncryptionError and its subclasses):
-// the stored body exists but cannot be decrypted or fails its integrity check.
+// A stored body that is not JSON, and the WAS client's encryption failures
+// (EncryptionError and its subclasses): the body exists but cannot be
+// decrypted or fails its integrity check.
 const UNREADABLE = new Set([
-  'UnreadableCredentialError',
   'SyntaxError',
   'EncryptionError',
   'KeyUnwrapError',
