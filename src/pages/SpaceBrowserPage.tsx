@@ -734,6 +734,18 @@ export default function FileBrowserPage() {
     ? (selected ? resources.length === 0 : collections.length === 0)
     : (spaces ?? []).length === 0;
 
+  // The Delete dialog names the credential by its title, from the detail view
+  // when it opened there, else its card's (loading until the card's body
+  // arrives, as in the Move dialog): an encrypted collection's opaque storage
+  // name shows only when neither is known
+  const deleteTargetSummary = deleteTarget && summaries[`${selected?.id}/${deleteTarget.id}`];
+  const deleteTargetTitle = deleteTarget && (
+    (viewing?.resource.id === deleteTarget.id ? viewingSummary?.title : undefined)
+    ?? (deleteTargetSummary === undefined
+      ? <LoadingLabel />
+      : deleteTargetSummary?.title ?? deleteTarget.name ?? deleteTarget.id)
+  );
+
   return (
     <AppShell>
       <div>
@@ -1486,7 +1498,7 @@ export default function FileBrowserPage() {
         </div>
       )}
 
-      {/* Confirm before moving a credential to the Trash collection */}
+      {/* Confirm before moving a credential to Trash */}
       {deleteTarget && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
@@ -1503,14 +1515,13 @@ export default function FileBrowserPage() {
                 soft delete into Trash */}
             {selected?.id === 'Trash' ? (
               <p className="text-sm text-gray-600 mb-5">
-                Permanently delete{' '}
-                <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span>?
-                This cannot be undone.
+                Delete <span className="font-medium text-gray-800">{deleteTargetTitle}</span> for good?
+                This can't be undone.
               </p>
             ) : (
               <p className="text-sm text-gray-600 mb-5">
-                Move <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span> to
-                the Trash collection?
+                Move <span className="font-medium text-gray-800">{deleteTargetTitle}</span> to Trash?
+                You can restore it from there.
               </p>
             )}
             <div className="flex justify-end gap-2">

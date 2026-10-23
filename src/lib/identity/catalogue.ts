@@ -35,8 +35,11 @@ export interface CatalogueEntry {
   createdAt: string
   updateMultibase: string
   stagedMultibase: string
+  // The credential's unlock identity (its did:key) and space, and the
+  // management capability it delegated to the account at binding
+  unlockDid: string
   unlockSpaceId: string
-  capability?: IZcap
+  capability: IZcap
 }
 
 export interface Catalogue {
@@ -100,14 +103,16 @@ export async function readCatalogue(session: Session): Promise<Catalogue> {
 }
 
 // Applies `mutate` to the stored catalogue and writes it back, conditional
-// on the version read; one retry on a concurrent write.
-export async function updateCatalogue(session: Session, mutate: (catalogue: Catalogue) => void): Promise<Catalogue> {
+// on the version read; one retry on a concurrent write. The record is read
+// with `session`'s user key and sealed with `sealWith`'s (the same session,
+// except across a user-key rotation).
+export async function updateCatalogue(session: Session, mutate: (catalogue: Catalogue) => void, { sealWith = session }: { sealWith?: Session } = {}): Promise<Catalogue> {
   const resource = await catalogueResource(session)
   for (let attempt = 0; ; attempt++) {
     const { catalogue, etag } = await readWithEtag(session, resource)
     mutate(catalogue)
     try {
-      await resource.put(new TextEncoder().encode(JSON.stringify(await seal(session, catalogue))), {
+      await resource.put(new TextEncoder().encode(JSON.stringify(await seal(sealWith, catalogue))), {
         contentType: 'application/json',
         ...(etag && { ifMatch: etag }),
       })

@@ -200,19 +200,24 @@ export async function addCredentialToLog({
 // log, signed by an acting credential's update key, which must be another
 // credential's or at least still authorized by the entry's predecessor. The
 // removed credential's keys stop being listed; whoever held them can no
-// longer sign for the account once the servers' caches expire.
+// longer sign for the account once the servers' caches expire. The same
+// entry replaces the account's user key under keyAgreement (`userKey`:
+// the retiring and the new X25519 multibase), since the removed credential
+// held the old one.
 export async function removeCredentialFromLog({
   was,
   spaceId,
   did,
   acting,
   removed,
+  userKey,
 }: {
   was: WasClient
   spaceId: string
   did: string
   acting: Pick<CredentialKeys, 'updateSeed'>
   removed: RemovableCredential
+  userKey?: { retire: string; add: string }
 }): Promise<void> {
   const resource = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' }).resource(LOG_RESOURCE)
   const { log, etag } = await readAccountLog({ was, spaceId })
@@ -235,11 +240,17 @@ export async function removeCredentialFromLog({
   const signer = (await updateKeyFromSeed(acting.updateSeed)).logSigner
 
   const verificationMethods = (doc.verificationMethod ?? [])
-    .filter((method) => method.publicKeyMultibase !== removed.signingMultibase)
+    .filter((method) => method.publicKeyMultibase !== removed.signingMultibase && method.publicKeyMultibase !== userKey?.retire)
     .map((method) => ({ type: 'Multikey', publicKeyMultibase: method.publicKeyMultibase ?? '' }))
+  if (userKey) {
+    verificationMethods.push({ type: 'Multikey', publicKeyMultibase: userKey.add })
+  }
   const relations = Object.fromEntries(
     SIGNING_RELATIONS.map((relation) => [relation, relativeIds(doc, relation).filter((id) => id !== `#${removed.signingMultibase}`)])
   )
+  const keyAgreement = userKey
+    ? [...relativeIds(doc, 'keyAgreement').filter((id) => id !== `#${userKey.retire}`), `#${userKey.add}`]
+    : relativeIds(doc, 'keyAgreement')
   const next = await updateDID({
     log,
     signer,
@@ -247,7 +258,7 @@ export async function removeCredentialFromLog({
     nextKeyHashes,
     verificationMethods,
     vmIdFragment: 'multibase',
-    keyAgreement: relativeIds(doc, 'keyAgreement'),
+    keyAgreement,
     ...relations,
   })
   await resource.put(new TextEncoder().encode(logToJsonlString(next.log)), { contentType: 'text/jsonl', ifMatch: etag })
