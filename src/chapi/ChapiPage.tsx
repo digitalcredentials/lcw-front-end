@@ -169,8 +169,9 @@ export default function ChapiPage() {
   // half-sent share would resume with stale choices, so their messages say to
   // start again.
   function fail(action: WalletAction, err: unknown) {
-    // A rejected session is cleared here too, as on the wallet's pages, so
-    // the popup leaves nothing signed in behind it on a shared computer
+    // A rejected session is cleared here too, as on the wallet's pages. The
+    // popup is its own window with its own session, so this clears only that;
+    // the wallet tab clears its own the next time storage rejects it
     const signedOut = isSessionEnded(action, err);
     if (signedOut) {
       clearToken();

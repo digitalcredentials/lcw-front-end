@@ -6,7 +6,7 @@ import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from 
 import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
 import FailureText from './FailureText';
-import { describeError, isSessionEnded, type Failure } from '../lib/errors';
+import { describeError, type Failure } from '../lib/errors';
 
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Spaces, one link per registered plugin such as Credential
@@ -152,9 +152,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
         setWalletState('enabled');
       }
     } catch (err) {
-      if (isSessionEnded('update-wallet', err)) {
+      if (err instanceof Error && err.message === 'UNAUTHORIZED') {
         clearToken();
-        navigate('/login', { replace: true, state: { signedOut: true } });
+        navigate('/login', { replace: true });
         return;
       }
       setWalletError(describeError('update-wallet', err));
