@@ -6,7 +6,7 @@ import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
 import { isAuthenticated, getEmail } from '../lib/auth';
-import { loginWithPassphrase, setSession } from '../lib/identity';
+import { loginWithPassphrase, setSession, getSession, clearSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
@@ -85,6 +85,9 @@ export default function ChapiPage() {
   // the mediator (and closing the popup).
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
   const claimRef = useRef<ClaimResult | null>(null);
+  // The account that ran the exchange: the credential is bound to it, so only
+  // it may save the credential
+  const claimedByRef = useRef<{ did: string; email: string } | null>(null);
   const requestRef = useRef<ParsedPresentationRequest | null>(null);
   // An issuer's exchange that arrived before the user signed in here: the
   // popup has a session of its own (sessionStorage is per window), so it
@@ -161,6 +164,8 @@ export default function ChapiPage() {
     // The exchange runs once: a sign-in after this point goes back to the Save
     // step, never to the issuer
     pendingClaimRef.current = null;
+    const account = getSession();
+    claimedByRef.current = account && { did: account.did, email: account.email };
     const claim = await runExchange(exchangeUrl);
     claimRef.current = claim;
     await loadSaveStep(claim);
@@ -180,8 +185,14 @@ export default function ChapiPage() {
   }
 
   // Signed in inside the popup: pick up whichever flow was waiting. A
-  // credential already collected goes back to the Save step with it.
+  // credential already collected goes back to the Save step with it, if the
+  // account that collected it signed in; otherwise the sign-in step says so.
   async function resumeAfterSignIn() {
+    const claimedBy = claimedByRef.current;
+    if (!requestRef.current && claimRef.current && claimedBy && getSession()?.did !== claimedBy.did) {
+      clearSession();
+      throw new PlainError(`This credential was collected for ${claimedBy.email}. Sign in with that account to save it.`);
+    }
     const action = requestRef.current ? 'load-for-share' : 'claim';
     try {
       if (requestRef.current) {
@@ -697,7 +708,8 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
       await onSignedIn();
     } catch (err) {
       const status = (err as { status?: number }).status;
-      setError(status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
+      setError(err instanceof PlainError ? err.message
+        : status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
       setLoading(false);
     }
   }
