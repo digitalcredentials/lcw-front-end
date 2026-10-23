@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -61,9 +61,17 @@ function describe(err: unknown, fallback: string): string {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  // Sent here because the storage server rejected the session (see
-  // handleError): say why, so the bounce to sign-in doesn't look like a fault
-  const signedOut = (useLocation().state as { signedOut?: boolean } | null)?.signedOut === true;
+  // Sent here because the session was ended for the person (see handleError):
+  // say why, so the bounce to sign-in doesn't look like a fault. Read once and
+  // dropped from the history entry, so Back or a reload doesn't repeat it.
+  const location = useLocation();
+  const [signedOut] = useState((location.state as { signedOut?: boolean } | null)?.signedOut === true);
+  useEffect(() => {
+    if (signedOut) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
