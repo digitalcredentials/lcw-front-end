@@ -2,6 +2,9 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
+import { WasClient, type ResourceData } from '@interop/was-client';
+import { deriveKeyPair } from '../src/lib/login';
+import { removePublicCopy } from '../src/lib/publicCopy';
 
 // End-to-end tests against the local stack. Prerequisites:
 // - the lcw-back-end sam local API on :3001 (the login endpoint)
@@ -15,10 +18,16 @@ const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
 
 async function logIn(page: Page) {
+  // The test browser never has the CHAPI wallet enabled, so suppress the
+  // enable-browser-wallet prompt (same flag its "Not now" button sets) or its
+  // overlay would intercept the tests' clicks.
+  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await page.goto('/');
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  // Login lands on the spaces card view; open the demo account's space
+  await page.locator('[data-space-type="credential"]').first().click();
 }
 
 async function openUniversityCollection(page: Page) {
@@ -282,123 +291,257 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
   await expect(page.locator('section[aria-label="Credential verification"]')).toBeHidden();
 });
 
-test('creates a public link that serves the credential unsigned', async ({ page }) => {
+// Sharing. Sharing publishes a copy of the credential in the space's public
+// collection under a fixed id, so sharing again brings the same link back
+// (src/lib/publicCopy.ts). These helpers reach the demo space directly, signed
+// with the demo key, to plant a copy shared before the dialog opens and to
+// clean up whatever a failed test left behind.
+const DEMO_SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
+const DEMO_SPACE_URL = `http://localhost:3000/space/${DEMO_SPACE_ID}`;
+const VERIFIER_PREFIX = 'https://verifierplus.org/#verify?vc=';
+
+async function demoSpace() {
+  const keyPair = await deriveKeyPair(DEMO_PASSPHRASE);
+  const client = await WasClient.fromSigner({ serverUrl: 'http://localhost:3000', signer: keyPair.signer() });
+  return client.space(DEMO_SPACE_ID);
+}
+
+// The stored id of the LCWExperience credential in UniversityOfToronto
+async function lcwExperienceId(): Promise<string> {
+  const list = await (await demoSpace()).collection('UniversityOfToronto').list();
+  const item = list?.items.find((i) => i.id.startsWith('LCWExperience'));
+  if (!item) {
+    throw new Error('LCWExperience is not seeded in UniversityOfToronto');
+  }
+  return item.id;
+}
+
+async function takeDownLcwExperience() {
+  const pub = (await demoSpace()).collection('public', { encryption: 'plaintext' });
+  await removePublicCopy(pub, 'UniversityOfToronto', await lcwExperienceId());
+}
+
+async function openShareDialog(page: Page): Promise<Locator> {
   await logIn(page);
   await openUniversityCollection(page);
+  await page.locator('[data-resource-id^="LCWExperience"]').getByRole('button', { name: 'Open' }).click();
+  await page.getByRole('button', { name: 'Share', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: /^Share / });
+  await expect(modal).toBeVisible();
+  return modal;
+}
 
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Share' }).click();
-  const modal = page.getByRole('dialog', { name: 'Share Credential' });
-  await modal.getByRole('button', { name: 'Create Public Link' }).click();
+function option(modal: Locator, name: 'Only you' | 'Anyone with the link'): Locator {
+  return modal.getByRole('group', { name: 'Who can see it' }).getByRole('button', { name });
+}
 
-  const link = await modal.getByLabel('Public link').inputValue();
-  expect(link).toContain('/UniversityOfToronto/LCWExperience.json');
+// The raw public URL, read off the readable link the dialog shows
+async function directLink(modal: Locator): Promise<string> {
+  const readable = await modal.getByLabel('Link to share').inputValue();
+  expect(readable.startsWith(VERIFIER_PREFIX)).toBe(true);
+  return readable.slice(VERIFIER_PREFIX.length);
+}
 
-  // ...along with a companion link that verifies it on VerifierPlus
-  await expect(modal.getByLabel('VerifierPlus link'))
-    .toHaveValue(`https://verifierplus.org/#verify?vc=${link}`);
+test.describe('sharing', () => {
+  test.describe.configure({ mode: 'serial' });
+  test.beforeEach(takeDownLcwExperience);
+  test.afterEach(takeDownLcwExperience);
 
-  // the link works without any authorization
-  const res = await page.request.get(link);
-  expect(res.status()).toBe(200);
-  expect(await res.text()).toContain('VerifiablePresentation');
+  test('shares a credential, and taking the link down stops every link working', async ({ page }) => {
+    const modal = await openShareDialog(page);
 
-  // ...and only for this resource: a sibling stays private
-  const sibling = link.replace('LCWExperience.json', 'Bachelors.json');
-  expect((await page.request.get(sibling)).status()).not.toBe(200);
+    // it starts private, once the dialog has checked
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal).toContainText("Sending switches it to Anyone with the link. We'll ask first.");
+    await expect(modal.getByLabel('Link to share')).toHaveCount(0);
 
-  // reopening the dialog shows the existing link, not Create Public Link
-  await modal.getByRole('button', { name: 'Close' }).click();
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Share' }).click();
-  await expect(modal.getByLabel('Public link')).toHaveValue(link);
-  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toHaveCount(0);
-  await expect(modal).toContainText('The links will stop working');
+    // choosing Anyone with the link shares it straight away
+    await option(modal, 'Anyone with the link').click();
+    await expect(modal.getByRole('status').filter({ hasText: 'Anyone with the link can now see it.' })).toBeVisible();
+    await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
+    const first = await directLink(modal);
+    expect(first).toBe(`${DEMO_SPACE_URL}/public/UniversityOfToronto--${await lcwExperienceId()}`);
+    await expect(modal.getByText('Direct link to the credential file')).toBeVisible();
 
-  // a QR code on an already-public credential doesn't revoke access on close
-  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
-  await expect(modal.getByRole('img', { name: /QR code/ })).toBeVisible();
-  await modal.getByRole('button', { name: 'Close' }).click();
-  await expect(modal).toBeHidden();
-  expect((await page.request.get(link)).status()).toBe(200);
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Share' }).click();
-  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+    // the link works without any authorization
+    const res = await page.request.get(first);
+    expect(res.status()).toBe(200);
+    expect(await res.text()).toContain('VerifiablePresentation');
 
-  // unsharing asks for confirmation first; backing out changes nothing
-  await modal.getByRole('button', { name: 'Unshare' }).click();
-  await expect(modal).toContainText('Remove public access?');
-  await modal.getByRole('button', { name: 'Keep sharing' }).click();
-  await expect(modal.getByLabel('Public link')).toHaveValue(link);
+    // reopening the dialog finds the same link
+    await modal.getByRole('button', { name: 'Close' }).click();
+    await expect(modal).toBeHidden();
+    await page.getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
+    expect(await directLink(modal)).toBe(first);
 
-  // confirming kills the link and restores the Create option
-  await modal.getByRole('button', { name: 'Unshare' }).click();
-  await modal.getByRole('button', { name: 'Yes, unshare' }).click();
-  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
-  expect((await page.request.get(link)).status()).not.toBe(200);
+    // Only you asks first; Keep the link changes nothing
+    await option(modal, 'Only you').click();
+    await expect(modal).toContainText('Switch to Only you and take the link down?');
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'false');
+    await modal.getByRole('button', { name: 'Keep the link' }).click();
+    await expect(modal).not.toContainText('take the link down?');
+    expect(await directLink(modal)).toBe(first);
+    expect((await page.request.get(first)).status()).toBe(200);
 
-  // safety net in case an earlier expectation aborted before the UI unshare
-  execSync(
-    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
-    { stdio: 'ignore' }
-  );
-});
+    // Take it down stops the link working
+    await option(modal, 'Only you').click();
+    await modal.getByRole('button', { name: 'Take it down' }).click();
+    await expect(modal.getByRole('status').filter({
+      hasText: 'Link taken down. If you share it again, the same link will work again.',
+    })).toBeVisible();
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByLabel('Link to share')).toHaveCount(0);
+    expect((await page.request.get(first)).status()).not.toBe(200);
 
-test('offers the share options', async ({ page }) => {
-  await logIn(page);
-  await openUniversityCollection(page);
+    // sharing again brings the same link back, and it works again
+    await option(modal, 'Anyone with the link').click();
+    await expect(modal.getByLabel('Link to share')).toBeVisible();
+    expect(await directLink(modal)).toBe(first);
+    expect((await page.request.get(first)).status()).toBe(200);
+  });
 
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Share' }).click();
+  test('a credential shared before the dialog opens shows its link and can be taken down', async ({ page }) => {
+    // plant a copy the way the wallet before this dialog shared, at the same id
+    const space = await demoSpace();
+    const id = await lcwExperienceId();
+    const legacyId = `UniversityOfToronto--${id}`;
+    const pub = space.collection('public', { encryption: 'plaintext' });
+    const body = await space.collection('UniversityOfToronto').get(id);
+    await pub.put(legacyId, (body instanceof Blob ? JSON.parse(await body.text()) : body) as ResourceData);
+    await pub.resource(legacyId).setPublic();
+    const legacyUrl = `${DEMO_SPACE_URL}/public/${legacyId}`;
+    expect((await page.request.get(legacyUrl)).status()).toBe(200);
 
-  const modal = page.getByRole('dialog', { name: 'Share Credential' });
-  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
-  await expect(modal.getByRole('button', { name: 'QR code', exact: true })).toBeVisible();
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
+    expect(await directLink(modal)).toBe(legacyUrl);
 
-  // LinkedIn is still a stub
-  await modal.getByRole('button', { name: 'Add to LinkedIn' }).click();
-  await expect(modal.getByRole('status')).toHaveText('Add to LinkedIn is coming soon.');
-});
+    await option(modal, 'Only you').click();
+    await modal.getByRole('button', { name: 'Take it down' }).click();
+    await expect(modal.getByRole('status').filter({ hasText: 'Link taken down.' })).toBeVisible();
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    expect((await page.request.get(legacyUrl)).status()).not.toBe(200);
+    expect((await pub.list())?.items.some((i) => i.id === legacyId)).toBe(false);
+  });
 
-test('shows a QR code and shares only while it is visible', async ({ page }) => {
-  const link = 'http://localhost:3000/space/dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/UniversityOfToronto/LCWExperience.json';
-  await logIn(page);
-  await openUniversityCollection(page);
+  test('a share that fails puts the choice back and says so in plain words', async ({ page }) => {
+    // the storage server refuses to write the public copy
+    await page.route(/\/public\/[^/]+$/, (route) =>
+      route.request().method() === 'PUT'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"message":"Internal Server Error"}' })
+        : route.continue()
+    );
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('row').filter({ hasText: 'LCWExperience' })
-    .getByRole('button', { name: 'Share' }).click();
-  const modal = page.getByRole('dialog', { name: 'Share Credential' });
+    await option(modal, 'Anyone with the link').click();
+    await expect(modal.getByRole('alert')).toHaveText('Could not create the link.');
+    await expect(modal).not.toContainText(/internal server error/i);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByLabel('Link to share')).toHaveCount(0);
+  });
 
-  // the credential starts private
-  await expect(modal.getByRole('button', { name: 'Create Public Link' })).toBeVisible();
-  expect((await page.request.get(link)).status()).not.toBe(200);
+  test('the arrow keys never change who can see it; Enter and Space do', async ({ page }) => {
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
 
-  // the QR appears (VerifierPlus target first) and warns about the
-  // temporary public access it needed
-  await modal.getByRole('button', { name: 'QR code', exact: true }).click();
-  const qrImage = modal.getByRole('img', { name: /QR code/ });
-  await expect(qrImage).toBeVisible();
-  expect(await qrImage.getAttribute('src')).toMatch(/^data:image\//);
-  await expect(modal).toContainText('temporarily public');
-  expect((await page.request.get(link)).status()).toBe(200);
+    await option(modal, 'Only you').focus();
+    for (const key of ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft']) {
+      await page.keyboard.press(key);
+    }
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByLabel('Link to share')).toHaveCount(0);
 
-  // the toggle switches the encoded target
-  const verifierSrc = await qrImage.getAttribute('src');
-  await modal.getByRole('button', { name: 'Raw credential' }).click();
-  expect(await qrImage.getAttribute('src')).not.toBe(verifierSrc);
+    // Space on Anyone with the link shares it
+    await option(modal, 'Anyone with the link').focus();
+    await page.keyboard.press('Space');
+    await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByLabel('Link to share')).toBeVisible();
 
-  // closing the dialog reverts the temporary public access
-  await modal.getByRole('button', { name: 'Close' }).click();
-  await expect(modal).toBeHidden();
-  await expect(async () => {
-    expect((await page.request.get(link)).status()).not.toBe(200);
-  }).toPass({ timeout: 10000 });
+    // Enter on Only you opens the question and moves focus into it;
+    // answering returns focus to the option
+    await option(modal, 'Only you').focus();
+    await page.keyboard.press('Enter');
+    await expect(modal.getByRole('button', { name: 'Keep the link' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(option(modal, 'Only you')).toBeFocused();
+    await expect(option(modal, 'Anyone with the link')).toHaveAttribute('aria-pressed', 'true');
+  });
 
-  // safety net in case an earlier expectation aborted before the revert
-  execSync(
-    'aws s3 rm s3://dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c/policies/UniversityOfToronto/LCWExperience.json.json --region us-east-1',
-    { stdio: 'ignore' }
-  );
+  test('the QR code asks first, shows the readable link, and stays on after closing', async ({ page }) => {
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+
+    // while private it asks; Cancel changes nothing
+    await modal.getByRole('button', { name: 'QR code' }).click();
+    await expect(modal).toContainText('To show a QR code, switch to Anyone with the link?');
+    await expect(modal.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await modal.getByRole('button', { name: 'Cancel' }).click();
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+    await expect(modal.getByRole('img', { name: /QR code/ })).toHaveCount(0);
+
+    // Switch and continue shares it and shows the code in the same click
+    await modal.getByRole('button', { name: 'QR code' }).click();
+    await modal.getByRole('button', { name: 'Switch and continue' }).click();
+    const qrImage = modal.getByRole('img', { name: 'QR code for the link' });
+    await expect(qrImage).toBeVisible();
+    expect(await qrImage.getAttribute('src')).toMatch(/^data:image\//);
+    await expect(modal).toContainText('Opens the same page as the link. The link stays on until you take it down.');
+    await expect(modal.getByRole('button', { name: 'Raw credential' })).toHaveCount(0);
+    const link = await directLink(modal);
+
+    // Hide QR hides it; closing the dialog leaves the link working
+    await modal.getByRole('button', { name: 'Hide QR' }).click();
+    await expect(qrImage).toHaveCount(0);
+    await modal.getByRole('button', { name: 'Close' }).click();
+    await expect(modal).toBeHidden();
+    expect((await page.request.get(link)).status()).toBe(200);
+  });
+
+  test('LinkedIn and Other apps ask first, then send the readable link', async ({ page }) => {
+    // LinkedIn itself would send a signed-out test browser to its login page;
+    // only the form URL the wallet opens matters here
+    await page.context().route(/linkedin\.com/, (route) => route.fulfill({ body: 'LinkedIn stand-in' }));
+    // a stand-in share sheet that records what it was given
+    await page.addInitScript(() => {
+      const shared: ShareData[] = [];
+      (window as unknown as { shared: ShareData[] }).shared = shared;
+      navigator.share = async (data?: ShareData) => {
+        shared.push(data ?? {});
+      };
+    });
+    const modal = await openShareDialog(page);
+    await expect(option(modal, 'Only you')).toHaveAttribute('aria-pressed', 'true');
+
+    // Other apps while private: asks, then shares and sends in the same click
+    await modal.getByRole('button', { name: 'Other apps' }).click();
+    await expect(modal).toContainText('To send it with another app, switch to Anyone with the link?');
+    await modal.getByRole('button', { name: 'Switch and continue' }).click();
+    await expect(modal.getByLabel('Link to share')).toBeVisible();
+    const readable = await modal.getByLabel('Link to share').inputValue();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { shared: ShareData[] }).shared))
+      .toEqual([{ title: expect.any(String), url: readable }]);
+
+    // take it down, then LinkedIn while private asks too and opens the form
+    await option(modal, 'Only you').click();
+    await modal.getByRole('button', { name: 'Take it down' }).click();
+    await expect(modal.getByRole('status').filter({ hasText: 'Link taken down.' })).toBeVisible();
+    await modal.getByRole('button', { name: 'LinkedIn' }).click();
+    await expect(modal).toContainText('To add it to LinkedIn, switch to Anyone with the link?');
+    const popupPromise = page.waitForEvent('popup');
+    await modal.getByRole('button', { name: 'Switch and continue' }).click();
+    const popup = await popupPromise;
+    await popup.waitForURL(/linkedin\.com\/profile\/add/, { waitUntil: 'commit' });
+    const certUrl = new URL(popup.url()).searchParams.get('certUrl');
+    await expect(modal.getByLabel('Link to share')).toBeVisible();
+    expect(certUrl).toBe(await modal.getByLabel('Link to share').inputValue());
+    // shared again after the take-down, so the same link as before
+    expect(certUrl).toBe(readable);
+    // Closed last: closing it first now and then dropped the main page's
+    // DevTools session mid-assertion
+    await popup.close();
+  });
 });
 
 test('deletes a credential into Trash', async ({ page }) => {

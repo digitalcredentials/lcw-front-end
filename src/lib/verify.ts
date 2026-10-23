@@ -21,6 +21,13 @@ export interface CoreVerificationResult {
 export interface ShareVerification {
   ok: boolean;
   problems: string[];
+  // The ids of the checks that failed, in log order. `fatal` when
+  // verifier-core stopped with an error, `could_not_run` when verification
+  // itself could not run.
+  failed: string[];
+  // Whether the signature check ran and passed: the information has not
+  // changed since it was issued
+  signatureValid: boolean;
 }
 
 const CHECK_PROBLEMS: Record<string, string> = {
@@ -33,7 +40,12 @@ const CHECK_PROBLEMS: Record<string, string> = {
 // Turns a verifier-core result into an ok/problems pair (pure; unit-tested).
 export function interpretVerification(result: CoreVerificationResult): ShareVerification {
   if (result.errors?.length) {
-    return { ok: false, problems: [result.errors[0].message ?? 'the credential could not be verified'] };
+    return {
+      ok: false,
+      problems: [result.errors[0].message ?? 'the credential could not be verified'],
+      failed: ['fatal'],
+      signatureValid: false,
+    };
   }
   const log = (result.log ?? []).filter(
     (step) => !(step.id === 'revocation_status' && step.error?.name === 'status_list_not_found')
@@ -42,6 +54,8 @@ export function interpretVerification(result: CoreVerificationResult): ShareVeri
   return {
     ok: log.length > 0 && failed.length === 0,
     problems: failed.map((step) => CHECK_PROBLEMS[step.id] ?? `the "${step.id}" check failed`),
+    failed: failed.map((step) => step.id),
+    signatureValid: log.some((step) => step.id === 'valid_signature' && step.valid === true),
   };
 }
 
@@ -73,6 +87,6 @@ export async function verifyForSharing(credential: object): Promise<ShareVerific
     return interpretVerification(result);
   } catch (err) {
     console.error('Verification failed to run:', err);
-    return { ok: false, problems: ['verification could not run'] };
+    return { ok: false, problems: ['verification could not run'], failed: ['could_not_run'], signatureValid: false };
   }
 }
