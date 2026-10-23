@@ -31,6 +31,6 @@ export async function requestWelcomeCredential(name: string, email: string): Pro
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? 'The welcome credential email could not be sent.');
+    throw Object.assign(new Error(body?.error ?? 'The welcome credential email could not be sent.'), { status: response.status });
   }
 }

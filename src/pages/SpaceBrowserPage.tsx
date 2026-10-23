@@ -140,7 +140,7 @@ export default function FileBrowserPage() {
     err: unknown,
     show: (failure: Failure) => void = setError,
   ) => {
-    if (isSessionEnded(err)) {
+    if (isSessionEnded(action, err)) {
       clearToken();
       navigate('/login', { replace: true, state: { signedOut: true } });
     } else {
