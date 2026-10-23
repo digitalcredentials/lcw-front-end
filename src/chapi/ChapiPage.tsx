@@ -6,7 +6,7 @@ import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
 import { isAuthenticated, getEmail } from '../lib/auth';
-import { loginWithPassphrase, setSession } from '../lib/identity';
+import { loginWithPassphrase, setSession, getSession, clearSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
@@ -85,6 +85,9 @@ export default function ChapiPage() {
   // the mediator (and closing the popup).
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
   const claimRef = useRef<ClaimResult | null>(null);
+  // The account that ran the exchange: the credential is bound to it, so only
+  // it may save the credential
+  const claimedByRef = useRef<{ did: string; email: string } | null>(null);
   const requestRef = useRef<ParsedPresentationRequest | null>(null);
   // An issuer's exchange that arrived before the user signed in here: the
   // popup has a session of its own (sessionStorage is per window), so it
@@ -158,30 +161,44 @@ export default function ChapiPage() {
       );
     }
     setPhase({ step: 'claiming', from: hostOf(origin) });
+    // The exchange runs once: a sign-in after this point goes back to the Save
+    // step, never to the issuer
+    pendingClaimRef.current = null;
+    const account = getSession();
+    claimedByRef.current = account && { did: account.did, email: account.email };
     const claim = await runExchange(exchangeUrl);
     claimRef.current = claim;
     await loadSaveStep(claim);
   }
 
   // Shows a failure in the popup. Signed out while loading the credentials to
-  // share, it goes back to the sign-in step, which picks the request up again;
-  // a claim cannot resume (the issuer's exchange is usually single-use) and a
-  // half-sent share would resume with stale choices, so their messages say to
-  // start again.
+  // share or saving a collected credential, it goes back to the sign-in step,
+  // which picks up where it stopped; a half-run exchange cannot resume (the
+  // issuer's exchange is usually single-use) and a half-sent share would
+  // resume with stale choices, so their messages say to start again.
   function fail(action: WalletAction, err: unknown) {
-    if (action === 'load-for-share' && isSessionEnded(action, err)) {
+    if ((action === 'load-for-share' || action === 'save-claim') && isSessionEnded(action, err)) {
       setPhase({ step: 'not-signed-in' });
       return;
     }
     setPhase({ step: 'error', failure: describeError(action, err) });
   }
 
-  // Signed in inside the popup: pick up whichever flow was waiting.
+  // Signed in inside the popup: pick up whichever flow was waiting. A
+  // credential already collected goes back to the Save step with it, if the
+  // account that collected it signed in; otherwise the sign-in step says so.
   async function resumeAfterSignIn() {
+    const claimedBy = claimedByRef.current;
+    if (!requestRef.current && claimRef.current && claimedBy && getSession()?.did !== claimedBy.did) {
+      clearSession();
+      throw new PlainError(`This credential was collected for ${claimedBy.email}. Sign in with that account to save it.`);
+    }
     const action = requestRef.current ? 'load-for-share' : 'claim';
     try {
       if (requestRef.current) {
         await continueRequest();
+      } else if (claimRef.current) {
+        await loadSaveStep(claimRef.current, collectionId);
       } else if (pendingClaimRef.current) {
         await claimFrom(pendingClaimRef.current.vpr, pendingClaimRef.current.origin);
       }
@@ -191,9 +208,11 @@ export default function ChapiPage() {
   }
 
   // Lists every credential space's collections for the save picker and picks
-  // the default. Called once the claim has run, and again by Retry, which
-  // must never re-run the exchange: the credential is already issued.
-  async function loadSaveStep(claim: ClaimResult) {
+  // the default, unless `chosen` (a choice made before) is still offered.
+  // Called once the claim has run, and again by Retry and after a sign-in
+  // from this step, neither of which may re-run the exchange: the credential
+  // is already issued.
+  async function loadSaveStep(claim: ClaimResult, chosen = '') {
     setListing(true);
     let spaces: SpaceCollections[] = [];
     let listFailed = false;
@@ -231,6 +250,12 @@ export default function ChapiPage() {
       return;
     }
 
+    const [chosenSpace, chosenId] = chosen.split('|');
+    if (spaces.some((sp) => sp.spaceUrl === chosenSpace
+      && (chosenId === NEW_COLLECTION || sp.collections.some((c) => c.id === chosenId)))) {
+      return;
+    }
+
     // The default, first match wins: a collection named for the suggested
     // category (compared as an id, since listings report an encrypted
     // collection's id as its name); the one this account last saved into;
@@ -263,6 +288,12 @@ export default function ChapiPage() {
     try {
       // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
       const [spaceUrl, choice] = collectionId.split('|');
+      // Signed out here, sign in and come back to this step
+      const session = await getSessionWASClientFor(spaceUrl);
+      if (!session) {
+        setPhase({ step: 'not-signed-in' });
+        return;
+      }
       const space = phase.spaces.find((sp) => sp.spaceUrl === spaceUrl);
       let targetId = choice;
       let collectionName: string;
@@ -277,11 +308,6 @@ export default function ChapiPage() {
           return;
         }
         collectionName = name;
-        const session = await getSessionWASClientFor(spaceUrl);
-        if (!session) {
-          setPhase({ step: 'not-signed-in' });
-          return;
-        }
         targetId = collectionIdFor(name);
         await ensureEncryptedCollection({
           space: session.client.space(session.spaceId),
@@ -447,7 +473,7 @@ export default function ChapiPage() {
                 <div className="flex items-center gap-3">
                   <p role="alert" className="flex-1 text-sm text-red-600">Your collections could not be loaded.</p>
                   <button
-                    onClick={() => void loadSaveStep(phase.claim)}
+                    onClick={() => void loadSaveStep(phase.claim, collectionId)}
                     disabled={listing}
                     className="border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-3 py-1.5"
                   >
@@ -682,7 +708,8 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
       await onSignedIn();
     } catch (err) {
       const status = (err as { status?: number }).status;
-      setError(status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
+      setError(err instanceof PlainError ? err.message
+        : status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
       setLoading(false);
     }
   }
