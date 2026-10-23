@@ -138,19 +138,33 @@ test('shares a credential to LinkedIn', async ({ page }) => {
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await page.getByRole('button', { name: 'Share', exact: true }).click();
+    const modal = page.getByRole('dialog', { name: /^Share / });
+    await expect(modal).toBeVisible();
+    // The dialog first finds out who can see the credential
+    await expect(modal.getByRole('group', { name: 'Who can see it' })).toHaveAttribute('aria-busy', 'false');
     // Record the URL at the moment the page calls window.open, instead of
     // opening a real popup: reading popup.url() after waitForEvent('page')
     // races LinkedIn's redirect to its login wall and fails intermittently.
+    // The dialog opens a blank tab in the click and points it at the form
+    // once the link exists; with the stub returning null it treats the tab
+    // as blocked and opens the form URL itself, which the stub records.
     await page.evaluate(() => {
       (window as unknown as { __openedUrl?: string }).__openedUrl = undefined;
-      window.open = ((url: string | URL) => {
-        (window as unknown as { __openedUrl?: string }).__openedUrl = String(url);
+      window.open = ((url?: string | URL) => {
+        if (url && String(url) !== '') {
+          (window as unknown as { __openedUrl?: string }).__openedUrl = String(url);
+        }
         return null;
       }) as typeof window.open;
     });
-    await page.getByRole('button', { name: 'Add to LinkedIn' }).click();
-    // The confirm step; its button carries the same label as the opener.
-    await page.getByRole('dialog').getByRole('button', { name: 'Add to LinkedIn' }).last().click();
+    await modal.getByRole('button', { name: 'LinkedIn' }).click();
+    // While the credential is private the dialog asks before switching it to
+    // Anyone with the link; once shared (as it stays between runs) it opens
+    // the form at once. A nameless issuer would add one more question.
+    for (const name of ['Switch and continue', 'Continue to LinkedIn']) {
+      const button = modal.getByRole('button', { name });
+      await button.waitFor({ state: 'visible', timeout: 3000 }).then(() => button.click(), () => undefined);
+    }
     await expect
       .poll(async () => page.evaluate(() => (window as unknown as { __openedUrl?: string }).__openedUrl))
       .toBeTruthy();
