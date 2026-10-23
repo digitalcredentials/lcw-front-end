@@ -5,7 +5,7 @@ import * as WebCredentialHandler from 'web-credential-handler';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
-import { isAuthenticated, getEmail } from '../lib/auth';
+import { isAuthenticated, getEmail, clearToken } from '../lib/auth';
 import { loginWithPassphrase, setSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
@@ -169,7 +169,13 @@ export default function ChapiPage() {
   // half-sent share would resume with stale choices, so their messages say to
   // start again.
   function fail(action: WalletAction, err: unknown) {
-    if (action === 'load-for-share' && isSessionEnded(action, err)) {
+    // A rejected session is cleared here too, as on the wallet's pages, so
+    // the popup leaves nothing signed in behind it on a shared computer
+    const signedOut = isSessionEnded(action, err);
+    if (signedOut) {
+      clearToken();
+    }
+    if (action === 'load-for-share' && signedOut) {
       setPhase({ step: 'not-signed-in' });
       return;
     }
