@@ -401,7 +401,7 @@ test('shows a QR code and shares only while it is visible', async ({ page }) => 
   );
 });
 
-test('deletes a credential into the Trash collection', async ({ page }) => {
+test('deletes a credential into Trash', async ({ page }) => {
   await logIn(page);
   await openUniversityCollection(page);
 
@@ -410,7 +410,7 @@ test('deletes a credential into the Trash collection', async ({ page }) => {
   await row.getByRole('button', { name: 'Delete' }).click();
 
   const modal = page.getByRole('dialog', { name: 'Delete Credential' });
-  await expect(modal).toContainText('Move PastedUpload.json to the Trash collection?');
+  await expect(modal).toContainText('Move PastedUpload.json to Trash? You can restore it from there.');
   await modal.getByRole('button', { name: 'Delete' }).click();
 
   // the refreshed list no longer contains it…

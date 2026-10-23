@@ -164,10 +164,12 @@ function readFailure(error: unknown): { status?: number; name?: string; message?
 }
 
 // A signed-out session: the wallet's own code throws Error('UNAUTHORIZED')
-// when the session is missing (handleError sends the person to sign in), and
-// the storage server answers 401. Retrying cannot help; signing in can. An
-// issuer's 401 says nothing about the wallet's session, so only a 401 from
-// the learner's own storage counts.
+// when the session is missing, and the storage server answers 401 when it
+// rejects the session's signed requests. Retrying cannot help; signing in can,
+// and nothing should stay on screen meanwhile (a shared computer), so callers
+// clear the session and send the person to sign in. An issuer's 401 says
+// nothing about the wallet's session, so only a 401 from the learner's own
+// storage counts.
 export function isSessionEnded(action: WalletAction, error: unknown): boolean {
   const { status, name, message } = readFailure(error)
   if (name === 'IssuerError') {

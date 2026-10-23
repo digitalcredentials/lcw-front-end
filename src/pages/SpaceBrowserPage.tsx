@@ -7,7 +7,7 @@ import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
-import { describeError, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, isSessionEnded, type Failure, type WalletAction } from '../lib/errors';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
@@ -130,17 +130,19 @@ export default function FileBrowserPage() {
   const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
   const host = useWalletHost();
 
-  // Turns a failed request into either a redirect to login (no session at
-  // all) or a plain sentence (src/lib/errors.ts), shown on the page or, given
-  // its setter, in the dialog the action came from.
+  // Turns a failed request into either a redirect to login or a plain
+  // sentence (src/lib/errors.ts), shown on the page or, given its setter, in
+  // the dialog the action came from. A missing or rejected session clears
+  // what is on screen, open dialog included, so nothing is left behind on a
+  // shared computer; the login page says why.
   const handleError = useCallback((
     action: WalletAction,
     err: unknown,
     show: (failure: Failure) => void = setError,
   ) => {
-    if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+    if (isSessionEnded(action, err)) {
       clearToken();
-      navigate('/login', { replace: true });
+      navigate('/login', { replace: true, state: { signedOut: true } });
     } else {
       show(describeError(action, err));
     }
@@ -733,6 +735,18 @@ export default function FileBrowserPage() {
   const isEmpty = activeSpace
     ? (selected ? resources.length === 0 : collections.length === 0)
     : (spaces ?? []).length === 0;
+
+  // The Delete dialog names the credential by its title, from the detail view
+  // when it opened there, else its card's (loading until the card's body
+  // arrives, as in the Move dialog): an encrypted collection's opaque storage
+  // name shows only when neither is known
+  const deleteTargetSummary = deleteTarget && summaries[`${selected?.id}/${deleteTarget.id}`];
+  const deleteTargetTitle = deleteTarget && (
+    (viewing?.resource.id === deleteTarget.id ? viewingSummary?.title : undefined)
+    ?? (deleteTargetSummary === undefined
+      ? <LoadingLabel />
+      : deleteTargetSummary?.title ?? deleteTarget.name ?? deleteTarget.id)
+  );
 
   return (
     <AppShell>
@@ -1486,7 +1500,7 @@ export default function FileBrowserPage() {
         </div>
       )}
 
-      {/* Confirm before moving a credential to the Trash collection */}
+      {/* Confirm before moving a credential to Trash */}
       {deleteTarget && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
@@ -1503,14 +1517,13 @@ export default function FileBrowserPage() {
                 soft delete into Trash */}
             {selected?.id === 'Trash' ? (
               <p className="text-sm text-gray-600 mb-5">
-                Permanently delete{' '}
-                <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span>?
-                This cannot be undone.
+                Delete <span className="font-medium text-gray-800">{deleteTargetTitle}</span> for good?
+                This can't be undone.
               </p>
             ) : (
               <p className="text-sm text-gray-600 mb-5">
-                Move <span className="font-medium text-gray-800">{deleteTarget.name ?? deleteTarget.id}</span> to
-                the Trash collection?
+                Move <span className="font-medium text-gray-800">{deleteTargetTitle}</span> to Trash?
+                You can restore it from there.
               </p>
             )}
             <div className="flex justify-end gap-2">

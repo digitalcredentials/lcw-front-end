@@ -4,6 +4,7 @@ import LoadingLabel from '../components/LoadingLabel';
 import PasswordInput from '../components/PasswordInput';
 import {
   getSession,
+  setSession,
   listCredentials,
   removeCredential,
   confirmWithPassphrase,
@@ -102,11 +103,13 @@ export default function CredentialsPage() {
     setError('');
     try {
       const acting = await confirm();
-      const { retired } = await removeCredential({ session, acting, credential: removing, config: identityConfig() });
+      const { retired, session: rotated } = await removeCredential({ session, acting, credential: removing, config: identityConfig() });
+      // The account's data key was rotated; this session continues on the new one
+      setSession(rotated);
       setNotice(
         retired
-          ? `${KIND_LABEL[removing.kind]} removed.`
-          : `${KIND_LABEL[removing.kind]} removed from the account. Its sign-in records could not be retired from the server; they no longer open the account.`
+          ? `${KIND_LABEL[removing.kind]} removed, and your account's data key was replaced.`
+          : `${KIND_LABEL[removing.kind]} removed from the account and your account's data key was replaced. Its sign-in records could not be retired from the server; they no longer open the account.`
       );
       setRemoving(null);
       setPassword('');
@@ -225,7 +228,9 @@ export default function CredentialsPage() {
               Remove this {KIND_LABEL[removing.kind].toLowerCase()}?
             </h2>
             <p className="text-sm text-gray-600 mb-4">
-              Its keys are taken out of your account, and it can no longer sign in.
+              Its keys are taken out of your account, it can no longer sign in, and the key your data is
+              encrypted with is replaced, so it can no longer read anything either. Other browsers where
+              you are signed in will ask you to sign in again.
               {removing.kind === 'passkey' && ' The passkey itself stays on the device it was created on; delete it there too.'}{' '}
               To continue, confirm with your password, or with a passkey of this account.
             </p>
