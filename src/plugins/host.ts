@@ -24,7 +24,7 @@ export function useWalletHost(): WalletHost {
       templatesApiBase: trimSlash(import.meta.env.VITE_TEMPLATES_API_BASE),
       onUnauthorized: () => {
         clearToken();
-        navigate('/login', { replace: true, state: { signedOut: true } });
+        navigate('/login', { replace: true });
       },
     }),
     [navigate]

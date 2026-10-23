@@ -68,7 +68,7 @@ export default function LoginPage() {
   const [signedOut] = useState((location.state as { signedOut?: boolean } | null)?.signedOut === true);
   useEffect(() => {
     if (signedOut) {
-      navigate(location.pathname, { replace: true, state: null });
+      navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
