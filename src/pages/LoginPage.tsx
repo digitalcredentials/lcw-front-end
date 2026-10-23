@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   openWithPassphrase,
   openWithPasskey,
@@ -61,6 +61,9 @@ function describe(err: unknown, fallback: string): string {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  // Sent here because the storage server rejected the session (see
+  // handleError): say why, so the bounce to sign-in doesn't look like a fault
+  const signedOut = (useLocation().state as { signedOut?: boolean } | null)?.signedOut === true;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -186,6 +189,11 @@ export default function LoginPage() {
         <>
         <h2 className="text-2xl font-semibold text-gray-800 mb-1">Sign in</h2>
         <p className="text-sm text-gray-500 mb-6">Enter your credentials to continue</p>
+        {signedOut && (
+          <p role="status" className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 mb-4">
+            For your security, you've been signed out. Sign in again to continue.
+          </p>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">

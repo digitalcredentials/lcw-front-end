@@ -87,9 +87,11 @@ function readFailure(error: unknown): { status?: number; name?: string; message?
 }
 
 // A signed-out session: the wallet's own code throws Error('UNAUTHORIZED')
-// when the session is missing (handleError sends the person to sign in), and
-// the server answers 401. Retrying cannot help; signing in can.
-function isSessionEnded(error: unknown): boolean {
+// when the session is missing, and the storage server answers 401 when it
+// rejects the session's signed requests. Retrying cannot help; signing in can,
+// and nothing should stay on screen meanwhile (a shared computer), so
+// handleError clears the session and sends the person to sign in.
+export function isSessionEnded(error: unknown): boolean {
   const { status, message } = readFailure(error)
   return status === 401 || message === 'UNAUTHORIZED'
 }

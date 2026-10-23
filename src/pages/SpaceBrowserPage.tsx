@@ -7,7 +7,7 @@ import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
-import { describeError, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, isSessionEnded, type Failure, type WalletAction } from '../lib/errors';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
@@ -130,17 +130,19 @@ export default function FileBrowserPage() {
   const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
   const host = useWalletHost();
 
-  // Turns a failed request into either a redirect to login (no session at
-  // all) or a plain sentence (src/lib/errors.ts), shown on the page or, given
-  // its setter, in the dialog the action came from.
+  // Turns a failed request into either a redirect to login or a plain
+  // sentence (src/lib/errors.ts), shown on the page or, given its setter, in
+  // the dialog the action came from. A missing or rejected session clears
+  // what is on screen, open dialog included, so nothing is left behind on a
+  // shared computer; the login page says why.
   const handleError = useCallback((
     action: WalletAction,
     err: unknown,
     show: (failure: Failure) => void = setError,
   ) => {
-    if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+    if (isSessionEnded(err)) {
       clearToken();
-      navigate('/login', { replace: true });
+      navigate('/login', { replace: true, state: { signedOut: true } });
     } else {
       show(describeError(action, err));
     }
