@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
 import { WasClient, type ResourceData } from '@interop/was-client';
-import { deriveKeyPair } from '../src/lib/login';
+import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
 import { removePublicCopy } from '../src/lib/publicCopy';
 
 // End-to-end tests against the local stack. Prerequisites:
@@ -299,6 +299,18 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
 const DEMO_SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
 const DEMO_SPACE_URL = `http://localhost:3000/space/${DEMO_SPACE_ID}`;
 const VERIFIER_PREFIX = 'https://verifierplus.org/#verify?vc=';
+
+// The demo key as sign-in derived it before #163 (SHA-256 of the passphrase
+// as the Ed25519 seed), kept here because src/lib/login.ts is gone and this
+// file must load for any test to run. Accounts no longer use this key since
+// #163, so these local-stack share helpers need porting before they can run.
+async function deriveKeyPair(passphrase: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(passphrase));
+  const keyPair = await Ed25519VerificationKey.generate({ seed: new Uint8Array(digest) });
+  keyPair.controller = `did:key:${keyPair.fingerprint()}`;
+  keyPair.id = `${keyPair.controller}#${keyPair.fingerprint()}`;
+  return keyPair;
+}
 
 async function demoSpace() {
   const keyPair = await deriveKeyPair(DEMO_PASSPHRASE);
