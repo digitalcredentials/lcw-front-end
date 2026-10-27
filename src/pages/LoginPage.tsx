@@ -56,6 +56,8 @@ function describe(err: unknown, fallback: string): string {
   if (status === 400 || status === 401) {
     return 'Invalid email or password.';
   }
+  // The fallback says nothing of the cause, so keep it in the console.
+  console.error('Sign-in failed:', err);
   return fallback;
 }
 
