@@ -6,13 +6,27 @@ import { WasClient, type ResourceData } from '@interop/was-client';
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
 import { removePublicCopy } from '../src/lib/publicCopy';
 
-// End-to-end tests against the local stack. Prerequisites:
-// - the lcw-back-end sam local API on :3001 (the login endpoint)
-// - the was-server-aws sam local API on :3000 (the space)
-// - the demo account registered in the wallet-test DynamoDB table, with the
-//   LCWExperience and Bachelors credentials in its UniversityOfToronto
-//   collection
-// The Vite dev server is started automatically (or reused if already up).
+// End-to-end tests of the wallet UI. The Vite dev server is started
+// automatically (or reused if already up on :5173), and the app takes its
+// service URLs from the VITE_ variables in the environment or in .env (not
+// committed; .env.example lists them).
+//
+// What runs today:
+// - the sandbox banner and mismatched-password tests need nothing more
+// - the wrong-password test needs a space server at VITE_WAS_BASE_URL,
+//   where sign-in looks the credential up
+//
+// What doesn't, until it is repaired or removed (#199):
+// - the registration-code test expects a message the space server no
+//   longer sends
+// - the tests that sign in stop at the add-a-passkey offer (logIn doesn't
+//   mark it dismissed, as deployed.spec.ts does), and need the demo account
+//   (tests/scripts/register-demo.ts, seed-demo.ts) on the space server and
+//   on the back end at VITE_API_BASE_URL. Since #163 only the sandbox has
+//   one, and these tests change it: don't point them there
+// - the sharing tests also call a space server on localhost:3000 directly,
+//   with the demo key from before #163 (see deriveKeyPair)
+// tests/deployed.spec.ts covers signing in, against the sandbox.
 
 const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
