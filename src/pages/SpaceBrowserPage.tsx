@@ -6,6 +6,8 @@ import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
+import FailureText from '../components/FailureText';
+import { CredentialMissingError, describeError, isSessionEnded, type Failure, type WalletAction } from '../lib/errors';
 import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../lib/edv';
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
@@ -68,7 +70,7 @@ export default function FileBrowserPage() {
   const [newSpaceName, setNewSpaceName] = useState('');
   const [newSpaceDescription, setNewSpaceDescription] = useState('');
   const [creatingSpace, setCreatingSpace] = useState(false);
-  const [newSpaceError, setNewSpaceError] = useState('');
+  const [newSpaceError, setNewSpaceError] = useState<Failure | null>(null);
 
   const session = useMemo(
     () => (activeSpace ? getSessionWASClientFor(activeSpace.url) : getSessionWASClient()),
@@ -80,8 +82,8 @@ export default function FileBrowserPage() {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [uploadError, setUploadError] = useState('');
-  const [error, setError] = useState('');
+  const [uploadError, setUploadError] = useState<Failure | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   // The opened resource: 'detail' replaces the list with the credential view
   // (formatted contents, source and verification side by side); 'source' is
   // the read-only source-only view used in the Trash and dids collections
@@ -119,23 +121,29 @@ export default function FileBrowserPage() {
   // ids are path segments, so collections are not renamed here)
   const [nameDraft, setNameDraft] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
-  const [descriptionError, setDescriptionError] = useState('');
+  const [descriptionError, setDescriptionError] = useState<Failure | null>(null);
   const [newCollectionName, setNewCollectionName] = useState('');
   const [creatingCollection, setCreatingCollection] = useState(false);
-  const [newCollectionError, setNewCollectionError] = useState('');
+  const [newCollectionError, setNewCollectionError] = useState<Failure | null>(null);
 
   // Plugin components for the verification panel (src/plugins/index.ts);
   // the registry is a module constant, so this list never changes at run time
   const detailSlots = plugins.flatMap((plugin) => plugin.slots?.credentialDetail ?? []);
   const host = useWalletHost();
 
-  // Turns a failed request into either a redirect to login or a shown message.
-  const handleError = useCallback((err: unknown) => {
-    if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+  // Turns a failed request into either a redirect to login or a plain
+  // sentence (src/lib/errors.ts), shown on the page banner or, given its
+  // setter, in the dialog the action came from.
+  const handleError = useCallback((
+    action: WalletAction,
+    err: unknown,
+    show: (failure: Failure) => void = setError,
+  ) => {
+    if (isSessionEnded(err)) {
       clearToken();
       navigate('/login', { replace: true });
     } else {
-      setError(err instanceof Error ? err.message : 'Failed to load files');
+      show(describeError(action, err));
     }
   }, [navigate]);
 
@@ -147,7 +155,7 @@ export default function FileBrowserPage() {
     }
 
     setLoading(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -183,7 +191,7 @@ export default function FileBrowserPage() {
         }
       });
     } catch (err) {
-      handleError(err);
+      handleError('load-collections', err);
     } finally {
       setLoading(false);
     }
@@ -197,7 +205,7 @@ export default function FileBrowserPage() {
     }
 
     setLoading(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -239,7 +247,7 @@ export default function FileBrowserPage() {
         });
       }
     } catch (err) {
-      handleError(err);
+      handleError('load-credentials', err);
     } finally {
       setLoading(false);
     }
@@ -253,7 +261,7 @@ export default function FileBrowserPage() {
       return;
     }
     setLoading(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -263,9 +271,10 @@ export default function FileBrowserPage() {
         return;
       }
       const data = await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).get();
+      // The WAS client answers a missing resource (a 404) with null rather
+      // than an error, so null reads as missing here and in restore and move
       if (data === null) {
-        setError('This resource could not be retrieved.');
-        return;
+        throw new CredentialMissingError('The storage returned nothing for this credential.');
       }
       const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
       setViewing({ resource, vc, mode });
@@ -273,7 +282,7 @@ export default function FileBrowserPage() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
-      handleError(err);
+      handleError('open', err);
     } finally {
       setLoading(false);
     }
@@ -287,7 +296,7 @@ export default function FileBrowserPage() {
       return;
     }
     setDeleting(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -312,7 +321,7 @@ export default function FileBrowserPage() {
       await loadResources(selected);
     } catch (err) {
       setDeleteTarget(null);
-      handleError(err);
+      handleError('delete', err);
     } finally {
       setDeleting(false);
     }
@@ -325,7 +334,7 @@ export default function FileBrowserPage() {
       return;
     }
     setRestoring(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -337,7 +346,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new Error('The credential could not be read from Trash.');
+        throw new CredentialMissingError('The storage returned nothing for this credential in Trash.');
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({
@@ -351,7 +360,7 @@ export default function FileBrowserPage() {
       await loadResources(selected);
     } catch (err) {
       setRestoreTarget(null);
-      handleError(err);
+      handleError('restore', err);
     } finally {
       setRestoring(false);
     }
@@ -364,7 +373,7 @@ export default function FileBrowserPage() {
       return;
     }
     setMoving(true);
-    setError('');
+    setError(null);
 
     try {
       const s = await session;
@@ -376,7 +385,7 @@ export default function FileBrowserPage() {
       const space = s.client.space(s.spaceId);
       const data = await space.collection(selected.id).resource(resource.id).get();
       if (data === null) {
-        throw new Error('The credential could not be read.');
+        throw new CredentialMissingError('The storage returned nothing for this credential.');
       }
       const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
       await writeResource({
@@ -390,7 +399,7 @@ export default function FileBrowserPage() {
       await loadResources(selected);
     } catch (err) {
       setMoveTarget(null);
-      handleError(err);
+      handleError('move', err);
     } finally {
       setMoving(false);
     }
@@ -454,14 +463,14 @@ export default function FileBrowserPage() {
       return;
     }
     setUploading(true);
-    setUploadError('');
+    setUploadError(null);
 
     try {
       let credential: unknown;
       try {
         credential = JSON.parse(text);
       } catch {
-        setUploadError(`${name} is not valid JSON.`);
+        setUploadError({ text: `We couldn't read ${name}. Check that it's a credential file.` });
         return;
       }
 
@@ -479,11 +488,16 @@ export default function FileBrowserPage() {
       setUploadOpen(false);
       await loadResources(selected);
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'The upload failed.');
+      handleError('upload', err, setUploadError);
+      // It may have gone through: reload the list behind the dialog so the
+      // person can check before adding it again
+      if (!isSessionEnded(err)) {
+        void loadResources(selected);
+      }
     } finally {
       setUploading(false);
     }
-  }, [navigate, session, selected, loadResources]);
+  }, [navigate, handleError, session, selected, loadResources]);
 
   // Creates a collection named by the user via a PUT of its description (the
   // WAS create-by-id path). The id is the name with whitespace dashed, since
@@ -495,7 +509,7 @@ export default function FileBrowserPage() {
       return;
     }
     setCreatingCollection(true);
-    setNewCollectionError('');
+    setNewCollectionError(null);
 
     try {
       const s = await session;
@@ -524,11 +538,14 @@ export default function FileBrowserPage() {
       setNewCollectionDescription('');
       await loadCollections();
     } catch (err) {
-      setNewCollectionError(err instanceof Error ? err.message : 'Could not create the collection.');
+      handleError('create-collection', err, setNewCollectionError);
+      if (!isSessionEnded(err)) {
+        void loadCollections();
+      }
     } finally {
       setCreatingCollection(false);
     }
-  }, [navigate, session, newCollectionName, newCollectionDescription, loadCollections]);
+  }, [navigate, handleError, session, newCollectionName, newCollectionDescription, loadCollections]);
 
   // Writes the open collection's description: read the current description
   // document, merge the new text in, and PUT the whole document back (the WAS
@@ -541,7 +558,7 @@ export default function FileBrowserPage() {
       return;
     }
     setSavingDescription(true);
-    setDescriptionError('');
+    setDescriptionError(null);
     try {
       const s = await session;
       if (!s) {
@@ -585,17 +602,17 @@ export default function FileBrowserPage() {
       }
       setEditDescriptionOpen(false);
     } catch (err) {
-      setDescriptionError(err instanceof Error ? err.message : 'Could not save the description.');
+      handleError('save-description', err, setDescriptionError);
     } finally {
       setSavingDescription(false);
     }
-  }, [navigate, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails]);
+  }, [navigate, handleError, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails]);
 
   // The spaces list: the account's registered spaces, with each space's
   // description fetched in the background from its Space Metadata object
   const loadSpaces = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setError(null);
     try {
       const list = await listSpaces();
       setSpaces(list);
@@ -624,7 +641,7 @@ export default function FileBrowserPage() {
         }
       });
     } catch (err) {
-      handleError(err);
+      handleError('load-spaces', err);
     } finally {
       setLoading(false);
     }
@@ -642,7 +659,7 @@ export default function FileBrowserPage() {
     setActiveSpace(null);
     setSelected(null);
     setViewing(null);
-    setError('');
+    setError(null);
   }, [location.key]);
 
   // Opening a space loads its collections; leaving it clears them
@@ -665,7 +682,7 @@ export default function FileBrowserPage() {
 
   function backToSpaces() {
     setActiveSpace(null);
-    setError('');
+    setError(null);
   }
 
   // Creates a credential space, then writes its description into its Space
@@ -676,7 +693,7 @@ export default function FileBrowserPage() {
       return;
     }
     setCreatingSpace(true);
-    setNewSpaceError('');
+    setNewSpaceError(null);
     try {
       const spaceUrl = await createSpace('credential', name);
       const description = newSpaceDescription.trim();
@@ -692,11 +709,14 @@ export default function FileBrowserPage() {
       setNewSpaceDescription('');
       await loadSpaces();
     } catch (err) {
-      setNewSpaceError(err instanceof Error ? err.message : 'Could not create the space.');
+      handleError('create-space', err, setNewSpaceError);
+      if (!isSessionEnded(err)) {
+        void loadSpaces();
+      }
     } finally {
       setCreatingSpace(false);
     }
-  }, [newSpaceName, newSpaceDescription, loadSpaces]);
+  }, [handleError, newSpaceName, newSpaceDescription, loadSpaces]);
 
   function openCollection(collection: CollectionSummary) {
     setSelected(collection);
@@ -709,7 +729,7 @@ export default function FileBrowserPage() {
     setSelected(null);
     setResources([]);
     setViewing(null);
-    setError('');
+    setError(null);
   }
 
   function retry() {
@@ -781,7 +801,7 @@ export default function FileBrowserPage() {
             // header carries that view's actions
             viewing?.mode !== 'detail' && (
               <button
-                onClick={() => { setUploadError(''); setUploadOpen(true); }}
+                onClick={() => { setUploadError(null); setUploadOpen(true); }}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
               >
                 Add Credential
@@ -789,14 +809,14 @@ export default function FileBrowserPage() {
             )
           ) : activeSpace ? (
             <button
-              onClick={() => { setNewCollectionError(''); setNewCollectionName(''); setNewCollectionOpen(true); }}
+              onClick={() => { setNewCollectionError(null); setNewCollectionName(''); setNewCollectionOpen(true); }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
             >
               New Collection
             </button>
           ) : (
             <button
-              onClick={() => { setNewSpaceError(''); setNewSpaceName(''); setNewSpaceDescription(''); setNewSpaceOpen(true); }}
+              onClick={() => { setNewSpaceError(null); setNewSpaceName(''); setNewSpaceDescription(''); setNewSpaceOpen(true); }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
             >
               New Space
@@ -815,7 +835,7 @@ export default function FileBrowserPage() {
               onClick={() => {
                 setNameDraft(spaceDetails[activeSpace.url]?.name ?? '');
                 setDescriptionDraft(spaceDetails[activeSpace.url]?.description ?? '');
-                setDescriptionError('');
+                setDescriptionError(null);
                 setDescriptionTarget('space');
                 setEditDescriptionOpen(true);
               }}
@@ -842,7 +862,7 @@ export default function FileBrowserPage() {
               <button
                 onClick={() => {
                   setDescriptionDraft(collectionDetails[selected.id]?.description ?? '');
-                  setDescriptionError('');
+                  setDescriptionError(null);
                   setDescriptionTarget('collection');
                   setEditDescriptionOpen(true);
                 }}
@@ -874,13 +894,14 @@ export default function FileBrowserPage() {
 
         {!loading && error && (
           <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-            {error}
-            <button
-              onClick={retry}
-              className="ml-3 underline hover:no-underline"
-            >
-              Retry
-            </button>
+            <FailureText failure={error}>
+              <button
+                onClick={retry}
+                className="ml-3 underline hover:no-underline"
+              >
+                Retry
+              </button>
+            </FailureText>
           </div>
         )}
 
@@ -1222,7 +1243,7 @@ export default function FileBrowserPage() {
       {uploadOpen && (
         <UploadCredentialModal
           busy={uploading}
-          error={uploadError}
+          error={uploadError && <FailureText failure={uploadError} />}
           onClose={() => setUploadOpen(false)}
           onUpload={uploadCredential}
         />
@@ -1278,9 +1299,9 @@ export default function FileBrowserPage() {
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
               {descriptionError && (
-                <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  {descriptionError}
-                </p>
+                <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <FailureText failure={descriptionError} />
+                </div>
               )}
               <div className="flex justify-end gap-2">
                 <button
@@ -1396,9 +1417,9 @@ export default function FileBrowserPage() {
                 />
               </div>
               {newSpaceError && (
-                <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  {newSpaceError}
-                </p>
+                <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <FailureText failure={newSpaceError} />
+                </div>
               )}
               <div className="flex justify-end gap-2">
                 <button
@@ -1467,9 +1488,9 @@ export default function FileBrowserPage() {
               </div>
 
               {newCollectionError && (
-                <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  {newCollectionError}
-                </p>
+                <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <FailureText failure={newCollectionError} />
+                </div>
               )}
 
               <div className="flex justify-end gap-2">

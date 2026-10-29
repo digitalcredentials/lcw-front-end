@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import JSONInput from './JSONInput';
 import { decodeQrPayload, scanImageFile, QrScanner } from '../lib/scan';
 
 interface UploadCredentialModalProps {
   busy: boolean;
-  error: string;
+  error: ReactNode;
   onClose: () => void;
   // Called with the resource name and the credential JSON text
   onUpload: (name: string, text: string) => void;
@@ -223,9 +223,9 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
         </div>
 
         {error && (
-          <p role="alert" className="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <div role="alert" className="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             {error}
-          </p>
+          </div>
         )}
       </div>
     </div>
