@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import JSONInput from './JSONInput';
+import FailureText from './FailureText';
+import { describeError, type Failure } from '../lib/errors';
 import { decodeQrPayload, scanImageFile, QrScanner } from '../lib/scan';
 
 interface UploadCredentialModalProps {
@@ -20,7 +22,7 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
   const [text, setText] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [scanError, setScanError] = useState('');
+  const [scanError, setScanError] = useState<Failure | null>(null);
 
   // The editor highlights errors as the user types; this gates the Add
   // button on the same condition.
@@ -52,7 +54,7 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
     if (!file) {
       return;
     }
-    setScanError('');
+    setScanError(null);
     try {
       if (file.type.startsWith('image/')) {
         await stageQrText(await scanImageFile(file));
@@ -61,12 +63,12 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
         setText(await file.text());
       }
     } catch (err) {
-      setScanError(err instanceof Error ? err.message : 'Could not read a credential from that file.');
+      setScanError(describeError('read-file', err));
     }
   }
 
   async function startCamera() {
-    setScanError('');
+    setScanError(null);
     setScanning(true);
     try {
       // The video element renders once `scanning` is set; wait a tick for it
@@ -77,11 +79,15 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
       const scanner = new QrScanner(
         videoRef.current,
         async (result) => {
+          // An empty match (qr-scanner, on a busy view) is no QR code yet
+          if (!result.data) {
+            return;
+          }
           stopCamera();
           try {
             await stageQrText(result.data);
           } catch (err) {
-            setScanError(err instanceof Error ? err.message : 'Could not read a credential from that QR code.');
+            setScanError(describeError('read-qr', err));
           }
         },
         { returnDetailedScanResult: true, highlightScanRegion: true }
@@ -90,7 +96,7 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
       await scanner.start();
     } catch (err) {
       stopCamera();
-      setScanError(err instanceof Error ? err.message : 'Could not start the camera.');
+      setScanError(describeError('start-camera', err));
     }
   }
 
@@ -182,9 +188,9 @@ export default function UploadCredentialModal({ busy, error, onClose, onUpload }
           )}
         </div>
         {scanError && (
-          <p role="alert" className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            {scanError}
-          </p>
+          <div role="alert" className="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <FailureText failure={scanError} />
+          </div>
         )}
 
         <div className="flex items-center gap-3 my-4" aria-hidden="true">
