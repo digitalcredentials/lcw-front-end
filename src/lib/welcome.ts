@@ -1,3 +1,4 @@
+import { IssuerError, outsideText } from './errors';
 // The welcome-credential flow: a newly registered account is offered a
 // welcome credential (the LCW Sandbox Badge from the test issuer) the first
 // time the wallet opens. Registration marks the offer pending for the email;
@@ -28,9 +29,11 @@ export async function requestWelcomeCredential(name: string, email: string): Pro
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, email }),
+  }).catch((err) => {
+    throw new IssuerError('The issuer could not be reached.', undefined, err);
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? 'The welcome credential email could not be sent.');
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    throw new IssuerError(outsideText(body?.error) ?? 'The welcome credential email could not be sent.', response.status);
   }
 }
