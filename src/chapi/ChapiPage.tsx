@@ -80,6 +80,9 @@ export default function ChapiPage() {
   const [collectionId, setCollectionId] = useState('');
   const [newCollectionName, setNewCollectionName] = useState('');
   const [saving, setSaving] = useState(false);
+  // A failed save, shown on the save step: the issued credential is still
+  // held, so Save can be pressed again
+  const [saveError, setSaveError] = useState<Failure | null>(null);
   const [listing, setListing] = useState(false);
   // Resolves the get() hook's promise, handing the issued credential back to
   // the mediator (and closing the popup).
@@ -259,6 +262,11 @@ export default function ChapiPage() {
       return;
     }
     setSaving(true);
+    setSaveError(null);
+    // Which part failed: creating the collection leaves the credential
+    // unsaved, so trying again is safe; the credential's own write may have
+    // landed
+    let step: WalletAction = 'save-claim';
     try {
       // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
       const [spaceUrl, choice] = collectionId.split('|');
@@ -282,11 +290,13 @@ export default function ChapiPage() {
           return;
         }
         targetId = collectionIdFor(name);
+        step = 'claim-collection';
         await ensureEncryptedCollection({
           space: session.client.space(session.spaceId),
           id: targetId,
           name,
         });
+        step = 'save-claim';
       }
       // One name for both the stored file and the message: the display name,
       // with whitespace and slashes dashed (it becomes a path segment)
@@ -307,7 +317,11 @@ export default function ChapiPage() {
         space: space?.spaceName ?? '',
       });
     } catch (err) {
-      fail('save-claim', err);
+      if (isSessionEnded(err)) {
+        fail('save-claim', err);
+      } else {
+        setSaveError(describeError(step, err));
+      }
     } finally {
       setSaving(false);
     }
@@ -460,6 +474,7 @@ export default function ChapiPage() {
                   value={collectionId}
                   onChange={(e) => {
                     setCollectionId(e.target.value);
+                    setSaveError(null);
                     // A new collection starts with the suggested name
                     if (e.target.value.endsWith(`|${NEW_COLLECTION}`) && !newCollectionName.trim()) {
                       setNewCollectionName(suggestCollectionName(phase.claim.credential));
@@ -481,13 +496,21 @@ export default function ChapiPage() {
                 <input
                   type="text"
                   value={newCollectionName}
-                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  onChange={(e) => {
+                    setNewCollectionName(e.target.value);
+                    setSaveError(null);
+                  }}
                   placeholder="New collection name"
                   aria-label="New collection name"
                   className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               )}
             </div>
+            {saveError && (
+              <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <FailureText failure={saveError} />
+              </div>
+            )}
             <div className="flex gap-2">
               <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
                 Cancel

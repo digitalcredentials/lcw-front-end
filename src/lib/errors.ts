@@ -23,6 +23,7 @@ export type WalletAction =
   | 'create-space'
   | 'claim'
   | 'save-claim'
+  | 'claim-collection'
   | 'load-for-share'
   | 'share'
   | 'connect-mediator'
@@ -47,6 +48,7 @@ const FAILED: Record<WalletAction, string> = {
   'create-space': "We couldn't create the space.",
   claim: "We couldn't collect your credential.",
   'save-claim': "We couldn't save your credential.",
+  'claim-collection': "We couldn't set up the collection, so your credential isn't saved yet.",
   'load-for-share': "We couldn't load your credentials.",
   share: "We couldn't share your credentials.",
   'connect-mediator': "We couldn't connect to your browser wallet.",
@@ -257,6 +259,9 @@ const UNCONFIRMED: Partial<Record<WalletAction, string>> = {
   upload: "We can't tell whether this credential was added.",
   'create-collection': "We can't tell whether the collection was created.",
   'create-space': "We can't tell whether the space was created.",
+  // A claimed credential is saved from the pop-up, which has no list to
+  // check, so the person is told what saving again would do
+  'save-claim': "We can't tell whether your credential was saved. If it was, saving again adds a second copy, which you can delete from your wallet.",
 }
 
 // Of those, the ones made of several writes (copy, then delete the original;
@@ -306,13 +311,13 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   }
   // Only a new collection's own name can clash; elsewhere (Trash, say) the
   // same error is no fault of the person's.
-  if (name === 'CollectionExistsError' && action === 'create-collection') {
+  if (name === 'CollectionExistsError' && (action === 'create-collection' || action === 'claim-collection')) {
     return { text: 'You already have a collection with this name. Choose a different name.', detail }
   }
   if (action === 'create-space' && status === 403 && type === COUPON_REQUIRED) {
     return { text: `${FAILED[action]} Your account can't create more spaces right now.`, detail }
   }
-  if (action === 'create-collection' && isNameRefused(error)) {
+  if ((action === 'create-collection' || action === 'claim-collection') && isNameRefused(error)) {
     return { text: "That name can't be used for a collection. Choose a different name.", detail }
   }
   // The WAS client answers a missing credential, and one this session may
@@ -322,7 +327,7 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   }
   const unconfirmed = UNCONFIRMED[action]
   if (unconfirmed && (SEVERAL_STEPS.has(action) || isUnreachable(error) || isServerFault(error))) {
-    return { text: `${unconfirmed} Check before trying again.`, detail }
+    return { text: action === 'save-claim' ? unconfirmed : `${unconfirmed} Check before trying again.`, detail }
   }
   // A claim is started from the issuer's page, so that is where it is retried
   const retry = action === 'claim' ? "go back to the issuer's page and try again" : 'try again'
