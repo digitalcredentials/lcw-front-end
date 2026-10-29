@@ -50,6 +50,12 @@ const FOLDER_ICON = (
   </svg>
 );
 
+// The page banner's button reloads the list on screen: that retries a failed
+// load, and after a failed action on a credential it leaves the credential
+// and shows the list again (the banner replaces it) so the person can see
+// where things stand.
+const LOADS = new Set<WalletAction>(['load-spaces', 'load-collections', 'load-credentials']);
+
 export default function FileBrowserPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -83,7 +89,9 @@ export default function FileBrowserPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadError, setUploadError] = useState<Failure | null>(null);
-  const [error, setError] = useState<Failure | null>(null);
+  // The page banner's failure, and the action it came from: a failed load
+  // offers Retry, a failed action on a credential offers the list back
+  const [error, setError] = useState<(Failure & { action: WalletAction }) | null>(null);
   // The opened resource: 'detail' replaces the list with the credential view
   // (formatted contents, source and verification side by side); 'source' is
   // the read-only source-only view used in the Trash and dids collections
@@ -137,7 +145,7 @@ export default function FileBrowserPage() {
   const handleError = useCallback((
     action: WalletAction,
     err: unknown,
-    show: (failure: Failure) => void = setError,
+    show: (failure: Failure) => void = (failure) => setError({ ...failure, action }),
   ) => {
     if (isSessionEnded(err)) {
       clearToken();
@@ -733,6 +741,9 @@ export default function FileBrowserPage() {
   }
 
   function retry() {
+    if (error && !LOADS.has(error.action)) {
+      setViewing(null);
+    }
     if (selected) {
       loadResources(selected);
     } else if (activeSpace) {
@@ -899,7 +910,7 @@ export default function FileBrowserPage() {
                 onClick={retry}
                 className="ml-3 underline hover:no-underline"
               >
-                Retry
+                {LOADS.has(error.action) ? 'Retry' : 'Show the list'}
               </button>
             </FailureText>
           </div>
