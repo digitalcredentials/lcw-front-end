@@ -156,6 +156,19 @@ test('a claim with no session says to claim again from the issuer', () => {
   expect(describeError('save-claim', new Error('UNAUTHORIZED')).text).toBe(text);
 });
 
+test('saving a claimed credential keeps it, so the sentences point at the save step', () => {
+  // The credential's own write may have landed
+  const unsure = "We can't tell whether your credential was saved. If it was, saving again adds a second copy, which you can delete from your wallet.";
+  expect(describeError('save-claim', offline()).text).toBe(unsure);
+  expect(describeError('save-claim', status(503)).text).toBe(unsure);
+  expect(describeError('save-claim', status(400)).text).toBe("We couldn't save your credential. Please try again.");
+  // Setting up a new collection comes first, so the credential isn't saved
+  expect(describeError('claim-collection', offline()).text).toBe("We couldn't set up the collection, so your credential isn't saved yet. Your storage didn't respond. Check your connection, or try again in a few minutes.");
+  expect(describeError('claim-collection', status(412)).text).toBe("We couldn't set up the collection, so your credential isn't saved yet. Please try again.");
+  expect(describeError('claim-collection', new CollectionExistsError('exists')).text).toBe('You already have a collection with this name. Choose a different name.');
+  expect(describeError('claim-collection', mapError({ status: 409, data: { type: 'https://w3id.org/pws#reserved-id' } })).text).toBe("That name can't be used for a collection. Choose a different name.");
+});
+
 test('a message written for the learner is shown as it is', () => {
   const failure = describeError('read-qr', new PlainError("This QR code doesn't contain a credential or a link to one.", 'detail'));
   expect(failure).toEqual({ text: "This QR code doesn't contain a credential or a link to one.", detail: 'detail' });
