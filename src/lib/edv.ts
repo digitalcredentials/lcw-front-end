@@ -1,6 +1,7 @@
 import { ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
 import type { Collection, ResourceData, Space } from '@interop/was-client'
 import { getSession, sessionKeyAgreementKey } from './identity/session'
+import { CollectionExistsError } from './errors'
 
 // EDV-over-WAS (end-to-end encryption) support: collections declared with an
 // `encryption: { scheme: 'edv' }` descriptor store JWE envelopes the server
@@ -45,7 +46,7 @@ export async function ensureEncryptedCollection({
   if (!described) {
     await space.createCollection({ id, encryption: { scheme: 'edv' } })
   } else if (!described.encryption) {
-    throw new Error(`The collection "${id}" exists and is not encrypted.`)
+    throw new CollectionExistsError(`The collection "${id}" exists and is not encrypted.`)
   }
   const keyAgreementKey = currentKeyAgreementKey()
   await ensureFirstEpoch({
