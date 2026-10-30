@@ -58,9 +58,30 @@ function mapError(err: unknown): never {
   throw err
 }
 
+const PRF_OUTPUT_LENGTH = 32
+
+const isByte = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) < 256
+
+// The PRF output, or null when the authenticator returned none. 1Password
+// returns it as a plain array of byte values rather than the ArrayBuffer
+// the WebAuthn spec calls for. Any output but 32 bytes is refused: the
+// unlock identity derives from these bytes alone, so an empty or malformed
+// one would give the account a weak, possibly shared, unlock identity.
 function prfOutputOf(credential: PublicKeyCredential): Uint8Array | null {
-  const first = credential.getClientExtensionResults().prf?.results?.first
-  return first ? copyBytes(first as ArrayBuffer) : null
+  const first: unknown = credential.getClientExtensionResults().prf?.results?.first
+  if (!first) {
+    return null
+  }
+  // Spread, so a hole in the array reads as undefined and is refused:
+  // every() skips holes, and Uint8Array.from would make each one a 0
+  const output = Array.isArray(first)
+    ? [...first].every(isByte) ? Uint8Array.from(first) : null
+    : first instanceof ArrayBuffer || ArrayBuffer.isView(first) ? copyBytes(first) : null
+  if (output?.length !== PRF_OUTPUT_LENGTH) {
+    // The PRF answered, so the extension is supported; the output is not usable
+    throw new PasskeyUnsupportedError('This passkey or browser cannot be used with this wallet.')
+  }
+  return output
 }
 
 // The WebAuthn user handle for an account: a stable function of the email,
