@@ -17,8 +17,9 @@ import { removePublicCopy } from '../src/lib/publicCopy';
 //   where sign-in looks the credential up
 //
 // What doesn't, until it is repaired or removed (#199):
-// - the registration-code test expects a message the space server no
-//   longer sends
+// - the registration-code test expects the back end's old invalid-code
+//   message; registration now goes to the space server, and the page
+//   shows its raw 403 instead (#200)
 // - the tests that sign in stop at the add-a-passkey offer (logIn doesn't
 //   mark it dismissed, as deployed.spec.ts does), and need the demo account
 //   (tests/scripts/register-demo.ts, seed-demo.ts) on the space server and
