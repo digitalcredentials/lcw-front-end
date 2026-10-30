@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mapError, EncryptionError, ValidationError, WasServerError } from '@interop/was-client';
-import { describeError, isSessionEnded, outsideText, CollectionExistsError, CredentialMissingError, IssuerError, PlainError } from '../src/lib/errors';
+import { describeError, isSessionEnded, outsideText, technicalDetail, CollectionExistsError, CredentialMissingError, IssuerError, PlainError } from '../src/lib/errors';
 
 // Node-side unit assertions over the sentence each failure gets; no browser
 // involved. Storage failures are built with the WAS client's own mapError,
@@ -123,6 +123,8 @@ test('the console gets the summary, not the request the error carries', () => {
   }));
   describeError('create-space', error);
   expect(logged).toEqual(['Wallet: create-space failed: WasServerError: Request failed with status code 500 (HTTP 500)']);
+  // The same summary, used where a failure is only logged
+  expect(technicalDetail(error)).toBe('WasServerError: Request failed with status code 500 (HTTP 500)');
 });
 
 // The claim pop-up, the browser-wallet prompts and the welcome email

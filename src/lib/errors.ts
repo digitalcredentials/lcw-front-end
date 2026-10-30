@@ -239,8 +239,9 @@ function isServerFault(error: unknown): boolean {
   return (status !== undefined && status >= 500) || name === 'WasServerError'
 }
 
-// The technical text behind a failure, for the details toggle.
-function technicalDetail(error: unknown): string {
+// The technical text behind a failure, for the details toggle and the
+// console: never the error object, which can carry the request it sent.
+export function technicalDetail(error: unknown): string {
   const { status, name, message } = readFailure(error)
   const text = message ?? String(error)
   return [name && name !== 'Error' ? `${name}: ${text}` : text, status && `(HTTP ${status})`]
