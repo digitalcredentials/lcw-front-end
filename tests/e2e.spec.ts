@@ -3,16 +3,31 @@ import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
 import { WasClient, type ResourceData } from '@interop/was-client';
-import { deriveKeyPair } from '../src/lib/login';
+import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
 import { removePublicCopy } from '../src/lib/publicCopy';
 
-// End-to-end tests against the local stack. Prerequisites:
-// - the lcw-back-end sam local API on :3001 (the login endpoint)
-// - the was-server-aws sam local API on :3000 (the space)
-// - the demo account registered in the wallet-test DynamoDB table, with the
-//   LCWExperience and Bachelors credentials in its UniversityOfToronto
-//   collection
-// The Vite dev server is started automatically (or reused if already up).
+// End-to-end tests of the wallet UI. The Vite dev server is started
+// automatically (or reused if already up on :5173), and the app takes its
+// service URLs from the VITE_ variables in the environment or in .env (not
+// committed; .env.example lists them).
+//
+// What runs today:
+// - the sandbox banner and mismatched-password tests need nothing more
+// - the wrong-password test needs a space server at VITE_WAS_BASE_URL,
+//   where sign-in looks the credential up
+//
+// What doesn't, until it is repaired or removed (#199):
+// - the registration-code test expects the back end's invalid-code
+//   message, but the space server now checks the code first, when
+//   registration creates the space, and the page shows its raw 403 (#200)
+// - the tests that sign in stop at the add-a-passkey offer (logIn doesn't
+//   mark it dismissed, as deployed.spec.ts does), and need the demo account
+//   (tests/scripts/register-demo.ts, seed-demo.ts) on the space server and
+//   on the back end at VITE_API_BASE_URL. Since #163 only the sandbox has
+//   one, and these tests change it: don't point them there
+// - the sharing tests also call a space server on localhost:3000 directly,
+//   with the demo key from before #163 (see deriveKeyPair)
+// tests/deployed.spec.ts covers signing in, against the sandbox.
 
 const DEMO_EMAIL = 'jc.chartrand@gmail.com';
 const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
@@ -299,6 +314,18 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
 const DEMO_SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
 const DEMO_SPACE_URL = `http://localhost:3000/space/${DEMO_SPACE_ID}`;
 const VERIFIER_PREFIX = 'https://verifierplus.org/#verify?vc=';
+
+// The demo key as sign-in derived it before #163 (SHA-256 of the passphrase
+// as the Ed25519 seed), kept here because src/lib/login.ts is gone and this
+// file must load for any test to run. Accounts no longer use this key since
+// #163, so these local-stack share helpers need porting before they can run.
+async function deriveKeyPair(passphrase: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(passphrase));
+  const keyPair = await Ed25519VerificationKey.generate({ seed: new Uint8Array(digest) });
+  keyPair.controller = `did:key:${keyPair.fingerprint()}`;
+  keyPair.id = `${keyPair.controller}#${keyPair.fingerprint()}`;
+  return keyPair;
+}
 
 async function demoSpace() {
   const keyPair = await deriveKeyPair(DEMO_PASSPHRASE);
