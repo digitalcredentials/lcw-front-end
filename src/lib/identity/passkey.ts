@@ -72,11 +72,14 @@ function prfOutputOf(credential: PublicKeyCredential): Uint8Array | null {
   if (!first) {
     return null
   }
+  // Spread, so a hole in the array reads as undefined and is refused:
+  // every() skips holes, and Uint8Array.from would make each one a 0
   const output = Array.isArray(first)
-    ? first.every(isByte) ? Uint8Array.from(first) : null
+    ? [...first].every(isByte) ? Uint8Array.from(first) : null
     : first instanceof ArrayBuffer || ArrayBuffer.isView(first) ? copyBytes(first) : null
   if (output?.length !== PRF_OUTPUT_LENGTH) {
-    throw new PasskeyUnsupportedError()
+    // The PRF answered, so the extension is supported; the output is not usable
+    throw new PasskeyUnsupportedError('This passkey or browser cannot be used with this wallet.')
   }
   return output
 }
