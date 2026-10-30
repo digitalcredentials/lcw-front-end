@@ -204,3 +204,14 @@ test('the card stays hidden until it has a credential to check', async ({ page }
   await expect(page.getByText('Checking…')).toBeVisible();
   await expect(card).toBeHidden();
 });
+
+test('once the registry list has loaded, the card still hides when the credential goes', async ({ page }) => {
+  await page.goto('/');
+  const card = page.locator('verifier-credential');
+  expect((await verify(page, credential('verified'))).severity).toBe('success');
+  await expect(card).toBeVisible();
+
+  await page.evaluate(async () => (await import('/tests/harness/verifier.tsx')).show(undefined));
+  await expect(card).toHaveCount(1);
+  await expect(card).toBeHidden();
+});
