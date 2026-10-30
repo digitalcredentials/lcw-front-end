@@ -74,7 +74,7 @@ function prfOutputOf(credential: PublicKeyCredential): Uint8Array | null {
   }
   const output = Array.isArray(first)
     ? first.every(isByte) ? Uint8Array.from(first) : null
-    : copyBytes(first as ArrayBuffer | ArrayBufferView)
+    : first instanceof ArrayBuffer || ArrayBuffer.isView(first) ? copyBytes(first) : null
   if (output?.length !== PRF_OUTPUT_LENGTH) {
     throw new PasskeyUnsupportedError()
   }
