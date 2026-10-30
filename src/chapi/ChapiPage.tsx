@@ -17,7 +17,7 @@ import { credentialName, issuerName } from '../lib/linkedin';
 import { verifyForSharing } from '../lib/verify';
 import { suggestCollectionName, collectionIdFor, lastCollection, rememberLastCollection } from '../lib/collectionName';
 import FailureText from '../components/FailureText';
-import { describeError, isSessionEnded, PlainError, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, isSessionEnded, PlainError, technicalDetail, type Failure, type WalletAction } from '../lib/errors';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -223,7 +223,7 @@ export default function ChapiPage() {
         })
       )).filter((sp): sp is SpaceCollections => sp !== null);
     } catch (err) {
-      console.error('Listing collections failed:', err);
+      console.error(`Listing collections failed: ${technicalDetail(err)}`);
       listFailed = true;
     } finally {
       setListing(false);
