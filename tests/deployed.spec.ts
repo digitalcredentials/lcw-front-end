@@ -94,14 +94,20 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
-    // The verifier-plugin card: the verdict (the demo issuer is not in the
-    // sandbox registry, so "Genuine, but…" rather than "Verified") and the
-    // Tampering row of its Details view. The headline carries a visually
-    // hidden severity prefix, so match the sentence, not the whole text.
-    await expect(page.getByText(/Genuine, but we can't confirm who issued it|Verified/).first())
+    // The verifier-plugin card: the verdict and the Tampering row of its
+    // Details view. The demo issuer is on none of DCC's known registries that
+    // a browser can read, and four on the list can't be read from a browser
+    // at all, so "We couldn't confirm who issued this" is expected; the other
+    // two are what it would say were those readable ("Genuine, but…") or the
+    // issuer listed ("Verified"). The headline carries a visually hidden
+    // severity prefix, so match the sentence, not the whole text.
+    await expect(page.getByText(/We couldn't confirm who issued this|Genuine, but we can't confirm who issued it|Verified/).first())
       .toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('Tampering')).toBeVisible();
     await expect(page.getByText('none detected')).toBeVisible();
+    // The list itself loaded: whichever verdict, it isn't the one for a list
+    // that never arrived.
+    await expect(page.getByText(/list of known issuers didn't load/)).toHaveCount(0);
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

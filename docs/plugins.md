@@ -207,6 +207,8 @@ detail view (no page, so no route and no sidebar entry):
 import '@digitalcredentials/verifier-plugin'; // registers <verifier-credential>
 import type { WalletHost } from './types';
 
+// Simplified: the real one loads DCC's list of known registries, holds the
+// credential back until it arrives, and says so if it doesn't.
 const REGISTRIES = [{ name: 'DCC Sandbox Registry', type: 'dcc-legacy', url: 'https://…/registry.json' }];
 
 // The credential detail slot: the card for the opened credential.
