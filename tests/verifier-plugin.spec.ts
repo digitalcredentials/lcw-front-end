@@ -24,8 +24,10 @@ const SCHEMA = 'https://purl.imsglobal.org/spec/ob/v3p0/schema/json/ob_v3p0_achi
 
 const outside: string[] = [];
 
-// 'down-once' fails the first request for the registry list and answers the
-// rest; 'hang' never answers it; 'not-a-list' answers with JSON that isn't one.
+// 'down' answers the registry list with a 503 the page can read, whose body is
+// a list, so only its status says it failed; 'down-once' does that for the
+// first request and answers the rest; 'hang' never answers it; 'not-a-list'
+// answers with JSON that isn't one.
 async function serveFixtures(page: Page, registryList: 'ok' | 'down' | 'down-once' | 'hang' | 'not-a-list' = 'ok') {
   outside.length = 0;
   let listRequests = 0;
@@ -42,7 +44,9 @@ async function serveFixtures(page: Page, registryList: 'ok' | 'down' | 'down-onc
           return route.fulfill({ json: { registries: [] }, headers: { 'access-control-allow-origin': '*' } });
         }
         const down = registryList === 'down' || (registryList === 'down-once' && listRequests === 1);
-        return down ? route.fulfill({ status: 503 }) : json('known-did-registries.json');
+        return down
+          ? route.fulfill({ status: 503, json: [], headers: { 'access-control-allow-origin': '*' } })
+          : json('known-did-registries.json');
       }
       // Only the registry the list names. verifier-plugin's own default
       // registry is never answered: the wallet never lets the card fall back to
