@@ -16,6 +16,8 @@ import { loadWalletCredentials, presentationFor, type WalletCredential } from '.
 import { credentialName, issuerName } from '../lib/linkedin';
 import { verifyForSharing } from '../lib/verify';
 import { suggestCollectionName, collectionIdFor, lastCollection, rememberLastCollection } from '../lib/collectionName';
+import FailureText from '../components/FailureText';
+import { describeError, isSessionEnded, PlainError, technicalDetail, type Failure, type WalletAction } from '../lib/errors';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -51,7 +53,7 @@ type Phase =
   | { step: 'loading-credentials' }
   | { step: 'pick'; matches: WalletCredential[] }
   | { step: 'shared' }
-  | { step: 'error'; message: string };
+  | { step: 'error'; failure: Failure };
 
 function exchangeUrlFrom(vpr: Record<string, unknown> | undefined): string | undefined {
   const interact = vpr?.interact as { service?: { type?: string; serviceEndpoint?: string }[] } | undefined;
@@ -78,6 +80,9 @@ export default function ChapiPage() {
   const [collectionId, setCollectionId] = useState('');
   const [newCollectionName, setNewCollectionName] = useState('');
   const [saving, setSaving] = useState(false);
+  // A failed save, shown on the save step: the issued credential is still
+  // held, so Save can be pressed again
+  const [saveError, setSaveError] = useState<Failure | null>(null);
   const [listing, setListing] = useState(false);
   // Resolves the get() hook's promise, handing the issued credential back to
   // the mediator (and closing the popup).
@@ -135,14 +140,14 @@ export default function ChapiPage() {
                 }
                 await claimFrom(vpr, event.credentialRequestOrigin);
               } catch (err) {
-                setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+                fail('claim', err);
               }
             })();
           });
         },
       });
     })().catch((err) => {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not connect to the wallet mediator.' });
+      fail('connect-mediator', err);
     });
   }, []);
 
@@ -150,8 +155,10 @@ export default function ChapiPage() {
   async function claimFrom(vpr: Record<string, unknown> | undefined, origin: string | undefined) {
     const exchangeUrl = exchangeUrlFrom(vpr);
     if (!exchangeUrl) {
-      setPhase({ step: 'error', message: 'The request carries no exchange endpoint this wallet understands.' });
-      return;
+      throw new PlainError(
+        "This wallet can't collect a credential from this kind of request. Go back to the issuer's page and try another way.",
+        'The request carries no exchange endpoint this wallet understands.',
+      );
     }
     setPhase({ step: 'claiming', from: hostOf(origin) });
     const claim = await runExchange(exchangeUrl);
@@ -159,8 +166,21 @@ export default function ChapiPage() {
     await loadSaveStep(claim);
   }
 
+  // Shows a failure in the popup. With no session while loading the
+  // credentials to share, it goes back to the sign-in step, which picks the
+  // request up again; a claim cannot resume (the issuer's exchange is usually
+  // single-use), so its message says to start again.
+  function fail(action: WalletAction, err: unknown) {
+    if (action === 'load-for-share' && isSessionEnded(err)) {
+      setPhase({ step: 'not-signed-in' });
+      return;
+    }
+    setPhase({ step: 'error', failure: describeError(action, err) });
+  }
+
   // Signed in inside the popup: pick up whichever flow was waiting.
   async function resumeAfterSignIn() {
+    const action = requestRef.current ? 'load-for-share' : 'claim';
     try {
       if (requestRef.current) {
         await continueRequest();
@@ -168,7 +188,7 @@ export default function ChapiPage() {
         await claimFrom(pendingClaimRef.current.vpr, pendingClaimRef.current.origin);
       }
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'The claim failed.' });
+      fail(action, err);
     }
   }
 
@@ -203,7 +223,7 @@ export default function ChapiPage() {
         })
       )).filter((sp): sp is SpaceCollections => sp !== null);
     } catch (err) {
-      console.error('Listing collections failed:', err);
+      console.error(`Listing collections failed: ${technicalDetail(err)}`);
       listFailed = true;
     } finally {
       setListing(false);
@@ -242,6 +262,11 @@ export default function ChapiPage() {
       return;
     }
     setSaving(true);
+    setSaveError(null);
+    // Which part failed: creating the collection leaves the credential
+    // unsaved, so trying again is safe; the credential's own write may have
+    // landed
+    let step: WalletAction = 'save-claim';
     try {
       // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
       const [spaceUrl, choice] = collectionId.split('|');
@@ -265,11 +290,13 @@ export default function ChapiPage() {
           return;
         }
         targetId = collectionIdFor(name);
+        step = 'claim-collection';
         await ensureEncryptedCollection({
           space: session.client.space(session.spaceId),
           id: targetId,
           name,
         });
+        step = 'save-claim';
       }
       // One name for both the stored file and the message: the display name,
       // with whitespace and slashes dashed (it becomes a path segment)
@@ -290,7 +317,11 @@ export default function ChapiPage() {
         space: space?.spaceName ?? '',
       });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Saving failed.' });
+      if (isSessionEnded(err)) {
+        fail('save-claim', err);
+      } else {
+        setSaveError(describeError(step, err));
+      }
     } finally {
       setSaving(false);
     }
@@ -304,12 +335,14 @@ export default function ChapiPage() {
   // Consent given: gate on sign-in, then offer the credentials that match the
   // request's examples.
   async function continueRequest() {
-    if (!isAuthenticated() || !(await getSessionWASClient())) {
-      setPhase({ step: 'not-signed-in' });
-      return;
-    }
-    setPhase({ step: 'loading-credentials' });
+    // The session check reaches the storage server too, so it fails like the
+    // loading after it rather than leaving Continue doing nothing
     try {
+      if (!isAuthenticated() || !(await getSessionWASClient())) {
+        setPhase({ step: 'not-signed-in' });
+        return;
+      }
+      setPhase({ step: 'loading-credentials' });
       const request = requestRef.current;
       const all = await loadWalletCredentials();
       const matches = request ? all.filter(({ credential }) => matchesAnyExample(credential, request)) : [];
@@ -317,7 +350,7 @@ export default function ChapiPage() {
       setSelected(new Set(matches.length === 1 ? [`${matches[0].collectionId}/${matches[0].resourceId}`] : []));
       setPhase({ step: 'pick', matches });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Could not load your credentials.' });
+      fail('load-for-share', err);
     }
   }
 
@@ -387,7 +420,7 @@ export default function ChapiPage() {
       resolveRef.current?.({ type: 'response', dataType: 'VerifiablePresentation', data: vp });
       setPhase({ step: 'shared' });
     } catch (err) {
-      setPhase({ step: 'error', message: err instanceof Error ? err.message : 'Sharing failed.' });
+      fail('share', err);
     } finally {
       setSharing(false);
     }
@@ -441,6 +474,7 @@ export default function ChapiPage() {
                   value={collectionId}
                   onChange={(e) => {
                     setCollectionId(e.target.value);
+                    setSaveError(null);
                     // A new collection starts with the suggested name
                     if (e.target.value.endsWith(`|${NEW_COLLECTION}`) && !newCollectionName.trim()) {
                       setNewCollectionName(suggestCollectionName(phase.claim.credential));
@@ -462,13 +496,21 @@ export default function ChapiPage() {
                 <input
                   type="text"
                   value={newCollectionName}
-                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  onChange={(e) => {
+                    setNewCollectionName(e.target.value);
+                    setSaveError(null);
+                  }}
                   placeholder="New collection name"
                   aria-label="New collection name"
                   className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               )}
             </div>
+            {saveError && (
+              <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <FailureText failure={saveError} />
+              </div>
+            )}
             <div className="flex gap-2">
               <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
                 Cancel
@@ -630,9 +672,9 @@ export default function ChapiPage() {
 
         {phase.step === 'error' && (
           <div>
-            <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              {phase.message}
-            </p>
+            <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <FailureText failure={phase.failure} />
+            </div>
             <button onClick={cancel} className="mt-4 w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
               Close
             </button>

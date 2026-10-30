@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mapError, EncryptionError, ValidationError, WasServerError } from '@interop/was-client';
-import { describeError, isSessionEnded, CollectionExistsError, CredentialMissingError } from '../src/lib/errors';
+import { describeError, isSessionEnded, outsideText, technicalDetail, CollectionExistsError, CredentialMissingError, IssuerError, PlainError } from '../src/lib/errors';
 
 // Node-side unit assertions over the sentence each failure gets; no browser
 // involved. Storage failures are built with the WAS client's own mapError,
@@ -123,4 +123,79 @@ test('the console gets the summary, not the request the error carries', () => {
   }));
   describeError('create-space', error);
   expect(logged).toEqual(['Wallet: create-space failed: WasServerError: Request failed with status code 500 (HTTP 500)']);
+  // The same summary, used where a failure is only logged
+  expect(technicalDetail(error)).toBe('WasServerError: Request failed with status code 500 (HTTP 500)');
+});
+
+// The claim pop-up, the browser-wallet prompts and the welcome email
+
+const issuerUnreachable = () => new IssuerError('The issuer could not be reached.', undefined, new TypeError('Failed to fetch'));
+
+test("an issuer's trouble names the issuer, never the learner's storage", () => {
+  expect(describeError('claim', issuerUnreachable()).text).toBe("We couldn't collect your credential. The issuer didn't respond. Check your connection, or go back to the issuer's page and try again in a few minutes.");
+  expect(describeError('claim', new IssuerError('Internal error', 503)).text).toBe("We couldn't collect your credential. The issuer had a problem. Go back to the issuer's page and try again in a few minutes.");
+  expect(describeError('welcome-email', new IssuerError('Internal error', 503)).text).toBe("We couldn't send your welcome credential email. The issuer had a problem. Try again in a few minutes.");
+  // A TypeError from a bad exchange URL is no network failure
+  const badUrl = new IssuerError('The issuer could not be reached.', undefined, new TypeError('Failed to parse URL from /x'));
+  expect(describeError('claim', badUrl).text).toBe("We couldn't collect your credential. Go back to the issuer's page and try again.");
+});
+
+test("an issuer's refusal, whatever it says, doesn't sign the learner out", () => {
+  expect(isSessionEnded(new IssuerError('UNAUTHORIZED', 401))).toBe(false);
+  expect(describeError('claim', new IssuerError('The issuer rejected the exchange (401).', 401)).text).toBe("We couldn't collect your credential. Go back to the issuer's page and try again.");
+  expect(describeError('welcome-email', new IssuerError('UNAUTHORIZED', 400)).text).toBe("We couldn't send your welcome credential email. Please try again.");
+});
+
+test("a claim's own storage writes name the storage; other lookups name no one", () => {
+  expect(describeError('claim', offline()).text).toBe("We couldn't collect your credential. Your storage didn't respond. Check your connection, or go back to the issuer's page and try again in a few minutes.");
+  // A context or DID fetched while signing, unwrapped
+  expect(describeError('claim', new TypeError('Failed to fetch')).text).toBe("We couldn't collect your credential. Check your connection, or go back to the issuer's page and try again in a few minutes.");
+});
+
+test('a claim with no session says to claim again from the issuer', () => {
+  const text = "You've been signed out. Sign in to your wallet, then go back to the issuer's page and claim the credential again.";
+  expect(describeError('claim', new Error('UNAUTHORIZED')).text).toBe(text);
+  expect(describeError('save-claim', new Error('UNAUTHORIZED')).text).toBe(text);
+});
+
+test('saving a claimed credential keeps it, so the sentences point at the save step', () => {
+  // The credential's own write may have landed
+  const unsure = "We can't tell whether your credential was saved. If it was, saving again adds a second copy, which you can delete from your wallet.";
+  expect(describeError('save-claim', offline()).text).toBe(unsure);
+  expect(describeError('save-claim', status(503)).text).toBe(unsure);
+  expect(describeError('save-claim', status(400)).text).toBe("We couldn't save your credential. Please try again.");
+  // Setting up a new collection comes first, so the credential isn't saved
+  expect(describeError('claim-collection', offline()).text).toBe("We couldn't set up the collection, so your credential isn't saved yet. Your storage didn't respond. Check your connection, or try again in a few minutes.");
+  expect(describeError('claim-collection', status(412)).text).toBe("We couldn't set up the collection, so your credential isn't saved yet. Please try again.");
+  expect(describeError('claim-collection', new CollectionExistsError('exists')).text).toBe('You already have a collection with this name. Choose a different name.');
+  expect(describeError('claim-collection', mapError({ status: 409, data: { type: 'https://w3id.org/pws#reserved-id' } })).text).toBe("That name can't be used for a collection. Choose a different name.");
+});
+
+test('a message written for the learner is shown as it is', () => {
+  const failure = describeError('read-qr', new PlainError("This QR code doesn't contain a credential or a link to one.", 'detail'));
+  expect(failure).toEqual({ text: "This QR code doesn't contain a credential or a link to one.", detail: 'detail' });
+});
+
+test('the browser wallet: refused, or its service not responding', () => {
+  expect(describeError('enable-wallet', new Error('Permission denied.')).text).toBe("We couldn't turn on the browser wallet. It wasn't allowed. Try again, and choose Allow if you're asked.");
+  const timeout = new DOMException('Loading Web application window timed out.', 'TimeoutError');
+  expect(describeError('update-wallet', timeout).text).toBe("We couldn't change the browser wallet setting. The browser wallet service didn't respond. Check your connection, or try again in a few minutes.");
+});
+
+test('scanning: no camera, no QR code, anything else', () => {
+  const camera = "We couldn't use a camera. Check that this site is allowed to use it and that no other app is using it, or upload a photo of the QR code instead.";
+  // qr-scanner rejects with bare strings
+  expect(describeError('start-camera', 'Camera not found.').text).toBe(camera);
+  expect(describeError('start-camera', new DOMException('Permission denied', 'NotAllowedError')).text).toBe(camera);
+  expect(describeError('read-file', 'No QR code found').text).toBe("We couldn't find a QR code in that image. Try a clearer picture, or paste the credential's text instead.");
+  expect(describeError('read-file', new Error('Unexpected end of data')).text).toBe("We couldn't read a credential from that file. Check that it's a credential file or a picture of a credential's QR code.");
+});
+
+test('text from outside the wallet is a short string with no control characters', () => {
+  expect(outsideText('Name too long.\u0000\n<b>x</b>')).toBe('Name too long. <b>x</b>');
+  // C1 controls and direction overrides, which can reorder what is shown
+  expect(outsideText('a\u0085b\u202ec\u2066d\u200fe')).toBe('a b c d e');
+  expect(outsideText('x'.repeat(1000))).toHaveLength(300);
+  expect(outsideText({ error: 'object' })).toBeUndefined();
+  expect(outsideText('  ')).toBeUndefined();
 });
