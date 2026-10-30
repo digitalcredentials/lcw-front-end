@@ -12,6 +12,17 @@ const credentialWith = (prf: unknown) => ({
   getClientExtensionResults: () => ({ prf }),
 });
 
+// Node's own navigator, put back after each test so no other test in the
+// same worker sees the stand-in
+const nodeNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+test.afterEach(() => {
+  if (nodeNavigator) {
+    Object.defineProperty(globalThis, 'navigator', nodeNavigator);
+  } else {
+    delete (globalThis as { navigator?: unknown }).navigator;
+  }
+});
+
 function answerWith(first: unknown, created?: unknown) {
   Object.defineProperty(globalThis, 'navigator', {
     configurable: true,
