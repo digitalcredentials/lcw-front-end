@@ -26,6 +26,7 @@ import type { IZcap } from '@interop/data-integrity-core/zcap'
 import { fromBase64url, toBase64url } from './bytes'
 import { signingAgents, type CredentialKeys, type UserKey } from './keys'
 import { readRoster, unwrapUserKey } from './roster'
+import { serviceDescriptionFor } from './service'
 
 // A credential's unlock space, the FreeWallet way: the passphrase derives an
 // unlock identity (wallet-core's derivation, byte for byte, so FreeWallet
@@ -71,8 +72,8 @@ export function openPassphrase(passphrase: string): Promise<UnlockIdentity> {
 // The URL of an unlock space on its server, the capability's target.
 export const unlockSpaceUrl = (serverUrl: string, spaceId: string) => `${serverUrl}/space/${spaceId}/`
 
-function unlockClient(unlock: UnlockIdentity, serverUrl: string): WasClient {
-  return WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: unlock.agent.getSigner() })
+async function unlockClient(unlock: UnlockIdentity, serverUrl: string): Promise<WasClient> {
+  return WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: unlock.agent.getSigner(), serviceDescription: await serviceDescriptionFor(serverUrl) })
 }
 
 const keyringOf = (was: WasClient, spaceId: string, capability?: IZcap) =>
@@ -136,9 +137,10 @@ export async function bindCredential({
   if (!pointer.did) {
     throw new Error('The account pointer names no DID.')
   }
-  await ensureUnlockSpace({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId, controller: unlock.agent.id })
+  const serviceDescription = await serviceDescriptionFor(serverUrl)
+  await ensureUnlockSpace({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   const record = await wrapKeyringRecord({ controller, email, pointer, keyAgreementKey: unlock.keyAgreementKey, signer: unlock.recordSigner })
-  await putUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId, record })
+  await putUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
 
   const encryption = await mintRecordEncryption({ keyAgreementKey: unlock.keyAgreementKey })
   const cipher = await recordSealCipher({ encryption, collectionId: KEYS_LABEL })
@@ -146,7 +148,7 @@ export async function bindCredential({
     data: { signingSeed: toBase64url(credential.signingSeed), updateSeed: toBase64url(credential.updateSeed), stagedSeed: toBase64url(credential.stagedSeed) } as unknown as Json,
   })
   const signed = await signRecordFrame({ version: KEYS_VERSION, encryption, wrapped: envelope, signer: unlock.recordSigner })
-  await keyringOf(unlockClient(unlock, serverUrl), unlock.spaceId).resource(KEYS_RESOURCE).put(bytes(signed), { contentType: 'application/json' })
+  await keyringOf(await unlockClient(unlock, serverUrl), unlock.spaceId).resource(KEYS_RESOURCE).put(bytes(signed), { contentType: 'application/json' })
   return { capability: await delegateManagement({ unlock, serverUrl, did: pointer.did }) }
 }
 
@@ -187,7 +189,7 @@ export async function readCredential({
   unlock: UnlockIdentity
   serverUrl: string
 }): Promise<{ contents: KeyringRecordContents; keys: UnlockedKeys } | null> {
-  const record = await getUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
+  const record = await getUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl), spaceId: unlock.spaceId })
   if (record === null) {
     return null
   }
@@ -197,17 +199,21 @@ export async function readCredential({
     keyResolver: unlock.keyResolver,
     expectedKeyMultibase: unlock.recordSigner.keyMultibase,
   })
-  const stored = await keyringOf(unlockClient(unlock, serverUrl), unlock.spaceId).resource(KEYS_RESOURCE).get()
+  const pointer = contents.pointer
+  if (!pointer?.did) {
+    throw new Error('The credential names no account.')
+  }
+  // The keys record and the public log do not depend on each other, so
+  // they are fetched together; the roster waits for the signing key.
+  const accountKeys = accountKeyAgreementKeys(pointer)
+  accountKeys.catch(() => undefined)
+  const stored = await keyringOf(await unlockClient(unlock, serverUrl), unlock.spaceId).resource(KEYS_RESOURCE).get()
   if (stored === null) {
     // The pointer stands but the keys record was retired: the credential was removed
     return null
   }
   if (stored instanceof Blob) {
     throw new Error('The credential has no keys record.')
-  }
-  const pointer = contents.pointer
-  if (!pointer?.did) {
-    throw new Error('The credential names no account.')
   }
   const frame = parseRecordFrame({ record: stored, label: KEYS_LABEL, version: KEYS_VERSION })
   await verifyRecordProof({ record: stored, allowedKeyMultibases: unlock.recordSigner.keyMultibase, label: KEYS_LABEL })
@@ -216,7 +222,11 @@ export async function readCredential({
 
   // The user key, from the account's roster, read as the account
   const agents = await signingAgents(credential.signingSeed)
-  const was = await WasClient.fromSigner({ serverUrl: `${pointer.host}/spaces/`, signer: webvhSigner({ keyAgent: agents.keyAgent, did: pointer.did }) })
+  const was = await WasClient.fromSigner({
+    serverUrl: `${pointer.host}/spaces/`,
+    signer: webvhSigner({ keyAgent: agents.keyAgent, did: pointer.did }),
+    serviceDescription: await serviceDescriptionFor(pointer.host),
+  })
   const roster = await readRoster({ was, spaceId: pointer.spaceId })
   if (!roster) {
     throw new Error('The account has no user-key roster.')
@@ -224,7 +234,7 @@ export async function readCredential({
   const userKey = await unwrapUserKey({
     roster: roster.roster,
     keyAgreementKey: unlock.keyAgreementKey,
-    expectedPublicKeyMultibases: await accountKeyAgreementKeys(pointer),
+    expectedPublicKeyMultibases: await accountKeys,
   })
   return { contents, keys: { credential, userKey } }
 }
@@ -246,7 +256,7 @@ export async function retireCredentialRecords({
   spaceId: string
   capability: IZcap
 }): Promise<{ retired: boolean }> {
-  const was = new WasClient({ serverUrl: `${serverUrl}/spaces/`, zcapClient })
+  const was = new WasClient({ serverUrl: `${serverUrl}/spaces/`, zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl) })
   const keyring = keyringOf(was, spaceId, capability)
   if (!(await keyring.resource(POINTER_RESOURCE).getWithEtag())) {
     return { retired: false }

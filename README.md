@@ -48,7 +48,12 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   four, derived with HKDF under a salt of its own, its own signing and update
   keys and unlock space). After any sign-in, an account with no code stored
   at the back end gets one, minted and stored (`PUT /recovery`, encrypted
-  there); the user never sees it, because it reaches them by email.
+  there); the user never sees it, because it reaches them by email. That
+  check, the pruning of forgotten browser credentials and the did:web
+  projection check run together after sign-in in the background
+  (`housekeeping` in `src/lib/identity/index.ts`), reading the account log
+  and the catalogue once, so the user reaches their spaces as soon as the
+  session exists.
   **Forgot your password?** on the login page asks the back end to mail the
   code (`POST /forgot`); the recovery page takes the code and a new password,
   opens the account through the recovery credential, adds the new password
@@ -101,7 +106,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   the login form (`RequireAuth`). Sign Out forgets it: the secret, its
   roster entry, its catalogue entry and its unlock space go, and the next
   password or passkey sign-in drops its keys from the document
-  (`pruneCredentials`), since a credential cannot drop its own. One per
+  (`housekeeping`), since a credential cannot drop its own. One per
   browser; anyone who can use the browser profile can open the account until
   it is removed. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
