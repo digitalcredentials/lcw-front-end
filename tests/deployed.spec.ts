@@ -359,14 +359,30 @@ test.describe('on a phone', () => {
     // The title bar spans the screen, not the laptop sidebar's 240px
     expect((await page.locator('aside').boundingBox())?.width).toBe(375);
 
+    // An icon rather than a word, in a 44px tap target: three lines while
+    // folded, an X while open
     const menu = page.getByRole('button', { name: 'Menu' });
+    await expect(menu).toHaveText('');
+    const box = await menu.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(44);
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    await expect(menu.locator('svg')).toBeVisible();
+    await expect(menu.locator('path')).not.toHaveCSS('stroke', 'none');
+    const icon = () => menu.locator('path').getAttribute('d');
+    const folded = await icon();
+    // Screen readers hear the same name, "Menu", with collapsed or expanded
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
     await expect(page.getByRole('button', { name: 'Sign Out' })).toBeHidden();
     await menu.click();
     await expect(page.getByRole('button', { name: 'Sign Out' })).toBeVisible();
+    await expect(menu).toHaveAttribute('aria-expanded', 'true');
+    expect(await icon()).not.toBe(folded);
     await page.getByRole('link', { name: 'My Spaces' }).click();
     await expect(page.locator('[data-space-type]').first()).toBeVisible();
     await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    expect(await icon()).toBe(folded);
     expect(await fits()).toBe(true);
   });
 });

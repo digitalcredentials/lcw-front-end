@@ -15,7 +15,7 @@ import { describeError, type Failure } from '../lib/errors';
 // Issuer, Settings — which holds the browser-wallet registration — and Sign
 // Out at the bottom); pages render into the main column. On a phone (below
 // Tailwind's md, 768px) the title runs across the top instead, and the links
-// fold away behind a Menu button.
+// fold away behind a menu button (three lines; an X while open).
 export default function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -219,13 +219,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
               </span>
             </span>
           </Link>
+          {/* Three lines while folded, an X while open. Its name stays "Menu"
+              for screen readers either way; aria-expanded says which. */}
           <button
             onClick={() => setMenuOpenAt(menuOpen ? null : location.key)}
+            aria-label="Menu"
             aria-expanded={menuOpen}
             aria-controls="app-nav app-account"
-            className={`md:hidden mr-3 shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors ${menuOpen ? 'bg-gray-100' : ''}`}
+            className="md:hidden mr-2 shrink-0 rounded-lg p-2.5 text-gray-600 hover:bg-gray-100 transition-colors"
           >
-            Menu
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeWidth={1.8} d={menuOpen ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'} />
+            </svg>
           </button>
         </div>
         <nav id="app-nav" className={`${menuOpen ? '' : 'hidden'} md:block flex-1 px-3 py-4 space-y-1`} aria-label="Main">
