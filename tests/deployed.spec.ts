@@ -196,6 +196,11 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
   try {
     // Deep into a credential's detail view
     await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    // At laptop width Add Credential sits beside the breadcrumb, not under it
+    await expect(page.getByRole('button', { name: 'Add Credential' })).toBeVisible();
+    const crumbs = await page.getByRole('navigation', { name: 'Breadcrumb' }).boundingBox();
+    expect((await page.getByRole('button', { name: 'Add Credential' }).boundingBox())?.y)
+      .toBeLessThan((crumbs?.y ?? 0) + (crumbs?.height ?? 0));
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
@@ -434,5 +439,47 @@ test.describe('on a phone', () => {
       await heading.evaluate((h) => { h.textContent = 'CertificateOfCompletionInAdvancedCredentialing2026'; });
       expect(await fits()).toBe(true);
     });
+  });
+
+  // The breadcrumb takes its own line and the collection's action goes under
+  // it, instead of the two squeezing each other off the screen
+  test('a collection page fits, with Add Credential under the breadcrumb', async ({ page }) => {
+    await logIn(page);
+    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+    const add = page.getByRole('button', { name: 'Add Credential' });
+    await expect(add).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const crumbs = await page.getByRole('navigation', { name: 'Breadcrumb' }).boundingBox();
+    const button = await add.boundingBox();
+    expect(button!.y).toBeGreaterThanOrEqual(crumbs!.y + crumbs!.height);
+    expect(button!.x + button!.width).toBeLessThanOrEqual(375);
+
+    // A collection name with no spaces, wider than the screen, fits too: on a
+    // line of its own, broken inside itself, without breaking the short names
+    // (renamed in the page only; nothing is stored). One line is 20px tall.
+    await page.getByRole('navigation', { name: 'Breadcrumb' }).locator('span').last()
+      .evaluate((name) => { name.textContent = 'CertificatesAndBadgesFromTheUniversityOfTorontoSchoolOfContinuingStudies2026'; });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect((await page.getByRole('button', { name: 'Spaces' }).boundingBox())?.height).toBeLessThan(30);
+
+    // A long name with spaces wraps between its words, never inside one: a
+    // word split across two lines measures as two boxes. (At 375px with the
+    // macOS system font, breaking anywhere splits "Toronto" in this name.)
+    const split = await page.getByRole('navigation', { name: 'Breadcrumb' }).locator('span').last()
+      .evaluate((name) => {
+        const words = 'Certificates and Badges from the University of Toronto School of Continuing Studies';
+        name.textContent = words;
+        const text = name.firstChild as Text;
+        const range = document.createRange();
+        let at = 0;
+        return words.split(' ').filter((word) => {
+          range.setStart(text, at);
+          range.setEnd(text, at + word.length);
+          at += word.length + 1;
+          return range.getClientRects().length > 1;
+        });
+      });
+    expect(split).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });
