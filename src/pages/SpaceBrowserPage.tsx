@@ -779,9 +779,12 @@ export default function FileBrowserPage() {
   return (
     <AppShell>
       <div>
-        {/* Breadcrumb and collection actions */}
-        <div className="flex items-center justify-between mb-4">
-          <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
+        {/* Breadcrumb and collection actions; on a phone (below md) the
+            action goes under the breadcrumb. A long name moves to a line of
+            its own, and only a name wider than the screen breaks, even
+            inside one long word, rather than run off it */}
+        <div className="flex flex-col items-start gap-3 md:flex-row md:gap-0 md:items-center md:justify-between mb-4">
+          <nav className="flex flex-wrap md:flex-nowrap items-center gap-2 text-sm wrap-anywhere md:wrap-normal" aria-label="Breadcrumb">
             <button
               onClick={backToSpaces}
               disabled={!activeSpace}
