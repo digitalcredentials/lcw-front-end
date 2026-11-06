@@ -6,6 +6,7 @@ import { getSessionWASClient } from './was'
 import { getSession, accountMethodOf, holderSigner, type HolderSigner } from './identity'
 import { credentialFrom } from './linkedin'
 import { buildPresentation } from './vpRequest'
+import { isAccountCollection } from './accountCollections'
 
 const documentLoader = securityLoader().build()
 
@@ -52,7 +53,7 @@ export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   }
   const space = session.client.space(session.spaceId)
   const list = await space.collections()
-  const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
+  const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
 
   const credentials: WalletCredential[] = []
   for (const collection of collections) {

@@ -12,6 +12,7 @@ import { ensureEncryptedCollection, collectionDisplay, writeResource } from '../
 import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import { createPublicCopy, findPublicCopy, removePublicCopy } from '../lib/publicCopy';
+import { isAccountCollection } from '../lib/accountCollections';
 import JSONInput from '../components/JSONInput';
 import { plugins, useWalletHost } from '../plugins';
 import {
@@ -175,8 +176,10 @@ export default function FileBrowserPage() {
       const collectionList = await s.client.space(s.spaceId).collections();
       // A listing may carry tombstones of deleted collections (a changes-feed
       // feature this server does not have); only live ones are collections.
+      // The account's own collections (the identity log, the catalogue and
+      // the roster) are not the user's to browse (src/lib/accountCollections).
       const items = (collectionList?.items ?? []).filter(
-        (item): item is CollectionSummary => !('deleted' in item && item.deleted)
+        (item): item is CollectionSummary => !('deleted' in item && item.deleted) && !isAccountCollection(item.id)
       );
       setCollections(items);
 
