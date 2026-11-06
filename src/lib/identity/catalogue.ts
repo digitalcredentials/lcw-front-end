@@ -13,6 +13,7 @@ import {
 } from '@interop/wallet-core/keyring'
 import { userKeyRecordSigner, userKeySigningKeyMultibase, userKeyVaultKeys } from '@interop/wallet-core/keys'
 import { sessionAgents, type Session } from './session'
+import { serviceDescriptionFor } from './service'
 
 // The account's credential catalogue: what the account document cannot say
 // about its keys. The document lists one signing key per credential and
@@ -60,7 +61,7 @@ const empty = (): Catalogue => ({ version: 1, credentials: {} })
 
 async function catalogueResource(session: Session): Promise<Resource> {
   const { asAccount } = await sessionAgents(session)
-  const was = await WasClient.fromSigner({ serverUrl: `${session.serverUrl}/spaces/`, signer: asAccount.signer })
+  const was = await WasClient.fromSigner({ serverUrl: `${session.serverUrl}/spaces/`, signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
   return was.space(session.spaceId).collection(COLLECTION, { encryption: 'plaintext' }).resource(RESOURCE)
 }
 

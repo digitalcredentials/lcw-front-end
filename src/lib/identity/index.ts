@@ -3,7 +3,7 @@ import { collectionDescriptorStore, ownerRecipient, replaceRecipient } from '@in
 import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
 import { userKeyVaultKeys } from '@interop/wallet-core/keys'
 import { webvhZcapClient } from '@interop/wallet-core/webvh'
-import { createAccountLog, ensureProjection, publishAccountLog, promoteSpace } from './account'
+import { createAccountLog, projectionOf, publishProjection, publishAccountLog, promoteSpace } from './account'
 import { addCredentialToLog, credentialsInLog, publicKeysOf, readAccountLog, removeCredentialFromLog, type RemovableCredential } from './credentials'
 import { readCatalogue, updateCatalogue, type CatalogueEntry, type CredentialKind } from './catalogue'
 import { RECOVERY_KDF, mintRecoveryCode, recoverySecretOf } from './recoveryCode'
@@ -14,6 +14,7 @@ import { addRosterRecipient, readRoster, recipientOf, unlockKeyAgreementKeyOf, w
 import { sessionAgents, type Session } from './session'
 import { browserLabel, browserUnlock, forgetStoredBrowserCredential, storeBrowserCredential, storedBrowserCredential } from './browser'
 import { randomBytes } from './bytes'
+import { serviceDescriptionFor } from './service'
 
 // The identity layer's entry points: registration, sign-in with either kind
 // of credential, adding and removing credentials (a removal rotates the
@@ -40,7 +41,7 @@ interface ErrorBody {
 
 async function accountClient(session: Session): Promise<WasClient> {
   const { asAccount } = await sessionAgents(session)
-  return WasClient.fromSigner({ serverUrl: spacesUrl(session.serverUrl), signer: asAccount.signer })
+  return WasClient.fromSigner({ serverUrl: spacesUrl(session.serverUrl), signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
 }
 
 // Records a credential in the account's catalogue (catalogue.ts).
@@ -107,7 +108,7 @@ export async function registerAccount({
     json: { controller, name: MAIN_SPACE_NAME, type: ['Space'], coupon: registrationCode },
   })
   const spaceId = (created.data as { id: string }).id
-  const was = await WasClient.fromSigner({ serverUrl: spacesUrl(config.serverUrl), signer: agents.keyAgent.getSigner() })
+  const was = await WasClient.fromSigner({ serverUrl: spacesUrl(config.serverUrl), signer: agents.keyAgent.getSigner(), serviceDescription: await serviceDescriptionFor(config.serverUrl) })
 
   onStage?.('Publishing your identity')
   const updateKey = await updateKeyFromSeed(credential.updateSeed)
@@ -208,13 +209,6 @@ async function openCredential({
     spaceId: pointer.spaceId,
     signingSeed: keys.credential.signingSeed,
     userKey: keys.userKey,
-  }
-  // A projection a failed write left stale is put right; best effort, the
-  // sign-in stands either way.
-  try {
-    await ensureProjection({ was: await accountClient(session), spaceId: session.spaceId })
-  } catch (err) {
-    console.warn('The did:web projection could not be checked:', err)
   }
   return { session, keys }
 }
@@ -495,7 +489,7 @@ export async function removeCredential({
   let retired = false
   const { asAccount } = await sessionAgents(session)
   if (unlock) {
-    await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
+    await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
     retired = true
   } else if (removedEntry) {
     retired = (await retireCredentialRecords({ serverUrl: config.serverUrl, zcapClient: asAccount.zcapClient, spaceId: removedEntry.unlockSpaceId, capability: removedEntry.capability })).retired
@@ -768,7 +762,79 @@ export async function leaveAccount({ session, unlock, config }: { session: Sessi
       }
     }
   })
-  await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
+  await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
+}
+
+// After a sign-in, in the background: the maintenance the account may need,
+// in one pass that reads the account log and the catalogue once.
+//
+//   1. The did:web projection: rewritten when it differs from what the log
+//      says (a failed write left it stale).
+//   2. Pruning: keys of credentials the catalogue no longer lists (browser
+//      credentials forgotten at sign-out), older than `minAgeMs`, leave the
+//      document, one entry each signed by the acting credential's update
+//      key; a credential cannot drop its own.
+//   3. Recovery: when the back end stores no code, or the catalogue lists no
+//      recovery credential behind it, a new one is minted and stored.
+//
+// Each step is best effort and reported; the session stands either way.
+export async function housekeeping({
+  session,
+  acting,
+  config,
+  minAgeMs = 10 * 60 * 1000,
+}: {
+  session: Session
+  acting: CredentialKeys
+  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
+  minAgeMs?: number
+}): Promise<{ projection: boolean; pruned: number; recoveryMinted: boolean }> {
+  const was = await accountClient(session)
+  const [{ log }, catalogue] = await Promise.all([readAccountLog({ was, spaceId: session.spaceId }), readCatalogue(session)])
+  const result = { projection: false, pruned: 0, recoveryMinted: false }
+
+  try {
+    const id = was.space(session.spaceId).collection('id', { encryption: 'plaintext' })
+    const wanted = await projectionOf(log)
+    const served = await id.resource('did.json').getWithEtag()
+    const servedDoc = served && !(served.data instanceof Blob) ? (typeof served.data === 'string' ? JSON.parse(served.data) : served.data) : null
+    if (!servedDoc || JSON.stringify(servedDoc) !== JSON.stringify(wanted)) {
+      await publishProjection({ was, spaceId: session.spaceId, log })
+      result.projection = true
+    }
+  } catch (err) {
+    console.warn('The did:web projection could not be checked:', err)
+  }
+
+  try {
+    const mine = multibaseOf(session.controller)
+    const cutoff = Date.now() - minAgeMs
+    for (const entry of await credentialsInLog(log)) {
+      if (entry.signingMultibase === mine || catalogue.credentials[entry.signingMultibase] || !entry.updateMultibase) {
+        continue
+      }
+      if (entry.addedAt && Date.parse(entry.addedAt) > cutoff) {
+        continue
+      }
+      await removeCredentialFromLog({ was, spaceId: session.spaceId, did: session.did, acting, removed: { ...entry, updateMultibase: entry.updateMultibase } })
+      result.pruned++
+    }
+  } catch (err) {
+    console.warn('Forgotten browser credentials could not be pruned:', err)
+  }
+
+  try {
+    const status = await accountRequest(session, config, { path: `/recovery?email=${encodeURIComponent(session.email)}`, method: 'GET' })
+    const stored = Boolean((status.data as { stored?: boolean }).stored)
+    const hasRecovery = Object.values(catalogue.credentials).some((entry) => entry.kind === 'recovery')
+    if (!stored || !hasRecovery) {
+      await mintRecoveryCredential({ session, acting, config })
+      result.recoveryMinted = true
+    }
+  } catch (err) {
+    console.warn('Could not set up account recovery:', err)
+  }
+  return result
 }
 
 // Drops from the account document the keys of credentials the catalogue no

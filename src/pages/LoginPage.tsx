@@ -5,10 +5,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   openWithPassphrase,
   openWithPasskey,
-  ensureRecoveryCredential,
+  housekeeping,
   addPasskey,
   addBrowserCredential,
-  pruneCredentials,
   setSession,
   passkeySupported,
   PasskeyCancelledError,
@@ -37,31 +36,27 @@ function dismissOffer(email: string): void {
   }
 }
 
-// After a sign-in, an account with no stored recovery code gets one, and
-// keys of browser credentials forgotten at sign-out leave the document.
-// Best effort: the user is signed in either way, and the next sign-in tries
-// again.
-async function ensureRecovery(session: Session, acting: CredentialKeys): Promise<void> {
-  try {
-    await ensureRecoveryCredential({ session, acting, config: identityConfig() });
-  } catch (err) {
-    console.error('Could not set up account recovery:', err);
-  }
-  try {
-    await pruneCredentials({ session, acting });
-  } catch (err) {
-    console.error('Could not prune forgotten browser credentials:', err);
-  }
-}
-
-// "Stay signed in on this browser": the browser becomes a credential of the
-// account. Best effort: a failure leaves the user signed in for this tab.
-async function stayOnThisBrowser(session: Session, acting: CredentialKeys): Promise<void> {
-  try {
-    await addBrowserCredential({ session, acting, config: identityConfig() });
-  } catch (err) {
-    console.error('Could not keep this browser signed in:', err);
-  }
+// After a sign-in, in the background, so the user is not kept waiting: the
+// account's maintenance (the recovery code, forgotten browser credentials,
+// the did:web projection) and, when asked, "Stay signed in on this
+// browser", which makes the browser a credential of the account. Best
+// effort: the user is signed in either way, and the next sign-in tries
+// again. The acting credential's keys are held only for this.
+function afterSignIn(session: Session, acting: CredentialKeys, stay: boolean): void {
+  void (async () => {
+    if (stay) {
+      try {
+        await addBrowserCredential({ session, acting, config: identityConfig() });
+      } catch (err) {
+        console.error('Could not keep this browser signed in:', err);
+      }
+    }
+    try {
+      await housekeeping({ session, acting, config: identityConfig() });
+    } catch (err) {
+      console.error('Account maintenance after sign-in failed:', err);
+    }
+  })();
 }
 
 function describe(err: unknown, fallback: string): string {
@@ -107,10 +102,7 @@ export default function LoginPage() {
       // account pointer and the credential's keys; the signing key then
       // proves the account to the back end (src/lib/identity).
       const { session, keys } = await openWithPassphrase({ email, passphrase: password, config: identityConfig() });
-      await ensureRecovery(session, keys.credential);
-      if (stay) {
-        await stayOnThisBrowser(session, keys.credential);
-      }
+      afterSignIn(session, keys.credential, stay);
       if (passkeySupported() && !offerDismissed(session.email)) {
         actingRef.current = keys.credential;
         setOffering(session);
@@ -129,10 +121,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { session, keys } = await openWithPasskey({ config: identityConfig() });
-      await ensureRecovery(session, keys.credential);
-      if (stay) {
-        await stayOnThisBrowser(session, keys.credential);
-      }
+      afterSignIn(session, keys.credential, stay);
       enter(session);
     } catch (err) {
       setError(describe(err, 'Unable to sign in with a passkey. Please try again.'));

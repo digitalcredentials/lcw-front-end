@@ -317,6 +317,8 @@ test('stays signed in on this browser until sign-out', async ({ page, context })
     await page.getByLabel('Stay signed in on this browser').check();
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    // The browser credential is made in the background after sign-in
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('lcw_browser_credential')), { timeout: 30_000 }).toBeTruthy();
 
     // A second tab has no session of its own; the browser credential opens
     // the account without the login form
