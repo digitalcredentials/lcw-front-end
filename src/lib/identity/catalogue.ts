@@ -27,7 +27,7 @@ import { sessionAgents, type Session } from './session'
 // know (added before the catalogue existed) is listed from the document
 // alone and catalogued the next time it signs in.
 
-export type CredentialKind = 'passphrase' | 'passkey' | 'recovery'
+export type CredentialKind = 'passphrase' | 'passkey' | 'recovery' | 'browser'
 
 export interface CatalogueEntry {
   kind: CredentialKind

@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clearToken, getEmail } from '../lib/auth';
+import { forgetBrowserCredential, getSession } from '../lib/identity';
+import { identityConfig } from '../lib/identity/config';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
 import LoadingLabel from './LoadingLabel';
@@ -163,7 +165,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
   }
 
-  function signOut() {
+  // Signing out also forgets a "stay signed in" browser credential, so the
+  // next visit asks for a password. The secret is dropped first; retiring
+  // the credential's records is best effort, and a password sign-in prunes
+  // its keys from the document.
+  const [signingOut, setSigningOut] = useState(false);
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      await forgetBrowserCredential({ config: identityConfig(), session: getSession() ?? undefined });
+    } catch (err) {
+      console.error('The browser credential could not be retired:', err);
+    }
     clearToken();
     navigate('/login', { replace: true });
   }
@@ -272,8 +285,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
               {getEmail()}
             </span>
           </p>
-          <button onClick={signOut} className={itemClass(false)}>
-            Sign Out
+          <button onClick={signOut} disabled={signingOut} className={itemClass(false)}>
+            {signingOut ? 'Signing out…' : 'Sign Out'}
           </button>
         </div>
       </aside>

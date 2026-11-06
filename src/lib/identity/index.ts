@@ -12,6 +12,8 @@ import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
 import { bindCredential, openPassphrase, readCredential, retireCredentialRecords, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
 import { addRosterRecipient, readRoster, recipientOf, unlockKeyAgreementKeyOf, wrapUserKey, writeRoster } from './roster'
 import { sessionAgents, type Session } from './session'
+import { browserLabel, browserUnlock, forgetStoredBrowserCredential, storeBrowserCredential, storedBrowserCredential } from './browser'
+import { randomBytes } from './bytes'
 
 // The identity layer's entry points: registration, sign-in with either kind
 // of credential, adding and removing credentials (a removal rotates the
@@ -664,6 +666,135 @@ export async function recoverAccount({
   return rotated
 }
 
+// ---- stay signed in on this browser ------------------------------------------
+//
+// A browser credential (browser.ts): a random secret kept in local storage
+// that opens the account like a passkey would.
+
+// Adds this browser as a credential of the signed-in account and keeps its
+// secret here. A browser credential already held is forgotten first.
+export async function addBrowserCredential({
+  session,
+  acting,
+  config,
+}: {
+  session: Session
+  acting: CredentialKeys
+  config: Pick<IdentityConfig, 'serverUrl'>
+}): Promise<void> {
+  const previous = storedBrowserCredential()
+  if (previous) {
+    await forgetBrowserCredential({ config, session: previous.email === session.email ? session : undefined }).catch((err) =>
+      console.warn('The previous browser credential could not be retired:', err)
+    )
+  }
+  const secret = randomBytes(32)
+  const unlock = await browserUnlock(secret)
+  await addCredential({ session, acting, config, unlock, kind: 'browser', label: browserLabel() })
+  storeBrowserCredential({ email: session.email, secret })
+}
+
+// Opens the account with the browser credential this browser holds, or
+// resolves to null when it holds none or the credential no longer opens the
+// account (removed from another sign-in), in which case it is forgotten.
+export async function openWithBrowserCredential({ config }: { config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<{ session: Session; keys: UnlockedKeys } | null> {
+  const stored = storedBrowserCredential()
+  if (!stored) {
+    return null
+  }
+  try {
+    return await openCredential({ unlock: await browserUnlock(stored.secret), email: stored.email, config })
+  } catch (err) {
+    if ((err as { status?: number }).status === 401) {
+      forgetStoredBrowserCredential()
+      return null
+    }
+    throw err
+  }
+}
+
+// Forgets the browser credential this browser holds, as signing out does:
+// its roster entry and catalogue entry go (written as the account, from
+// `session` when it is this account's, else from the credential itself),
+// its unlock space is deleted (the credential controls it), and the secret
+// is removed from local storage, so the next visit asks for a password. Its
+// keys stay listed in the account document until a password or passkey
+// sign-in prunes them (pruneCredentials): a credential cannot remove its
+// own keys from the document, and nothing about the account's user key
+// changed, since the secret only ever lived here.
+export async function forgetBrowserCredential({ config, session }: { config: Pick<IdentityConfig, 'serverUrl'>; session?: Session }): Promise<void> {
+  const stored = storedBrowserCredential()
+  if (!stored) {
+    return
+  }
+  forgetStoredBrowserCredential()
+  const unlock = await browserUnlock(stored.secret)
+  let acting = session
+  if (!acting || acting.email !== stored.email) {
+    const found = await readCredential({ unlock, serverUrl: config.serverUrl })
+    if (!found?.contents.pointer?.did) {
+      return
+    }
+    const agents = await signingAgents(found.keys.credential.signingSeed)
+    acting = {
+      email: stored.email,
+      did: found.contents.pointer.did,
+      controller: agents.controllerDid,
+      serverUrl: found.contents.pointer.host,
+      spaceId: found.contents.pointer.spaceId,
+      signingSeed: found.keys.credential.signingSeed,
+      userKey: found.keys.userKey,
+    }
+  }
+  await leaveAccount({ session: acting, unlock, config })
+}
+
+// The part of forgetting a credential that touches the account: the roster
+// entry and the catalogue entry go, then the unlock space.
+export async function leaveAccount({ session, unlock, config }: { session: Session; unlock: UnlockIdentity; config: Pick<IdentityConfig, 'serverUrl'> }): Promise<void> {
+  const was = await accountClient(session)
+  const current = await readRoster({ was, spaceId: session.spaceId })
+  if (current) {
+    const kid = (unlock.keyAgreementKey as { id?: string }).id
+    const recipients = current.roster.recipients.filter((entry) => entry.header.kid !== kid)
+    if (recipients.length !== current.roster.recipients.length) {
+      await writeRoster({ was, spaceId: session.spaceId, roster: { ...current.roster, recipients }, ifMatch: current.etag })
+    }
+  }
+  await updateCatalogue(session, (catalogue) => {
+    for (const [signing, entry] of Object.entries(catalogue.credentials)) {
+      if (entry.unlockDid === unlock.agent.id) {
+        delete catalogue.credentials[signing]
+      }
+    }
+  })
+  await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
+}
+
+// Drops from the account document the keys of credentials the catalogue no
+// longer lists (browser credentials forgotten at sign-out), one log entry
+// each, signed by the acting credential's update key. Only entries older
+// than a few minutes are taken, so a credential being added right now is
+// left alone. Resolves to how many were dropped.
+export async function pruneCredentials({ session, acting, minAgeMs = 10 * 60 * 1000 }: { session: Session; acting: CredentialKeys; minAgeMs?: number }): Promise<number> {
+  const was = await accountClient(session)
+  const [{ log }, catalogue] = await Promise.all([readAccountLog({ was, spaceId: session.spaceId }), readCatalogue(session)])
+  const mine = multibaseOf(session.controller)
+  const cutoff = Date.now() - minAgeMs
+  let pruned = 0
+  for (const entry of await credentialsInLog(log)) {
+    if (entry.signingMultibase === mine || catalogue.credentials[entry.signingMultibase] || !entry.updateMultibase) {
+      continue
+    }
+    if (entry.addedAt && Date.parse(entry.addedAt) > cutoff) {
+      continue
+    }
+    await removeCredentialFromLog({ was, spaceId: session.spaceId, did: session.did, acting, removed: { ...entry, updateMultibase: entry.updateMultibase } })
+    pruned++
+  }
+  return pruned
+}
+
 export type { Session } from './session'
 export type { CredentialKeys } from './keys'
 export type { CredentialKind } from './catalogue'
@@ -674,4 +805,5 @@ export { recoverySecretOf } from './recoveryCode'
 export { removeCredentialFromLog } from './credentials'
 export { acceptedMethodsOf, chooseAccountMethod, accountDid, accountMethodOf, holderSigner, webDidOf } from './holder'
 export { addRosterRecipient, readRoster, recipientOf } from './roster'
+export { BROWSER_KDF, browserLabel, browserUnlock, storedBrowserCredential, forgetStoredBrowserCredential } from './browser'
 export type { AccountDidMethod, HolderSigner } from './holder'

@@ -16,7 +16,7 @@ import { resolveDID } from '@interop/did-method-webvh'
 import { createAccountLog, publishAccountLog, promoteSpace } from '../../src/lib/identity/account'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed } from '../../src/lib/identity/keys'
 import { bindCredential, openPassphrase, readCredential } from '../../src/lib/identity/unlock'
-import { addCredential, addRosterRecipient, catalogueCredential, listCredentials, readRoster, recipientOf, removeCredential } from '../../src/lib/identity'
+import { addCredential, addRosterRecipient, catalogueCredential, leaveAccount, listCredentials, pruneCredentials, readRoster, recipientOf, removeCredential, browserUnlock } from '../../src/lib/identity'
 import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
 import { randomBytes } from '../../src/lib/identity/bytes'
 import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
@@ -165,6 +165,23 @@ const newRecord = (await rotatedClient.space(spaceId).collection('vault').get(ad
 check('and reads one written after it', newRecord?.hello === 'again')
 const remaining = await listCredentials({ session: rotated })
 check('the catalogue, re-sealed to the new key, lists the passphrase alone', remaining.length === 1 && remaining[0].kind === 'passphrase' && remaining[0].current)
+
+// --- stay signed in: a browser credential, signed out again, then pruned -------
+const browserSecret = randomBytes(32)
+const browserId = await browserUnlock(browserSecret)
+await addCredential({ session: rotated, acting: credential, config, unlock: browserId, kind: 'browser', label: 'Roundtrip browser' })
+check('a browser credential joins the roster', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 2)
+const viaBrowser = await readCredential({ unlock: await browserUnlock(browserSecret), serverUrl })
+check('the browser secret opens the account with the current user key', viaBrowser?.keys.userKey.id === rotated.userKey.id)
+check('it is catalogued as a browser', (await listCredentials({ session: rotated })).some((c) => c.kind === 'browser' && c.label === 'Roundtrip browser'))
+await leaveAccount({ session: rotated, unlock: browserId, config })
+check('signing out drops its roster entry', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 1)
+check('and its unlock records', (await readCredential({ unlock: await browserUnlock(browserSecret), serverUrl })) === null)
+const beforePrune = await resolveDID(did)
+check('its keys stay in the document until pruned', ((beforePrune.didDocument as { capabilityInvocation?: unknown[] })?.capabilityInvocation?.length ?? 0) === 2)
+check('a password sign-in prunes them', (await pruneCredentials({ session: rotated, acting: credential, minAgeMs: 0 })) === 1)
+const afterPrune = await resolveDID(did)
+check('the document lists the passphrase alone again', ((afterPrune.didDocument as { capabilityInvocation?: unknown[] })?.capabilityInvocation?.length ?? 0) === 1)
 
 // --- clean up -----------------------------------------------------------------
 const gone = await space.deleteWithOutcome()
