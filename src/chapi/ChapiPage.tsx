@@ -6,7 +6,7 @@ import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
 import { isAuthenticated, getEmail } from '../lib/auth';
-import { loginWithPassphrase, setSession } from '../lib/identity';
+import { loginWithPassphrase, openWithBrowserCredential, setSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
@@ -75,6 +75,22 @@ function hostOf(origin: string | undefined): string {
 // Sentinel select value: the user wants to type a new collection name.
 const NEW_COLLECTION = '__new__';
 
+// Whether this pop-up has a session it can use. A pop-up is a window of its
+// own, so it has none of the main tab's; a browser credential kept by "Stay
+// signed in on this browser" opens the account before the sign-in form shows.
+async function signedIn(): Promise<boolean> {
+  if (!isAuthenticated()) {
+    const opened = await openWithBrowserCredential({ config: identityConfig() }).catch((err) => {
+      console.error('Could not sign in with the browser credential:', err);
+      return null;
+    });
+    if (opened) {
+      setSession(opened.session);
+    }
+  }
+  return isAuthenticated() && Boolean(await getSessionWASClient());
+}
+
 export default function ChapiPage() {
   const [phase, setPhase] = useState<Phase>({ step: 'starting' });
   const [collectionId, setCollectionId] = useState('');
@@ -134,7 +150,7 @@ export default function ChapiPage() {
                 }
 
                 pendingClaimRef.current = { vpr, origin: event.credentialRequestOrigin };
-                if (!isAuthenticated() || !(await getSessionWASClient())) {
+                if (!(await signedIn())) {
                   setPhase({ step: 'not-signed-in' });
                   return;
                 }
@@ -338,7 +354,7 @@ export default function ChapiPage() {
     // The session check reaches the storage server too, so it fails like the
     // loading after it rather than leaving Continue doing nothing
     try {
-      if (!isAuthenticated() || !(await getSessionWASClient())) {
+      if (!(await signedIn())) {
         setPhase({ step: 'not-signed-in' });
         return;
       }

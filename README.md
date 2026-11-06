@@ -90,7 +90,20 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   continues on the new key; a session open elsewhere signs in again. The
   session's own credential and the recovery code are not removable from the
   page; recovery itself removes the used recovery credential the same way,
-  so an emailed code reaches nothing once used. The session (the unwrapped keys
+  so an emailed code reaches nothing once used. **Stay signed in on this
+  browser** (`src/lib/identity/browser.ts`), a checkbox on the login form,
+  makes the browser a credential of the account: a random secret kept in
+  local storage derives an unlock identity the way a passkey's PRF output
+  does, with its own keys in the document, its own unlock space and its own
+  roster entry, listed under Sign-in credentials as "Browser: Chrome on
+  macOS" and removable from any other sign-in (with the rotation). On a
+  return visit the signed-in pages open the account with it before showing
+  the login form (`RequireAuth`). Sign Out forgets it: the secret, its
+  roster entry, its catalogue entry and its unlock space go, and the next
+  password or passkey sign-in drops its keys from the document
+  (`pruneCredentials`), since a credential cannot drop its own. One per
+  browser; anyone who can use the browser profile can open the account until
+  it is removed. The session (the unwrapped keys
   and the account pointer) lives in this tab's `sessionStorage`: it is gone
   when the tab closes, and the CHAPI popup, a window of its own, signs the
   user in itself. Requests sign as `<did:webvh>#<multibase>`; only the

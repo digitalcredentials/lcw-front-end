@@ -7,6 +7,8 @@ import {
   openWithPasskey,
   ensureRecoveryCredential,
   addPasskey,
+  addBrowserCredential,
+  pruneCredentials,
   setSession,
   passkeySupported,
   PasskeyCancelledError,
@@ -35,13 +37,30 @@ function dismissOffer(email: string): void {
   }
 }
 
-// After a sign-in, an account with no stored recovery code gets one. Best
-// effort: the user is signed in either way, and the next sign-in tries again.
+// After a sign-in, an account with no stored recovery code gets one, and
+// keys of browser credentials forgotten at sign-out leave the document.
+// Best effort: the user is signed in either way, and the next sign-in tries
+// again.
 async function ensureRecovery(session: Session, acting: CredentialKeys): Promise<void> {
   try {
     await ensureRecoveryCredential({ session, acting, config: identityConfig() });
   } catch (err) {
     console.error('Could not set up account recovery:', err);
+  }
+  try {
+    await pruneCredentials({ session, acting });
+  } catch (err) {
+    console.error('Could not prune forgotten browser credentials:', err);
+  }
+}
+
+// "Stay signed in on this browser": the browser becomes a credential of the
+// account. Best effort: a failure leaves the user signed in for this tab.
+async function stayOnThisBrowser(session: Session, acting: CredentialKeys): Promise<void> {
+  try {
+    await addBrowserCredential({ session, acting, config: identityConfig() });
+  } catch (err) {
+    console.error('Could not keep this browser signed in:', err);
   }
 }
 
@@ -67,6 +86,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [stay, setStay] = useState(false);
   // After a passphrase sign-in on a browser with passkey support, the page
   // offers to add a passkey before continuing. The passphrase credential's
   // keys (its update key among them) are held only for that step.
@@ -88,6 +108,9 @@ export default function LoginPage() {
       // proves the account to the back end (src/lib/identity).
       const { session, keys } = await openWithPassphrase({ email, passphrase: password, config: identityConfig() });
       await ensureRecovery(session, keys.credential);
+      if (stay) {
+        await stayOnThisBrowser(session, keys.credential);
+      }
       if (passkeySupported() && !offerDismissed(session.email)) {
         actingRef.current = keys.credential;
         setOffering(session);
@@ -107,6 +130,9 @@ export default function LoginPage() {
     try {
       const { session, keys } = await openWithPasskey({ config: identityConfig() });
       await ensureRecovery(session, keys.credential);
+      if (stay) {
+        await stayOnThisBrowser(session, keys.credential);
+      }
       enter(session);
     } catch (err) {
       setError(describe(err, 'Unable to sign in with a passkey. Please try again.'));
@@ -210,6 +236,21 @@ export default function LoginPage() {
             </label>
             <PasswordInput id="password" autoComplete="current-password" value={password} onChange={setPassword} />
           </div>
+          <label htmlFor="stay" className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              id="stay"
+              type="checkbox"
+              checked={stay}
+              onChange={(e) => setStay(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>
+              Stay signed in on this browser
+              <span className="block text-xs text-gray-500">
+                Not on a shared computer. This browser is listed under Sign-in credentials, where it can be removed.
+              </span>
+            </span>
+          </label>
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}

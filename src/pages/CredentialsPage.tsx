@@ -12,6 +12,7 @@ import {
   passkeySupported,
   PasskeyCancelledError,
   PasskeyUnsupportedError,
+  storedBrowserCredential,
   type AccountCredential,
   type CredentialKeys,
 } from '../lib/identity';
@@ -27,8 +28,17 @@ const KIND_LABEL: Record<AccountCredential['kind'], string> = {
   passphrase: 'Password',
   passkey: 'Passkey',
   recovery: 'Recovery code',
+  browser: 'Browser',
   unknown: 'Credential',
 };
+
+// Whether a browser credential is the one this browser holds: the catalogue
+// does not say, but the stored secret's account and the row's date do.
+function isThisBrowser(credential: AccountCredential): boolean {
+  const stored = storedBrowserCredential();
+  const session = getSession();
+  return Boolean(stored && session && stored.email === session.email && stored.createdAt && credential.addedAt && Math.abs(Date.parse(stored.createdAt) - Date.parse(credential.addedAt)) < 60_000);
+}
 
 function addedOn(iso: string): string {
   const date = new Date(iso);
@@ -179,10 +189,16 @@ export default function CredentialsPage() {
                       This session
                     </span>
                   )}
+                  {credential.kind === 'browser' && isThisBrowser(credential) && (
+                    <span className="ml-2 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700 align-middle">
+                      This browser
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {credential.addedAt && <>Added {addedOn(credential.addedAt)}. </>}
                   {credential.kind === 'recovery' && 'Emailed on request from "Forgot your password?" and replaced after each use.'}
+                  {credential.kind === 'browser' && 'Signs in without a password on that browser until it signs out or is removed here.'}
                   {credential.kind === 'unknown' && 'Added before this wallet kept a record of its credentials; it will be recognised the next time it signs in.'}
                 </p>
               </div>

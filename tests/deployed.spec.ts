@@ -306,3 +306,37 @@ test('lists the sign-in credentials under Settings', async ({ page }) => {
     }
   }
 });
+
+test('stays signed in on this browser until sign-out', async ({ page, context }) => {
+  const noise = capture(page);
+  try {
+    await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+    await page.goto(`${DEPLOYED_URL}/`);
+    await page.getByLabel('Email').fill(DEMO_EMAIL);
+    await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+    await page.getByLabel('Stay signed in on this browser').check();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+
+    // A second tab has no session of its own; the browser credential opens
+    // the account without the login form
+    const second = await context.newPage();
+    await second.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+    await second.goto(`${DEPLOYED_URL}/#/files`);
+    await expect(second.locator('[data-space-type]').first()).toBeVisible();
+    await expect(second.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
+    await second.close();
+
+    // Sign Out forgets the browser credential: a fresh tab asks for a password
+    await page.getByRole('button', { name: 'Sign Out' }).click();
+    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    const third = await context.newPage();
+    await third.goto(`${DEPLOYED_URL}/#/files`);
+    await expect(third.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    await third.close();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
