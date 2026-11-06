@@ -1109,12 +1109,15 @@ export default function FileBrowserPage() {
             verification section is always rendered (keyed, with a placeholder
             occupying the sibling slot) and hidden with CSS outside detail
             mode, so the plugin components in it are never remounted. */}
+        {/* On a phone (below md) the title takes its own line, breaking
+            inside a long word or URL if it must, and the actions sit in a
+            two-by-two grid under it */}
         {selected && viewing?.mode === 'detail' && (
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:gap-0 md:items-center md:justify-between">
+            <h2 className="text-lg font-semibold text-gray-800 break-words">
               {viewingSummary?.title ?? viewing.resource.name ?? viewing.resource.id}
             </h2>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2 md:flex">
               <button
                 onClick={() => setShareTarget(viewing.resource)}
                 className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
