@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
 // DEPLOYED_URL is set, so the regular local suite never touches production.
@@ -202,6 +202,9 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
 
     // At laptop width the links show in the sidebar, with no phone Menu button
     await expect(page.getByRole('button', { name: 'Menu' })).toBeHidden();
+    // ...and the credential's actions stay in one row, not the phone's grid
+    expect((await page.getByRole('button', { name: 'Back to list' }).boundingBox())?.y)
+      .toBe((await page.getByRole('button', { name: 'Share', exact: true }).boundingBox())?.y);
 
     // The sidebar nav link resets to the spaces cards
     await page.getByRole('link', { name: 'My Spaces' }).click();
@@ -384,5 +387,52 @@ test.describe('on a phone', () => {
     await expect(menu).toHaveAttribute('aria-expanded', 'false');
     expect(await icon()).toBe(folded);
     expect(await fits()).toBe(true);
+  });
+
+  // A mobile browser widens the page to fit anything wider than the screen,
+  // and a dialog then centres in that wider page, partly off screen. A desktop
+  // browser at the same size doesn't, so these checks run as a mobile one, and
+  // measure against the screen's 375px, not the widened page, reading the
+  // page's own layout (getBoundingClientRect).
+  test.describe('in a mobile browser', () => {
+    test.use({ isMobile: true, hasTouch: true });
+
+    // The title takes its own line and the actions sit in a grid under it
+    test('a credential page fits, with its actions and dialogs on screen', async ({ page }) => {
+      const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= 375);
+      const rect = (locator: Locator) => locator.evaluate((el) => {
+        const { left, right, top, bottom } = el.getBoundingClientRect();
+        return { left, right, top, bottom };
+      });
+      await logIn(page);
+      await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
+      await credentialCard(page, 'LCW Experience Badge')
+        .getByRole('button', { name: 'Open' }).click();
+      await expect(page.getByText('Credential Source')).toBeVisible();
+      expect(await fits()).toBe(true);
+      const heading = page.getByRole('heading', { name: 'LCW Experience Badge' });
+      const title = await rect(heading);
+      for (const name of ['Share', 'Move', 'Delete', 'Back to list']) {
+        const button = await rect(page.getByRole('button', { name, exact: true }));
+        expect(button.right).toBeLessThanOrEqual(375);
+        // Below the title, not squeezed beside it, with its label on one line
+        // (38px; a wrapped label makes it 58px or more)
+        expect(button.top).toBeGreaterThanOrEqual(title.bottom);
+        expect(button.bottom - button.top).toBeLessThan(44);
+      }
+      // Centred on the screen, not in a page wider than it
+      await page.getByRole('button', { name: 'Share', exact: true }).click();
+      await expect(page.getByRole('dialog')).toBeVisible();
+      const dialog = await rect(page.getByRole('dialog'));
+      expect((dialog.left + dialog.right) / 2).toBeCloseTo(187.5, 0);
+
+      // A title with no spaces (one long word, or a URL) breaks to fit too.
+      // Close the dialog (its backdrop closes it), then lengthen the title
+      // in the page only; nothing is stored.
+      await page.locator('[role="dialog"]').evaluate((el) => el.parentElement?.click());
+      await expect(page.getByRole('dialog')).toBeHidden();
+      await heading.evaluate((h) => { h.textContent = 'CertificateOfCompletionInAdvancedCredentialing2026'; });
+      expect(await fits()).toBe(true);
+    });
   });
 });
