@@ -200,6 +200,9 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
 
+    // At laptop width the links show in the sidebar, with no phone Menu button
+    await expect(page.getByRole('button', { name: 'Menu' })).toBeHidden();
+
     // The sidebar nav link resets to the spaces cards
     await page.getByRole('link', { name: 'My Spaces' }).click();
     await expect(page.locator('[data-space-type]').first()).toBeVisible();
@@ -339,4 +342,29 @@ test('stays signed in on this browser until sign-out', async ({ page, context })
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
     }
   }
+});
+
+// A phone (#177): the page fits the screen, and the sidebar's links fold away
+// behind a Menu button that folds them away again once one is followed
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  test('fits the screen, with the links behind Menu', async ({ page }) => {
+    await logIn(page);
+    await expect(page.getByRole('button', { name: /UniversityOfToronto/ })).toBeVisible();
+    const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+    expect(await fits()).toBe(true);
+    // The title bar spans the screen, not the laptop sidebar's 240px
+    expect((await page.locator('aside').boundingBox())?.width).toBe(375);
+
+    const menu = page.getByRole('button', { name: 'Menu' });
+    await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Sign Out' })).toBeHidden();
+    await menu.click();
+    await expect(page.getByRole('button', { name: 'Sign Out' })).toBeVisible();
+    await page.getByRole('link', { name: 'My Spaces' }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
+    expect(await fits()).toBe(true);
+  });
 });

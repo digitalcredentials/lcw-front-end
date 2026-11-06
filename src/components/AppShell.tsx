@@ -13,10 +13,21 @@ import { describeError, type Failure } from '../lib/errors';
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Spaces, one link per registered plugin such as Credential
 // Issuer, Settings — which holds the browser-wallet registration — and Sign
-// Out at the bottom); pages render into the main column.
+// Out at the bottom); pages render into the main column. On a phone (below
+// Tailwind's md, 768px) the title runs across the top instead, and the links
+// fold away behind a Menu button.
 export default function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
+  // Phones only: the folded-away links show while the menu was opened on this
+  // very location, so any navigation (a link, Back, or code) folds them again.
+  // Forgotten once the location moves on, so Back to it doesn't reopen them.
+  const [menuOpenAt, setMenuOpenAt] = useState<string | null>(null);
+  if (menuOpenAt !== null && menuOpenAt !== location.key) {
+    setMenuOpenAt(null);
+  }
+  const menuOpen = menuOpenAt === location.key;
   // Open on a settings page, so the page's own link shows as the active item
   const [settingsOpen, setSettingsOpen] = useState(pathname.startsWith('/settings'));
   // 'unknown' until the CHAPI permission is queried; then reflects reality
@@ -189,25 +200,35 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }`;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      <aside className="w-60 shrink-0 bg-white border-r border-gray-200 flex flex-col">
-        {/* The title links home: back to the spaces card view */}
-        <Link
-          to="/files"
-          className="flex items-center gap-3 px-4 py-4 border-b border-gray-200 hover:bg-gray-50 transition-colors"
-        >
-          {/* The DCC mark (public/dcc-commons-mark.png, from badge-assets) */}
-          <img src="/dcc-commons-mark.png" alt="" className="h-11 w-11 shrink-0" />
-          <span className="min-w-0">
-            <span className="block text-base font-semibold text-gray-800 leading-tight">
-              Digital Credentials Commons
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
+      <aside className="w-full md:w-60 shrink-0 bg-white border-b md:border-b-0 md:border-r border-gray-200 flex flex-col">
+        <div className={`flex items-center border-gray-200 md:border-b ${menuOpen ? 'border-b' : ''}`}>
+          {/* The title links home: back to the spaces card view */}
+          <Link
+            to="/files"
+            className="flex-1 min-w-0 flex items-center gap-3 px-4 py-4 hover:bg-gray-50 transition-colors"
+          >
+            {/* The DCC mark (public/dcc-commons-mark.png, from badge-assets) */}
+            <img src="/dcc-commons-mark.png" alt="" className="h-11 w-11 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-base font-semibold text-gray-800 leading-tight">
+                Digital Credentials Commons
+              </span>
+              <span className="block text-sm text-gray-500 leading-tight">
+                Learner Credential Wallet
+              </span>
             </span>
-            <span className="block text-sm text-gray-500 leading-tight">
-              Learner Credential Wallet
-            </span>
-          </span>
-        </Link>
-        <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Main">
+          </Link>
+          <button
+            onClick={() => setMenuOpenAt(menuOpen ? null : location.key)}
+            aria-expanded={menuOpen}
+            aria-controls="app-nav app-account"
+            className={`md:hidden mr-3 shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors ${menuOpen ? 'bg-gray-100' : ''}`}
+          >
+            Menu
+          </button>
+        </div>
+        <nav id="app-nav" className={`${menuOpen ? '' : 'hidden'} md:block flex-1 px-3 py-4 space-y-1`} aria-label="Main">
           <Link to="/files" className={itemClass(pathname === '/files')}>
             My Spaces
           </Link>
@@ -277,7 +298,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </div>
           )}
         </nav>
-        <div className="px-3 py-4 border-t border-gray-200">
+        <div id="app-account" className={`${menuOpen ? '' : 'hidden'} md:block px-3 py-4 border-t border-gray-200`}>
           {/* Who is signed in: the account's email, from the session */}
           <p className="px-3 pb-2 text-xs text-gray-500" data-testid="signed-in-as">
             Signed in as
