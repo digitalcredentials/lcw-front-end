@@ -11,6 +11,7 @@ import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
 import { ensureEncryptedCollection } from '../lib/edv';
+import { isAccountCollection } from '../lib/accountCollections';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
@@ -233,7 +234,7 @@ export default function ChapiPage() {
             spaceUrl: info.url,
             spaceName: (desc as { name?: string } | null)?.name ?? s.spaceId,
             collections: (list?.items ?? [])
-              .filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
+              .filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
               .map((c) => ({ id: c.id, name: 'name' in c ? c.name : c.id })),
           };
         })
