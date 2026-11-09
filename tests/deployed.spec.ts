@@ -385,9 +385,12 @@ test('downloads every document unencrypted as one tar', async ({ page }) => {
       (e) => /\/UniversityOfToronto\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
     );
     expect(badge, names.join('\n')).toBeTruthy();
+    // The demo seed stores the credential inside a presentation; either way
+    // the plain document is there, not an envelope
     const doc = JSON.parse(new TextDecoder().decode(badge!.bytes));
-    expect(doc.type).toContain('VerifiableCredential');
     expect(doc.jwe).toBeUndefined();
+    const credential = doc.type.includes('VerifiablePresentation') ? [doc.verifiableCredential].flat()[0] : doc;
+    expect(credential.type).toContain('VerifiableCredential');
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
