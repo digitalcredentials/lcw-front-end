@@ -8,6 +8,7 @@ import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from 
 import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
 import FailureText from './FailureText';
+import ExportDataModal from './ExportDataModal';
 import { describeError, type Failure } from '../lib/errors';
 
 // The signed-in layout: the product title and navigation run down a left
@@ -34,6 +35,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState<Failure | null>(null);
+  // Settings → Download my data
+  const [exportOpen, setExportOpen] = useState(false);
 
   // Shown when the wallet opens while the browser wallet is not enabled; at
   // most once per tab session
@@ -266,6 +269,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               >
                 Sign-in credentials
               </Link>
+              <button
+                onClick={() => setExportOpen(true)}
+                title="Save every document in your spaces to one unencrypted file"
+                className={itemClass(false)}
+              >
+                Download my data
+              </button>
               <p className="px-3 pt-2 text-xs uppercase tracking-wide">
                 <span className="text-gray-400">Browser wallet: </span>
                 {walletState === 'enabled' && (
@@ -445,6 +455,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       )}
 
       {/* Shown once per tab session when the browser wallet is not enabled */}
+      {exportOpen && <ExportDataModal onClose={() => setExportOpen(false)} />}
+
       {enablePromptOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"

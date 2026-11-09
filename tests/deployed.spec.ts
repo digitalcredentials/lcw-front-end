@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
 // DEPLOYED_URL is set, so the regular local suite never touches production.
@@ -353,6 +354,67 @@ test('stays signed in on this browser until sign-out', async ({ page, context })
     }
   }
 });
+
+// Settings → Download my data: the tar is read back, and the demo credential
+// is found decrypted under the demo space's folder and its collection's.
+test('downloads every document unencrypted as one tar', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  try {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Download my data' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Download my data' });
+    await expect(dialog.getByText('not encrypted')).toBeVisible();
+    const downloading = page.waitForEvent('download', { timeout: 60_000 });
+    await dialog.getByRole('button', { name: 'Download' }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toMatch(/^lcw-data-\d{4}-\d{2}-\d{2}\.tar$/);
+    await expect(dialog.getByTestId('export-done')).toBeVisible({ timeout: 60_000 });
+    const bytes = new Uint8Array(await readFile((await download.path())!));
+    const entries = readTar(bytes);
+    const names = entries.map((e) => e.name);
+    expect(names[0]).toBe('manifest.json');
+    const manifest = JSON.parse(new TextDecoder().decode(entries[0].bytes));
+    expect(manifest.format).toBe('lcw-data-export/1');
+    expect(manifest.account).toBe(DEMO_EMAIL);
+    expect(manifest.problems).toEqual([]);
+    // No account collection reaches the file
+    expect(names.filter((n) => /\/(id|account|dids|public)\//.test(n))).toEqual([]);
+    // The demo credential, decrypted, under its space and collection folders
+    const badge = entries.find(
+      (e) => /\/UniversityOfToronto\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
+    );
+    expect(badge, names.join('\n')).toBeTruthy();
+    const doc = JSON.parse(new TextDecoder().decode(badge!.bytes));
+    expect(doc.type).toContain('VerifiableCredential');
+    expect(doc.jwe).toBeUndefined();
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
+
+// A minimal ustar reader for the download test: name and bytes per file entry.
+function readTar(bytes: Uint8Array): { name: string; bytes: Uint8Array }[] {
+  const entries: { name: string; bytes: Uint8Array }[] = [];
+  const text = (b: Uint8Array) => new TextDecoder().decode(b).replace(/\0.*$/s, '');
+  let at = 0;
+  while (at + 512 <= bytes.length) {
+    const block = bytes.subarray(at, at + 512);
+    if (block.every((b) => b === 0)) {
+      break;
+    }
+    const prefix = text(block.subarray(345, 500));
+    const name = (prefix ? `${prefix}/` : '') + text(block.subarray(0, 100));
+    const size = parseInt(text(block.subarray(124, 136)).trim() || '0', 8);
+    if (text(block.subarray(156, 157)) !== '5') {
+      entries.push({ name, bytes: bytes.slice(at + 512, at + 512 + size) });
+    }
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
 
 // A phone (#177): the page fits the screen, and the sidebar's links fold away
 // behind a Menu button that folds them away again once one is followed

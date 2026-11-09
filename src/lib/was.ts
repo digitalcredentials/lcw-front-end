@@ -66,12 +66,23 @@ export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceI
   if (!session) {
     return null
   }
+  return getSessionKeyClientFor(`${session.serverUrl}/space/${session.spaceId}`)
+}
+
+export async function getSessionKeyClientFor(
+  spaceUrl: string
+): Promise<{ client: WasClient; spaceId: string } | null> {
+  const session = getSession()
+  const parsed = parseSpaceUrl(spaceUrl)
+  if (!session || !parsed) {
+    return null
+  }
   const { asKey } = await sessionAgents(session)
   const client = await WasClient.fromSigner({
-    serverUrl: spacesUrlOf(session.serverUrl),
+    serverUrl: spacesUrlOf(parsed.serverUrl),
     signer: asKey.signer,
     encryption: sessionEncryption(session),
-    serviceDescription: await serviceDescriptionFor(session.serverUrl),
+    serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
   })
-  return { client, spaceId: session.spaceId }
+  return { client, spaceId: parsed.spaceId }
 }
