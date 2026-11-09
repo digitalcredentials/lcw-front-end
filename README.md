@@ -179,6 +179,22 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   a [vanilla-jsoneditor](https://github.com/josdejong/svelte-jsoneditor)
   wrapper (`src/components/JSONInput.tsx`) checks and highlights JSON errors
   as you type.
+- **Download my data** (`src/lib/exportWallet.ts`, `src/lib/dataExport.ts`,
+  `src/lib/tar.ts`, the dialog in `src/components/ExportDataModal.tsx`):
+  **Settings → Download my data** saves every document in every space of the
+  account to one plain tar, a folder per space (its name, or its id) and a
+  folder per collection inside it, each document under its resource id with
+  a `manifest.json` first (the spaces, collections and counts, and any
+  document left out). Each space is read through the PWS server's Export
+  Space operation (`POST /space/{id}/export`, the was-client's
+  `space.export()`), which answers the Space as a Space archive; the wallet
+  reads the archive with `@interop/space-archive` and decrypts each
+  encrypted collection's envelopes with the user key and the collection's
+  key-epoch descriptor from the archive (`createEdvDocCipher`), so no
+  document is fetched one by one. The `id`, `account`, `dids` and `public`
+  collections are left out (the account's own records and keys, and the
+  public copies of shared credentials); `Trash` is included. The documents
+  in the file are not encrypted, which the dialog says before the download.
 - **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
   `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
   wallet with the [authn.io](https://authn.io) mediator (a once-per-session
@@ -274,13 +290,14 @@ is:
 
 ```bash
 npm run lint
-npx playwright test tests/vp-request.spec.ts tests/verify-interpret.spec.ts
+npx playwright test tests/vp-request.spec.ts tests/verify-interpret.spec.ts tests/data-export.spec.ts
 ```
 
 Lint (oxlint) and the unit specs that need no server: parsing and matching
-of verifiable presentation requests (`src/lib/vpRequest.ts`) and the
+of verifiable presentation requests (`src/lib/vpRequest.ts`), the
 interpretation of verifier-core results for the pre-share check
-(`src/lib/verify.ts`).
+(`src/lib/verify.ts`), and the data export's tar writer, Space archive
+reader and layout (`src/lib/tar.ts`, `src/lib/dataExport.ts`).
 
 ```bash
 npm run test:e2e
@@ -312,8 +329,10 @@ DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 Opt-in smoke tests against a deployed instance: login and the space
 collections, opening and verifying a credential, the batch issuer screen,
 sharing to LinkedIn, the My Spaces and title navigation resets, the
-welcome-credential dialog, and creating, saving and deleting a batch (a
-scratch batch space) — with console errors and failed requests captured for
+welcome-credential dialog, creating, saving and deleting a batch (a
+scratch batch space), the sign-in credentials and stay-signed-in settings,
+the phone layout, and the data download (the tar is read back and the demo
+credential found decrypted in it) — with console errors and failed requests captured for
 debugging. Skipped unless `DEPLOYED_URL` is set. Run it after every deploy.
 
 The demo account these tests sign in as (`jc.chartrand@gmail.com`, the

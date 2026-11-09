@@ -112,3 +112,11 @@ export function sessionEncryption(session: Session) {
 export function sessionKeyAgreementKey(session: Session) {
   return userKeyVaultKeys({ userKey: session.userKey }).keyAgreementKey
 }
+
+// The user key as a reader's key material (its key-agreement key and the
+// resolver that finds it), for decrypting an envelope outside a was-client
+// handle, such as one read from a Space archive.
+export function sessionVaultKeys(session: Session) {
+  const { keyAgreementKey, keyResolver } = userKeyVaultKeys({ userKey: session.userKey })
+  return { keyAgreementKey, keyResolver }
+}
