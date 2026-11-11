@@ -13,8 +13,8 @@ import { accountControllerResolver, didKeyZcapClient, pwsWebvhIdStore } from '@i
 import { accountCollectionStores, userKeyRosterDescriptorStore, userKeyRosterLogSigner } from '@interop/wallet-core/keys'
 import { WALLET_SPACE_NAME } from '@interop/wallet-core/space'
 import { memoryResourceLogPinStore } from '@interop/vh-resource-log'
-import type { ZcapClient } from '@interop/ezcap'
 import { passphraseCredential, type UnlockCredential } from './credential'
+import { createSpaceWithCoupon } from './provision'
 import { bindStandingRecord, fetchStandingRecord, pointerOf } from './records'
 import { emptyRegistry, standingFieldsOf, updateUnlockMethods, upsertPassphraseMethod } from './unlockMethods'
 import { serviceDescriptionFor } from './service'
@@ -33,19 +33,20 @@ import { serviceDescriptionFor } from './service'
 // the passphrase is recorded in the unlock-methods registry and the email
 // is registered with the back end.
 //
-// The two Spaces are created here with the coupon, under the bootstrap
-// did:key the ceremony then finds in control, so the server's coupon-less
+// The three Spaces (the account Space, the client-annex Space, the
+// passphrase's unlock Space) are created here with the coupon, under the
+// did:keys the ceremony then finds in control, so the server's coupon-less
 // paths and their cap are never used: the ceremony's Space steps are
-// ensures that adopt a Space already in place.
+// ensures that adopt a Space already in place (`./provision`).
 
 export interface SignupConfig {
   // lcw-back-end, which registers the email; absent, no email is registered
   // (a test against a bare PWS server)
   apiBase?: string
   serverUrl: string
-  // How the two Spaces come to exist: created here with the registration
-  // code as the coupon (this server), or left to the ceremony's create-by-id
-  // (a server with open provisioning, such as the reference server)
+  // How the Spaces come to exist: created here with the registration code
+  // as the coupon (this server), or left to the ceremony's create-by-id (a
+  // server with open provisioning, such as the reference server)
   provisioning?: 'coupon' | 'open'
 }
 
@@ -54,28 +55,6 @@ export const ANNEX_SPACE_NAME = 'Client annex'
 interface ErrorBody {
   message?: string
   error?: string
-}
-
-// Creates a Space by id with the coupon (`POST /spaces/`, this server's
-// extension), signed as the did:key that will control it.
-async function createSpaceWithCoupon({
-  zcapClient,
-  serverUrl,
-  coupon,
-  id,
-  controller,
-  name,
-  type,
-}: {
-  zcapClient: ZcapClient
-  serverUrl: string
-  coupon: string
-  id: string
-  controller: string
-  name: string
-  type: string[]
-}): Promise<void> {
-  await zcapClient.request({ url: `${serverUrl}/spaces/`, method: 'POST', action: 'POST', json: { id, controller, name, type, coupon } })
 }
 
 export class AccountExistsError extends Error {
@@ -125,10 +104,11 @@ export async function signUp({
   const spaceId = mintSpaceId()
   const annexSpaceId = mintSpaceId()
 
-  if ((config.provisioning ?? 'coupon') === 'coupon') {
+  const coupon = (config.provisioning ?? 'coupon') === 'coupon' ? registrationCode : undefined
+  if (coupon) {
     onStage?.('Creating your storage space')
-    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon: registrationCode, id: spaceId, controller: bootstrapDid, name: WALLET_SPACE_NAME, type: ['Space'] })
-    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon: registrationCode, id: annexSpaceId, controller: bootstrapDid, name: ANNEX_SPACE_NAME, type: [...CLIENT_ANNEX_SPACE_TYPE] })
+    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon, id: spaceId, controller: bootstrapDid, name: WALLET_SPACE_NAME, type: ['Space'] })
+    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon, id: annexSpaceId, controller: bootstrapDid, name: ANNEX_SPACE_NAME, type: [...CLIENT_ANNEX_SPACE_TYPE] })
   }
 
   // The sibling delegation into the annex Space, which names the Space the
@@ -152,7 +132,7 @@ export async function signUp({
       recipientKid: credential.standing.recipientKid,
       keyAgreementKey: credential.standing.agents.keyAgreementKey,
     },
-    bindRecord: (bind) => bindStandingRecord({ credential, serverUrl, email, ladderSeed, ...bind }),
+    bindRecord: (bind) => bindStandingRecord({ credential, serverUrl, coupon, email, ladderSeed, ...bind }),
     rosterStoreFor: ({ did, log }) =>
       userKeyRosterDescriptorStore({
         baseServerUrl: serverUrl,

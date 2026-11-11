@@ -4,6 +4,7 @@ import type { CredentialAnchoredBindResult } from '@interop/wallet-core/clientAn
 import { baseServerUrlOf, spaceIdOfUrl, spaceUrlById } from '@interop/pws-client/paths/layout'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import type { UnlockCredential } from './credential'
+import { provisionUnlockSpace } from './provision'
 import { serviceDescriptionFor } from './service'
 
 // A credential's standing unlock record: `keyring/keyring.json` in the
@@ -98,15 +99,16 @@ export async function delegateUnlockManagement({ credential, serverUrl, to }: { 
 }
 
 // Writes the credential's standing record: provisions its unlock Space on
-// the first bind (the server accepts a Space whose id is derived from the
-// signing unlock did:key, or the caller created it with a coupon first),
-// wraps the record in the standing layout, and delegates the management
-// capability when an account to delegate it to is named. The result is
-// what wallet-core's credential-anchored establishment expects from its
-// `bindRecord` hook.
+// the first bind (with the coupon when one is given, else by id, which the
+// server accepts for a Space whose id derives from the signing unlock
+// did:key), wraps the record in the standing layout, and delegates the
+// management capability when an account to delegate it to is named. The
+// result is what wallet-core's credential-anchored establishment expects
+// from its `bindRecord` hook.
 export async function bindStandingRecord({
   credential,
   serverUrl,
+  coupon,
   controller,
   email,
   pointer,
@@ -118,6 +120,8 @@ export async function bindStandingRecord({
 }: {
   credential: UnlockCredential
   serverUrl: string
+  // The server's space-creation coupon; absent, the Space is created by id
+  coupon?: string
   // The controller the record names: the ladder VM's bare did:key, the
   // bootstrap identity re-derivable from the credential alone
   controller: string
@@ -147,6 +151,7 @@ export async function bindStandingRecord({
   })
   const serviceDescription = await serviceDescriptionFor(serverUrl)
   if (priorCreatedAt === undefined) {
+    await provisionUnlockSpace({ credential, serverUrl, coupon })
     await ensureUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   }
   await putUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })

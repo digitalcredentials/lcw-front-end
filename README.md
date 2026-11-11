@@ -21,7 +21,12 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   account's keys at random, and the passphrase only derives an **unlock
   credential** (wallet-core's keyring derivation, FreeWallet's salts) that
   opens them. A bootstrap `did:key` creates two Spaces through the PWS
-  server's `POST /spaces/` with the registration code as coupon. The
+  server's `POST /spaces/` with the registration code as coupon, and the
+  passphrase's unlock Space is created the same way under its unlock
+  identity (`provision.ts`): every Space this wallet makes, the unlock
+  Spaces of later passkeys and recovery codes included, redeems the coupon
+  (the registration token `/login` returns), so the server's capped
+  coupon-less path is never used for its accounts. The
   **account Space** holds the account's `did:webvh` log in its
   world-readable `id` collection (served through the identity domain,
   `VITE_ID_DOMAIN`), the user key (X25519, the recipient of every encrypted

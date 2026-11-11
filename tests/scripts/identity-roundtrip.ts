@@ -9,8 +9,9 @@
 //   WAS_URL=https://was.lcw-sandbox.org COUPON=... npx tsx tests/scripts/identity-roundtrip.ts
 //   WAS_URL=http://localhost:3002 PROVISIONING=open npx tsx tests/scripts/identity-roundtrip.ts
 //
-// With a COUPON the two Spaces are created through POST /spaces/ (this
-// server); with PROVISIONING=open the ceremony creates them by id (the
+// With a COUPON every Space (the account and annex Spaces, each
+// credential's unlock Space) is created through POST /spaces/ with it (this
+// server); with PROVISIONING=open the ceremonies create them by id (the
 // reference server). The account it creates is left behind.
 import '@interop/http-client'
 import { PwsClient } from '@interop/pws-client'
@@ -31,6 +32,10 @@ import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 const WAS = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
 const PROVISIONING = (process.env.PROVISIONING as 'open' | 'coupon' | undefined) ?? (process.env.COUPON ? 'coupon' : 'open')
 const COUPON = process.env.COUPON ?? 'no-coupon'
+// What a session carries as its coupon (the registration token, after a
+// back-end login): here the coupon given, so the unlock Spaces the later
+// steps create redeem it too
+const coupon = PROVISIONING === 'coupon' ? COUPON : undefined
 const passphrase = `roundtrip-passphrase-${Date.now()}-${Math.random().toString(36).slice(2)}`
 const email = `roundtrip-${Date.now()}@example.test`
 
@@ -68,7 +73,7 @@ if (!found) {
   throw new Error('no record')
 }
 const entry = await time('transient login', () => openTransientSession({ credential, found, serverUrl: WAS }))
-const session: TransientSession = { ...entry.session, email }
+const session: TransientSession = { ...entry.session, email, coupon }
 check('the session signs as the client annex', session.clientAnnexDid.startsWith('did:webvh:') && session.clientAnnexDid !== session.did)
 const first = await registryOf(session)
 const registry = await readUnlockMethods({ pws: first.pws, spaceId: session.spaceId, userKey: session.userKey, capability: first.capability })
@@ -115,7 +120,7 @@ check('the remembered session signs as the account', remembered.session.did === 
 check('the remembered session reads the same user key', remembered.session.userKey.id === session.userKey.id)
 const again = await time('remembered login (record present)', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
 check('a second remembered login reuses the record', !again.enrolled && toBase64url(again.session.clientSeed) === toBase64url(remembered.session.clientSeed))
-const rememberedSession: RememberedSession = { ...again.session, email }
+const rememberedSession: RememberedSession = { ...again.session, email, coupon }
 const second = await registryOf(rememberedSession)
 const registry2 = await readUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, capability: second.capability })
 check('the registry lists both methods', registry2?.record.methods.map((m) => m.type).sort().join(',') === 'passkey,passphrase', registry2?.record.methods.map((m) => m.type))
@@ -130,7 +135,7 @@ check('the recovery session holds the user key', recovered?.session.userKey.id =
 
 // --- a second recovery code, issued from the recovery (transient) session ---
 if (recovered) {
-  const transientRecovery: TransientSession = { ...recovered.session, email }
+  const transientRecovery: TransientSession = { ...recovered.session, email, coupon }
   const issuedAgain = await time('issue a recovery code (ladder branch)', () => issueRecoveryCode({ session: transientRecovery, label: 'Second code' }))
   const recoveredAgain = await time('second code login', () => recoverWithCode({ code: issuedAgain.code, serverUrl: WAS }))
   check('the second code opens the account', recoveredAgain?.session.did === session.did)

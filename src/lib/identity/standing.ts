@@ -103,6 +103,7 @@ export async function addStandingCredential({
   credential,
   lowEntropy,
   email,
+  coupon = session.coupon,
 }: {
   session: TransientSession
   credential: UnlockCredential
@@ -110,6 +111,9 @@ export async function addStandingCredential({
   // passkey's PRF-derived key publishes verbatim
   lowEntropy: boolean
   email?: string
+  // The coupon the new credential's unlock Space is created with: the
+  // session's (the registration token) unless given
+  coupon?: string
 }): Promise<EstablishedCredential> {
   const acting = await actingAuthority(session)
   const { standing } = credential
@@ -132,6 +136,7 @@ export async function addStandingCredential({
   const bound = await bindStandingRecord({
     credential,
     serverUrl: session.serverUrl,
+    coupon,
     controller: boundAgent.id.split('#')[0],
     email,
     pointer,
