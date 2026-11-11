@@ -1,5 +1,6 @@
-import { WasClient } from '@interop/was-client'
-import type { DocCipher } from '@interop/was-client/edv/cipher'
+import { PwsClient } from '@interop/pws-client'
+import { baseServerUrlOf, spaceIdOfUrl, spaceUrlById } from '@interop/pws-client/paths/layout'
+import type { DocCipher } from '@interop/pws-client/edv/cipher'
 import { resolveDIDFromLog, readLogFromString } from '@interop/did-method-webvh'
 import { webvhSigner } from '@interop/wallet-core/webvh'
 import {
@@ -72,11 +73,22 @@ export function openPassphrase(passphrase: string): Promise<UnlockIdentity> {
 // The URL of an unlock space on its server, the capability's target.
 export const unlockSpaceUrl = (serverUrl: string, spaceId: string) => `${serverUrl}/space/${spaceId}/`
 
-async function unlockClient(unlock: UnlockIdentity, serverUrl: string): Promise<WasClient> {
-  return WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: unlock.agent.getSigner(), serviceDescription: await serviceDescriptionFor(serverUrl) })
+// The account pointer a keyring record carries (wallet-core 0.113 names the
+// Main Space by its canonical URL), and the server and Space id it names,
+// in the forms the session keeps (no trailing slash on the server URL).
+export function pointerOf({ serverUrl, spaceId, did }: { serverUrl: string; spaceId: string; did: string }): AccountPointer {
+  return { did, spaceUrl: spaceUrlById({ baseServerUrl: serverUrl, spaceId }) }
 }
 
-const keyringOf = (was: WasClient, spaceId: string, capability?: IZcap) =>
+export function pointerLocation(pointer: AccountPointer): { serverUrl: string; spaceId: string } {
+  return { serverUrl: baseServerUrlOf(pointer.spaceUrl).replace(/\/+$/, ''), spaceId: spaceIdOfUrl(pointer.spaceUrl) }
+}
+
+async function unlockClient(unlock: UnlockIdentity, serverUrl: string): Promise<PwsClient> {
+  return PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: unlock.agent.getSigner(), serviceDescription: await serviceDescriptionFor(serverUrl) })
+}
+
+const keyringOf = (was: PwsClient, spaceId: string, capability?: IZcap) =>
   was.space(spaceId, capability ? { capability } : undefined).collection(KEYRING, { encryption: 'plaintext' })
 
 const bytes = (record: unknown) => new TextEncoder().encode(JSON.stringify(record))
@@ -138,9 +150,9 @@ export async function bindCredential({
     throw new Error('The account pointer names no DID.')
   }
   const serviceDescription = await serviceDescriptionFor(serverUrl)
-  await ensureUnlockSpace({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
+  await ensureUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   const record = await wrapKeyringRecord({ controller, email, pointer, keyAgreementKey: unlock.keyAgreementKey, signer: unlock.recordSigner })
-  await putUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
+  await putUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
 
   const encryption = await mintRecordEncryption({ keyAgreementKey: unlock.keyAgreementKey })
   const cipher = await recordSealCipher({ encryption, collectionId: KEYS_LABEL })
@@ -155,7 +167,8 @@ export async function bindCredential({
 // The key-agreement keys the account document lists right now, read from
 // the log the Main Space serves publicly: what the roster's user key must be.
 async function accountKeyAgreementKeys(pointer: AccountPointer): Promise<string[]> {
-  const response = await fetch(`${pointer.host}/space/${pointer.spaceId}/id/did.jsonl`)
+  const { serverUrl, spaceId } = pointerLocation(pointer)
+  const response = await fetch(`${serverUrl}/space/${spaceId}/id/did.jsonl`)
   if (!response.ok) {
     throw new Error(`The account log could not be read (${response.status}).`)
   }
@@ -189,7 +202,7 @@ export async function readCredential({
   unlock: UnlockIdentity
   serverUrl: string
 }): Promise<{ contents: KeyringRecordContents; keys: UnlockedKeys } | null> {
-  const record = await getUnlockKeyring({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl), spaceId: unlock.spaceId })
+  const record = await getUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl), spaceId: unlock.spaceId })
   if (record === null) {
     return null
   }
@@ -222,12 +235,13 @@ export async function readCredential({
 
   // The user key, from the account's roster, read as the account
   const agents = await signingAgents(credential.signingSeed)
-  const was = await WasClient.fromSigner({
-    serverUrl: `${pointer.host}/spaces/`,
+  const account = pointerLocation(pointer)
+  const was = await PwsClient.fromSigner({
+    baseServerUrl: account.serverUrl,
     signer: webvhSigner({ keyAgent: agents.keyAgent, did: pointer.did }),
-    serviceDescription: await serviceDescriptionFor(pointer.host),
+    serviceDescription: await serviceDescriptionFor(account.serverUrl),
   })
-  const roster = await readRoster({ was, spaceId: pointer.spaceId })
+  const roster = await readRoster({ was, spaceId: account.spaceId })
   if (!roster) {
     throw new Error('The account has no user-key roster.')
   }
@@ -256,7 +270,7 @@ export async function retireCredentialRecords({
   spaceId: string
   capability: IZcap
 }): Promise<{ retired: boolean }> {
-  const was = new WasClient({ serverUrl: `${serverUrl}/spaces/`, zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl) })
+  const was = new PwsClient({ baseServerUrl: serverUrl, zcapClient, serviceDescription: await serviceDescriptionFor(serverUrl) })
   const keyring = keyringOf(was, spaceId, capability)
   if (!(await keyring.resource(POINTER_RESOURCE).getWithEtag())) {
     return { retired: false }

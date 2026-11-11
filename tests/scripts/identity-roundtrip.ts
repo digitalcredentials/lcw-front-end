@@ -9,13 +9,13 @@
 //   WAS_URL=https://was.lcw-sandbox.org COUPON=... ID_DOMAIN=id.lcw-sandbox.org \
 //     npx tsx tests/scripts/identity-roundtrip.ts
 import '@interop/http-client'
-import { WasClient } from '@interop/was-client'
-import { ensureFirstEpoch, ownerRecipient, resolveEpochKeys } from '@interop/was-client/edv'
-import type { CollectionEncryption } from '@interop/was-client'
+import { PwsClient } from '@interop/pws-client'
+import { ensureFirstEpoch, ownerRecipient, resolveEpochKeys } from '@interop/pws-client/edv'
+import type { CollectionEncryption } from '@interop/pws-client'
 import { resolveDID } from '@interop/did-method-webvh'
 import { createAccountLog, publishAccountLog, promoteSpace } from '../../src/lib/identity/account'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed } from '../../src/lib/identity/keys'
-import { bindCredential, openPassphrase, readCredential } from '../../src/lib/identity/unlock'
+import { bindCredential, openPassphrase, pointerLocation, pointerOf, readCredential } from '../../src/lib/identity/unlock'
 import { addCredential, addRosterRecipient, catalogueCredential, leaveAccount, listCredentials, pruneCredentials, readRoster, recipientOf, removeCredential, browserUnlock } from '../../src/lib/identity'
 import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
 import { randomBytes } from '../../src/lib/identity/bytes'
@@ -55,7 +55,7 @@ const created = await agents.zcapClient.request({
 const spaceId = (created.data as { id: string }).id
 check('scratch Main Space created under the signing did:key', created.status === 201, spaceId)
 
-const was = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: agents.keyAgent.getSigner() })
+const was = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: agents.keyAgent.getSigner() })
 const updateKey = await updateKeyFromSeed(credential.updateSeed)
 const { did, jsonl } = await createAccountLog({
   idDomain,
@@ -77,16 +77,16 @@ const promotion = await promoteSpace({ was, spaceId, did, name: 'Roundtrip' })
 check('the Main Space is promoted to the did:webvh', promotion === 'promoted', promotion)
 
 const unlock = await openPassphrase(passphrase)
-const { capability } = await bindCredential({ unlock, serverUrl, controller, email, pointer: { did, spaceId, host: serverUrl }, credential })
+const { capability } = await bindCredential({ unlock, serverUrl, controller, email, pointer: pointerOf({ did, spaceId, serverUrl }), credential })
 check('the passphrase is bound (unlock space, pointer and keys records, capability)', Boolean(capability), unlock.spaceId)
 const asAccountEarly = (await sessionAgents({ email, did, controller, serverUrl, spaceId, signingSeed: credential.signingSeed, userKey })).asAccount
-await addRosterRecipient({ was: await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccountEarly.signer }), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
-check('the user-key roster names the passphrase as its one recipient', (await readRoster({ was: await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccountEarly.signer }), spaceId }))?.roster.recipients.length === 1)
+await addRosterRecipient({ was: await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccountEarly.signer }), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
+check('the user-key roster names the passphrase as its one recipient', (await readRoster({ was: await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccountEarly.signer }), spaceId }))?.roster.recipients.length === 1)
 
 // --- open the account from the passphrase alone, as loginWithPassphrase does
 const reopened = await readCredential({ unlock: await openPassphrase(passphrase), serverUrl })
 check('the credential opens', reopened !== null)
-check('the pointer names the account', reopened?.contents.pointer?.did === did && reopened?.contents.pointer?.spaceId === spaceId)
+check('the pointer names the account', reopened?.contents.pointer?.did === did && reopened?.contents.pointer !== undefined && pointerLocation(reopened.contents.pointer).spaceId === spaceId)
 check('the pointer carries the email', reopened?.contents.email === email)
 check('the signing seed round-trips', Buffer.from(reopened!.keys.credential.signingSeed).equals(Buffer.from(credential.signingSeed)))
 check('the user key round-trips', reopened!.keys.userKey.id === userKey.id && Buffer.from(reopened!.keys.userKey.secret).equals(Buffer.from(userKey.secret)))
@@ -105,7 +105,7 @@ const session: Session = {
 }
 await catalogueCredential({ session, keys: credential, kind: 'passphrase', unlock, capability })
 const { asAccount } = await sessionAgents(session)
-const asAccountClient = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccount.signer, encryption: sessionEncryption(session) })
+const asAccountClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount.signer, encryption: sessionEncryption(session) })
 const space = asAccountClient.space(spaceId)
 check('the session reads the promoted Space as the account', (await space.describe())?.controller === did)
 const vault = await space.createCollection({ id: 'vault', encryption: { scheme: 'edv' } })
@@ -128,7 +128,7 @@ check('the passkey credential opens to the same account and user key', reopenedP
 check('the roster now names both credentials', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 2)
 const passkeySession: Session = { ...session, controller: passkeyAgents.controllerDid, signingSeed: passkeyKeys.signingSeed }
 const { asAccount: asAccount2 } = await sessionAgents(passkeySession)
-const asPasskeyClient = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccount2.signer, encryption: sessionEncryption(passkeySession) })
+const asPasskeyClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount2.signer, encryption: sessionEncryption(passkeySession) })
 check("the passkey's key reads the Space as the account", (await asPasskeyClient.space(spaceId).describe())?.controller === did)
 const backAsPasskey = (await asPasskeyClient.space(spaceId).collection('vault').get(added.id)) as { hello?: string } | null
 check('the passkey session decrypts what the passphrase session wrote', backAsPasskey?.hello === 'world')
@@ -157,7 +157,7 @@ check('the vault has a fresh epoch and no epoch names the old user key', epochs.
 check('every epoch names the new user key', epochs.length > 0 && epochs.every((epoch) => epoch.recipients.some((entry) => entry.header.kid === newKid)))
 const oldResolves = vaultDescriptor ? await resolveEpochKeys({ encryption: vaultDescriptor, keyAgreementKey: userKeyVaultKeys({ userKey: session.userKey }).keyAgreementKey }).catch(() => null) : null
 check('the old user key resolves no epoch key', oldResolves === null, oldResolves ? 'still unwraps' : undefined)
-const rotatedClient = await WasClient.fromSigner({ serverUrl: `${serverUrl}/spaces/`, signer: asAccount.signer, encryption: sessionEncryption(rotated) })
+const rotatedClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount.signer, encryption: sessionEncryption(rotated) })
 const oldRecord = (await rotatedClient.space(spaceId).collection('vault').get(added.id)) as { hello?: string } | null
 check('the new user key still reads the record written before the rotation', oldRecord?.hello === 'world')
 const addedAfter = await rotatedClient.space(spaceId).collection('vault').add({ hello: 'again' })
@@ -186,8 +186,8 @@ check('the document lists the passphrase alone again', ((afterPrune.didDocument 
 // --- clean up -----------------------------------------------------------------
 const gone = await space.deleteWithOutcome()
 check('scratch Main Space deleted', gone.outcome === 'deleted')
-const unlockGone = await deleteUnlockSpace({ storageServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
+const unlockGone = await deleteUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
 check('unlock space deleted', unlockGone.outcome === 'deleted')
-const passkeyUnlockGone = await deleteUnlockSpace({ storageServerUrl: serverUrl, zcapClient: passkeyUnlock.zcapClient, spaceId: passkeyUnlock.spaceId })
+const passkeyUnlockGone = await deleteUnlockSpace({ baseServerUrl: serverUrl, zcapClient: passkeyUnlock.zcapClient, spaceId: passkeyUnlock.spaceId })
 check('the emptied passkey unlock space deleted', passkeyUnlockGone.outcome === 'deleted')
 process.exit(failures ? 1 : 0)

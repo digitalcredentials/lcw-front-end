@@ -1,4 +1,4 @@
-import { discoverService, type ServiceDescription } from '@interop/was-client'
+import { discoverService, type ServiceDescription } from '@interop/pws-client'
 
 // The PWS server's service description, discovered once per server: a
 // client reads it before its first signed request, and a sign-in builds

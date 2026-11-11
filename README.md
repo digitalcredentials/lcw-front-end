@@ -126,7 +126,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   whose type array carries `BatchSpace` is a batch space: its card asks
   whether to open the batch view or the standard space view.
 - **Space browser**: a space's collections and resources through
-  [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client),
+  [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client),
   signing every request with the account's signing key. Collections and credentials are
   cards; a collection's display name and description come from its `/meta`
   sub-resource (`collectionDisplay` in `src/lib/edv.ts`, with the description
@@ -143,10 +143,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   Every state that waits on the network shows a `LoadingLabel` with a spinner
   and a message rather than a placeholder.
 - **End-to-end encryption** (`src/lib/edv.ts`): collections the wallet
-  creates — credential collections, `dids`, `Trash` — carry the was-client's
+  creates — credential collections, `dids`, `Trash` — carry the pws-client's
   `encryption: { scheme: 'edv' }` descriptor. The session's Ed25519 key is
   converted to an X25519 key-agreement key, the collection's first key epoch
-  is wrapped to it (`ensureFirstEpoch`), and the was-client encrypts on write
+  is wrapped to it (`ensureFirstEpoch`), and the pws-client encrypts on write
   and decrypts on read: resources are JWE envelopes (XChaCha20-Poly1305
   content, per-recipient ECDH-ES+A256KW), `/meta` customs are encrypted the
   same way, and encrypted collections mint opaque resource ids (`add()`)
@@ -154,7 +154,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   re-encrypts the body into `Trash` under `Trash`'s own epoch before the
   permanent delete. Only the account's user key can decrypt, and whichever
   credential opened the session unwrapped it. The client is
-  `@interop/was-client` 0.98, which speaks WAS v0.5 and reads the server's
+  `@interop/pws-client` 0.106 (the renamed was-client), which speaks PWS v0.5 and reads the server's
   service description before its first request.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
@@ -186,7 +186,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   folder per collection inside it, each document under its resource id with
   a `manifest.json` first (the spaces, collections and counts, and any
   document left out). Each space is read through the PWS server's Export
-  Space operation (`POST /space/{id}/export`, the was-client's
+  Space operation (`POST /space/{id}/export`, the pws-client's
   `space.export()`), which answers the Space as a Space archive; the wallet
   reads the archive with `@interop/space-archive` and decrypts each
   encrypted collection's envelopes with the user key and the collection's

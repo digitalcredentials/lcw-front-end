@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import type { WasClient } from '@interop/was-client';
+import type { PwsClient } from '@interop/pws-client';
 import type { SpaceInfo } from '../lib/spaces';
 
 // What the wallet supplies to every plugin. A plugin is a React component
@@ -9,7 +9,7 @@ import type { SpaceInfo } from '../lib/spaces';
 // that plugin's registry entry (see batchIssuerPlugin.ts), not added here.
 export interface WalletHost {
   // The signed-in session's WAS client; null when the session is gone.
-  getSession(): Promise<{ client: WasClient } | null>;
+  getSession(): Promise<{ client: PwsClient } | null>;
   // The WAS server's /spaces API, authenticated as the session's DID.
   spaces: {
     create(type: 'credential' | 'batch', name: string): Promise<string>;

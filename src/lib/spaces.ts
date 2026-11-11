@@ -2,8 +2,8 @@ import type { ZcapClient } from '@interop/ezcap'
 import { getCoupon } from './auth'
 import { getSession, sessionAgents } from './identity/session'
 import { promoteSpace } from './identity/account'
-import { WasClient } from '@interop/was-client'
-import { getSessionWASClientFor, spacesUrlOf } from './was'
+import { PwsClient } from '@interop/pws-client'
+import { getSessionWASClientFor } from './was'
 
 // The WAS server's Spaces Repository (Wallet Attached Storage v0.5):
 // POST /spaces/ provisions a Space, GET /spaces/ lists the caller's, and
@@ -81,7 +81,7 @@ export async function createSpace(type: 'credential' | 'batch', name: string): P
     },
   })
   const { id } = response.data as { id: string }
-  const was = await WasClient.fromSigner({ serverUrl: spacesUrlOf(session.serverUrl), signer: asKey.signer })
+  const was = await PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer: asKey.signer })
   await promoteSpace({ was, spaceId: id, did: session.did, name })
   return spaceInfo({ id }).url
 }
@@ -123,7 +123,7 @@ export async function deleteSpace(spaceUrl: string): Promise<void> {
 
 // Replaces the writable fields of a Space's metadata object (its name and
 // description) under If-Match, keeping everything else the object holds.
-// The was-client's configure() carries only name/controller/type, so the
+// The pws-client's configure() carries only name/controller/type, so the
 // description goes through a request of its own.
 export async function updateSpaceMeta(
   spaceUrl: string,
@@ -150,7 +150,7 @@ export async function updateSpaceMeta(
     }
   }
   await s.client.request({
-    path: `/space/${s.spaceId}/meta`,
+    url: `${spaceUrl.replace(/\/+$/, '')}/meta`,
     method: 'PUT',
     json: document,
     headers: current.etag ? { 'if-match': current.etag } : undefined,

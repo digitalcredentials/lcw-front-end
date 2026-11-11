@@ -1,12 +1,12 @@
-import { ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
-import type { Collection, ResourceData, Space } from '@interop/was-client'
+import { ensureFirstEpoch, ownerRecipient } from '@interop/pws-client/edv'
+import type { Collection, ResourceData, Space } from '@interop/pws-client'
 import { getSession, sessionKeyAgreementKey } from './identity/session'
 import { CollectionExistsError } from './errors'
 
 // EDV-over-WAS (end-to-end encryption) support: collections declared with an
 // `encryption: { scheme: 'edv' }` descriptor store JWE envelopes the server
 // cannot read, and the ordinary collection handles encrypt on write and
-// decrypt on read (the was-client pass-through model).
+// decrypt on read (the pws-client pass-through model).
 //
 // The recipient of every encrypted collection is the account's user key,
 // which whichever credential opened the session unwrapped
@@ -53,7 +53,7 @@ export async function ensureEncryptedCollection({
     collection,
     recipients: [ownerRecipient({ keyAgreementKey })],
   })
-  encryptedState.set(`${collection.spaceId}/${collection.id}`, true)
+  encryptedState.set(`${collection.spaceUrl}${collection.id}`, true)
   if (!described && name) {
     await collection.setMeta({
       custom: { name, ...(description && { tags: { description } }) },
@@ -95,7 +95,7 @@ export async function collectionDisplay(
 const encryptedState = new Map<string, boolean>()
 
 export async function isEncryptedCollection(collection: Collection): Promise<boolean> {
-  const key = `${collection.spaceId}/${collection.id}`
+  const key = `${collection.spaceUrl}${collection.id}`
   const cached = encryptedState.get(key)
   if (cached !== undefined) {
     return cached

@@ -4,7 +4,7 @@ import '@interop/http-client';
 import { packSpaceArchive, collectBytes, fileNameFor, collectionMetadataFileName, spaceMetadataFileName } from '@interop/space-archive';
 import { packTar } from '../src/lib/tar';
 import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key';
-import { createEdvDocCipher, initRecipients, ownerRecipient, mintEpoch, epochKeyIdFor } from '@interop/was-client/edv';
+import { createEdvDocCipher, initRecipients, ownerRecipient, mintEpoch, epochKeyIdFor } from '@interop/pws-client/edv';
 import { readArchivedSpace, packDataExport, exportedCollections, safeName, extensionFor, EXCLUDED_COLLECTIONS } from '../src/lib/dataExport';
 
 // Node-side unit assertions over the data export's pure parts: the tar
@@ -186,7 +186,7 @@ test('exportedCollections decrypts an encrypted collection with the user key and
   async function userKeys() {
     const { epochId, secret } = await mintEpoch();
     const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) });
-    // was-client's singleKeyResolver (its identity module cannot load here)
+    // pws-client's singleKeyResolver (its identity module cannot load here)
     const keyResolver = async ({ id }: { id?: string }) => {
       if (id !== keyAgreementKey.id) {
         throw new Error(`Unknown key id "${id}".`);
