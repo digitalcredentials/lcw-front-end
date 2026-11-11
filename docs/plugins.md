@@ -39,11 +39,11 @@ so `<my-element credential={object} />` works with no ref.
 ## 2. What the wallet supplies: `WalletHost`
 
 ```ts
-import type { WasClient } from '@interop/was-client';
+import type { PwsClient } from '@interop/pws-client';
 
 export interface WalletHost {
   // The signed-in session's WAS client; null when the session is gone.
-  getSession(): Promise<{ client: WasClient } | null>;
+  getSession(): Promise<{ client: PwsClient } | null>;
   // The WAS server's /spaces API, authenticated as the session's DID.
   spaces: {
     create(type: 'credential' | 'batch', name: string): Promise<string>; // resolves to the new space URL
@@ -64,7 +64,7 @@ Rules that follow from it:
 - **Session.** Call `host.getSession()` when you need the WAS client; do not
   cache the client across user actions, because it is `null` once the session
   ends. Through it you reach the user's spaces and collections with the
-  [`@interop/was-client`](https://www.npmjs.com/package/@interop/was-client)
+  [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client)
   API (`client.space(id).collection(name).get/put/add/list…`). Collections
   the wallet created are end-to-end encrypted; the client decrypts and
   encrypts transparently, so a plugin reads and writes plain objects.
@@ -112,10 +112,10 @@ declarations (`dist/index.d.ts`), declared in `package.json`:
 ```
 
 **Shared dependencies stay external.** The wallet already bundles React,
-ReactDOM and `@interop/was-client`; a second copy of React breaks hooks, and
-a second was-client cannot share the session. Declare them as
+ReactDOM and `@interop/pws-client`; a second copy of React breaks hooks, and
+a second pws-client cannot share the session. Declare them as
 `peerDependencies` and mark them `external` in your bundler
-(`rollupOptions.external: [/^react($|\/)/, /^react-dom($|\/)/, '@interop/was-client']`).
+(`rollupOptions.external: [/^react($|\/)/, /^react-dom($|\/)/, '@interop/pws-client']`).
 A library that nothing in the wallet shares — a verification library, a CSV
 parser, a QR encoder — may be bundled in or listed as a regular dependency,
 either works. If two copies of a library would be wrong (one of them holds
@@ -240,7 +240,7 @@ Then `plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin]` in
 
 - [ ] ES module build at `dist/index.js` with `dist/index.d.ts`; `exports`
       and `files` set as in section 3.
-- [ ] `react`, `react-dom` (and `@interop/was-client` if used) are
+- [ ] `react`, `react-dom` (and `@interop/pws-client` if used) are
       `peerDependencies` and external in the bundle; everything else bundled
       or a regular dependency.
 - [ ] No reads of `import.meta.env`, `localStorage`, or the router; all

@@ -1,5 +1,5 @@
-import { WasClient, type Resource } from '@interop/was-client'
-import type { DocCipher } from '@interop/was-client/edv/cipher'
+import { PwsClient, type Resource } from '@interop/pws-client'
+import type { DocCipher } from '@interop/pws-client/edv/cipher'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import {
   mintRecordEncryption,
@@ -61,7 +61,7 @@ const empty = (): Catalogue => ({ version: 1, credentials: {} })
 
 async function catalogueResource(session: Session): Promise<Resource> {
   const { asAccount } = await sessionAgents(session)
-  const was = await WasClient.fromSigner({ serverUrl: `${session.serverUrl}/spaces/`, signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
+  const was = await PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
   return was.space(session.spaceId).collection(COLLECTION, { encryption: 'plaintext' }).resource(RESOURCE)
 }
 

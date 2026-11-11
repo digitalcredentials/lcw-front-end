@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 //
 //   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 //
-// They use the deployed demo account, seeded by tests/scripts/seed-demo.mjs
+// They use the deployed demo account, seeded by `npm run seed:demo` (tests/scripts/seed-demo.ts)
 // (a UniversityOfToronto collection holding the LCW Experience Badge), and
 // only read it -- the batch test creates and deletes a space of its own.
 

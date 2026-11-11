@@ -1,5 +1,5 @@
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
-import { agentsFromSeed, type ProfileAgents } from '@interop/was-client/identity'
+import { agentsFromSeed, type ProfileAgents } from '@interop/pws-client/identity'
 import { mintUserKey, userKeyVaultKeys, type UserKey } from '@interop/wallet-core/keys'
 import { signerFromDidKeySigner, type Signer } from '@interop/did-method-webvh'
 import { randomBytes } from './bytes'

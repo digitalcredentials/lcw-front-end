@@ -13,8 +13,8 @@
 // deployed tests' passphrase), API_BASE and WAS_URL (default to the sandbox).
 import '@interop/http-client'
 import { readFileSync } from 'node:fs'
-import { WasClient } from '@interop/was-client'
-import { ensureFirstEpoch, ownerRecipient } from '@interop/was-client/edv'
+import { PwsClient } from '@interop/pws-client'
+import { ensureFirstEpoch, ownerRecipient } from '@interop/pws-client/edv'
 import { loginWithPassphrase, sessionAgents, sessionEncryption, sessionKeyAgreementKey } from '../../src/lib/identity'
 
 const email = process.env.DEMO_EMAIL
@@ -36,8 +36,8 @@ const session = await loginWithPassphrase({
 console.log(`space ${session.serverUrl}/space/${session.spaceId} (${session.did})`)
 
 const { asAccount } = await sessionAgents(session)
-const was = await WasClient.fromSigner({
-  serverUrl: `${session.serverUrl}/spaces/`,
+const was = await PwsClient.fromSigner({
+  baseServerUrl: session.serverUrl,
   signer: asAccount.signer,
   encryption: sessionEncryption(session),
 })

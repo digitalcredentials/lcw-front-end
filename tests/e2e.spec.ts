@@ -2,7 +2,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
-import { WasClient, type ResourceData } from '@interop/was-client';
+import { PwsClient, type ResourceData } from '@interop/pws-client';
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
 import { removePublicCopy } from '../src/lib/publicCopy';
 
@@ -329,7 +329,7 @@ async function deriveKeyPair(passphrase: string) {
 
 async function demoSpace() {
   const keyPair = await deriveKeyPair(DEMO_PASSPHRASE);
-  const client = await WasClient.fromSigner({ serverUrl: 'http://localhost:3000', signer: keyPair.signer() });
+  const client = await PwsClient.fromSigner({ baseServerUrl: 'http://localhost:3000', signer: keyPair.signer() });
   return client.space(DEMO_SPACE_ID);
 }
 

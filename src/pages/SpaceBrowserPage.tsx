@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/was-client';
+import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/pws-client';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';

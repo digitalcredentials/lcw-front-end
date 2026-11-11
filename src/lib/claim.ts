@@ -6,7 +6,7 @@ import { getSessionWASClient, getSessionWASClientFor } from './was'
 import { ensureEncryptedCollection, writeResource } from './edv'
 import { IssuerError, PlainError, outsideText } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
-import type { ResourceData } from '@interop/was-client'
+import type { ResourceData } from '@interop/pws-client'
 
 const documentLoader = securityLoader().build()
 

@@ -1,4 +1,4 @@
-import { createEdvEncryption } from '@interop/was-client/edv'
+import { createEdvEncryption } from '@interop/pws-client/edv'
 import { webvhSigner, didKeyZcapClient, webvhZcapClient } from '@interop/wallet-core/webvh'
 import type { ZcapClient } from '@interop/ezcap'
 import { fromBase64url, toBase64url } from './bytes'
@@ -102,7 +102,7 @@ export async function sessionAgents(session: Session): Promise<{
   }
 }
 
-// The encryption provider for a was-client: the user key is the recipient
+// The encryption provider for a pws-client: the user key is the recipient
 // of every encrypted collection, whichever credential opened the session.
 export function sessionEncryption(session: Session) {
   const { keyAgreementKey, keyResolver } = userKeyVaultKeys({ userKey: session.userKey })
@@ -114,7 +114,7 @@ export function sessionKeyAgreementKey(session: Session) {
 }
 
 // The user key as a reader's key material (its key-agreement key and the
-// resolver that finds it), for decrypting an envelope outside a was-client
+// resolver that finds it), for decrypting an envelope outside a pws-client
 // handle, such as one read from a Space archive.
 export function sessionVaultKeys(session: Session) {
   const { keyAgreementKey, keyResolver } = userKeyVaultKeys({ userKey: session.userKey })

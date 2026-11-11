@@ -1,4 +1,4 @@
-// Requests fail with whatever threw: the WAS client (a WasError subclass
+// Requests fail with whatever threw: the WAS client (a PwsError subclass
 // carrying `status` and `type`), the signed-request HTTP client (`status` on
 // the error itself), the browser's fetch (a TypeError), or a plain Error.
 // None of those messages mean anything to a learner, and some carry a URL or a
@@ -195,7 +195,7 @@ function serviceFor(action: WalletAction, error: unknown): string | null {
   if (name === 'IssuerError') {
     return 'The issuer'
   }
-  // A claim's storage writes fail as WasErrors; a bare fetch TypeError there
+  // A claim's storage writes fail as PwsErrors; a bare fetch TypeError there
   // came from something else it looked up (a context, a DID), so stays unnamed
   if (action === 'claim' && name === 'TypeError') {
     return null
@@ -223,7 +223,7 @@ function isCameraUnavailable(error: unknown): boolean {
 
 // No answer from the server at all: the browser's fetch failure ("Failed to
 // fetch", Safari's "Load failed", Firefox's "NetworkError…"), which the WAS
-// client wraps in a status-less WasError keeping its message and an
+// client wraps in a status-less PwsError keeping its message and an
 // IssuerError keeps as its cause, or the HTTP client's timeout. Matched by
 // message, not by the TypeError class, which
 // the wallet's own bugs throw too. The browser reports a server error sent
@@ -238,7 +238,7 @@ function isUnreachable(error: unknown): boolean {
 // A server fault (5xx): the storage server answered, but with an error.
 function isServerFault(error: unknown): boolean {
   const { status, name } = readFailure(error)
-  return (status !== undefined && status >= 500) || name === 'WasServerError'
+  return (status !== undefined && status >= 500) || name === 'PwsServerError'
 }
 
 // The technical text behind a failure, for the details toggle and the

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { Collection } from '@interop/was-client';
+import type { Collection } from '@interop/pws-client';
 import {
   createPublicCopy,
   findPublicCopy,

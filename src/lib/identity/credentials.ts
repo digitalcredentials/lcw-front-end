@@ -1,5 +1,5 @@
 import { readLogFromString, resolveDIDFromLog, updateDID, deriveNextKeyHash, logToJsonlString, type DIDLog } from '@interop/did-method-webvh'
-import type { WasClient } from '@interop/was-client'
+import type { PwsClient } from '@interop/pws-client'
 import { multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys } from './keys'
 import { publishProjection } from './account'
 
@@ -58,7 +58,7 @@ function relativeIds(doc: Doc, relation: string): string[] {
 const bare = (key: string) => key.replace(/^did:key:/, '')
 
 // The account log, read with its validator for a compare-and-swap write.
-export async function readAccountLog({ was, spaceId }: { was: WasClient; spaceId: string }): Promise<{ log: DIDLog; etag?: string }> {
+export async function readAccountLog({ was, spaceId }: { was: PwsClient; spaceId: string }): Promise<{ log: DIDLog; etag?: string }> {
   const resource = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' }).resource(LOG_RESOURCE)
   const read = await resource.getWithEtag()
   if (!read) {
@@ -145,7 +145,7 @@ export async function addCredentialToLog({
   added,
 }: {
   // A client that may write the Space's id collection (signed as the account)
-  was: WasClient
+  was: PwsClient
   spaceId: string
   did: string
   // The acting credential's keys; only its update seed is used
@@ -212,7 +212,7 @@ export async function removeCredentialFromLog({
   removed,
   userKey,
 }: {
-  was: WasClient
+  was: PwsClient
   spaceId: string
   did: string
   acting: Pick<CredentialKeys, 'updateSeed'>

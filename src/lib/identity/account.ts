@@ -1,6 +1,6 @@
 import { createDID, deriveNextKeyHash, generateParallelDidWeb, logToJsonlString, readLogFromString, resolveDIDFromLog, type DIDLog } from '@interop/did-method-webvh'
 import { ensurePromotedSpaceController } from '@interop/wallet-core/genesis'
-import type { WasClient } from '@interop/was-client'
+import type { PwsClient } from '@interop/pws-client'
 import type { UpdateKey } from './keys'
 
 // The account's did:webvh: its log lives in the Main Space's world-readable
@@ -56,7 +56,7 @@ export async function projectionOf(log: DIDLog): Promise<Record<string, unknown>
 // Writes the projection of `log` into the Space's `id` collection, beside
 // the log. Called after every log write; a projection older than the log
 // only lacks the latest keys until the next write, so it is best effort.
-export async function publishProjection({ was, spaceId, log }: { was: WasClient; spaceId: string; log: DIDLog }): Promise<void> {
+export async function publishProjection({ was, spaceId, log }: { was: PwsClient; spaceId: string; log: DIDLog }): Promise<void> {
   const doc = await projectionOf(log)
   await was
     .space(spaceId)
@@ -68,7 +68,7 @@ export async function publishProjection({ was, spaceId, log }: { was: WasClient;
 // Writes the projection when the Space's differs from the log's current
 // document (an account created before projections were published, or a
 // projection a failed write left behind). Resolves to whether one was written.
-export async function ensureProjection({ was, spaceId }: { was: WasClient; spaceId: string }): Promise<boolean> {
+export async function ensureProjection({ was, spaceId }: { was: PwsClient; spaceId: string }): Promise<boolean> {
   const id = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' })
   const read = await id.resource(LOG_RESOURCE).getWithEtag()
   if (!read) {
@@ -130,7 +130,7 @@ export async function createAccountLog({
 // collection and makes that collection world-readable, which is what lets
 // the identity domain serve them to resolvers. `was` signs as the Space's
 // current controller.
-export async function publishAccountLog({ was, spaceId, jsonl }: { was: WasClient; spaceId: string; jsonl: string }): Promise<void> {
+export async function publishAccountLog({ was, spaceId, jsonl }: { was: PwsClient; spaceId: string; jsonl: string }): Promise<void> {
   const id = was.space(spaceId).collection(ID_COLLECTION, { encryption: 'plaintext' })
   await id.resource(LOG_RESOURCE).put(new TextEncoder().encode(jsonl), { contentType: 'text/jsonl' })
   await publishProjection({ was, spaceId, log: readLogFromString(jsonl) })
@@ -140,6 +140,6 @@ export async function publishAccountLog({ was, spaceId, jsonl }: { was: WasClien
 // Moves the Space's controller from the signing did:key to the did:webvh.
 // Signed by the did:key, which the server accepts because the document
 // lists that key. From then on requests to the Space sign as the account.
-export function promoteSpace({ was, spaceId, did, name }: { was: WasClient; spaceId: string; did: string; name: string }) {
-  return ensurePromotedSpaceController({ was, wasAsClient: was, spaceId, did, name })
+export function promoteSpace({ was, spaceId, did, name }: { was: PwsClient; spaceId: string; did: string; name: string }) {
+  return ensurePromotedSpaceController({ pws: was, pwsAsClient: was, spaceId, did, name })
 }

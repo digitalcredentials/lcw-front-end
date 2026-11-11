@@ -1,6 +1,6 @@
 import type { IKeyAgreementKey, IKeyResolver } from '@interop/data-integrity-core'
-import type { CollectionEncryption } from '@interop/was-client'
-import { createEdvDocCipher } from '@interop/was-client/edv'
+import type { CollectionEncryption } from '@interop/pws-client'
+import { createEdvDocCipher } from '@interop/pws-client/edv'
 import {
   readSpaceArchive,
   parseArchivePath,

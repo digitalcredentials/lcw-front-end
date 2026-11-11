@@ -1,5 +1,5 @@
-import { WasClient } from '@interop/was-client'
-import { collectionDescriptorStore, ownerRecipient, replaceRecipient } from '@interop/was-client/edv'
+import { PwsClient } from '@interop/pws-client'
+import { collectionDescriptorStore, ownerRecipient, replaceRecipient } from '@interop/pws-client/edv'
 import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
 import { userKeyVaultKeys } from '@interop/wallet-core/keys'
 import { webvhZcapClient } from '@interop/wallet-core/webvh'
@@ -9,7 +9,7 @@ import { readCatalogue, updateCatalogue, type CatalogueEntry, type CredentialKin
 import { RECOVERY_KDF, mintRecoveryCode, recoverySecretOf } from './recoveryCode'
 import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys, type UserKey } from './keys'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
-import { bindCredential, openPassphrase, readCredential, retireCredentialRecords, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
+import { bindCredential, openPassphrase, pointerLocation, pointerOf, readCredential, retireCredentialRecords, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
 import { addRosterRecipient, readRoster, recipientOf, unlockKeyAgreementKeyOf, wrapUserKey, writeRoster } from './roster'
 import { sessionAgents, type Session } from './session'
 import { browserLabel, browserUnlock, forgetStoredBrowserCredential, storeBrowserCredential, storedBrowserCredential } from './browser'
@@ -39,9 +39,9 @@ interface ErrorBody {
   error?: string
 }
 
-async function accountClient(session: Session): Promise<WasClient> {
+async function accountClient(session: Session): Promise<PwsClient> {
   const { asAccount } = await sessionAgents(session)
-  return WasClient.fromSigner({ serverUrl: spacesUrl(session.serverUrl), signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
+  return PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
 }
 
 // Records a credential in the account's catalogue (catalogue.ts).
@@ -108,7 +108,7 @@ export async function registerAccount({
     json: { controller, name: MAIN_SPACE_NAME, type: ['Space'], coupon: registrationCode },
   })
   const spaceId = (created.data as { id: string }).id
-  const was = await WasClient.fromSigner({ serverUrl: spacesUrl(config.serverUrl), signer: agents.keyAgent.getSigner(), serviceDescription: await serviceDescriptionFor(config.serverUrl) })
+  const was = await PwsClient.fromSigner({ baseServerUrl: config.serverUrl, signer: agents.keyAgent.getSigner(), serviceDescription: await serviceDescriptionFor(config.serverUrl) })
 
   onStage?.('Publishing your identity')
   const updateKey = await updateKeyFromSeed(credential.updateSeed)
@@ -143,7 +143,7 @@ export async function registerAccount({
     serverUrl: config.serverUrl,
     controller,
     email,
-    pointer: { did, spaceId, host: config.serverUrl },
+    pointer: pointerOf({ did, spaceId, serverUrl: config.serverUrl }),
     credential,
   })
   const session: Session = { email, did, controller, serverUrl: config.serverUrl, spaceId, signingSeed: credential.signingSeed, userKey }
@@ -205,8 +205,7 @@ async function openCredential({
     coupon: result.token,
     did: pointer.did,
     controller: contents.controller,
-    serverUrl: pointer.host,
-    spaceId: pointer.spaceId,
+    ...pointerLocation(pointer),
     signingSeed: keys.credential.signingSeed,
     userKey: keys.userKey,
   }
@@ -277,7 +276,7 @@ export async function addCredential({
     serverUrl: config.serverUrl,
     controller: agents.controllerDid,
     email: session.email,
-    pointer: { did: session.did, spaceId: session.spaceId, host: session.serverUrl },
+    pointer: pointerOf({ did: session.did, spaceId: session.spaceId, serverUrl: session.serverUrl }),
     credential: keys,
   })
   await addRosterRecipient({ was: await accountClient(session), spaceId: session.spaceId, userKey: session.userKey, recipient: recipientOf(unlock.keyAgreementKey) })
@@ -369,7 +368,7 @@ async function accountSpaceIds(session: Session): Promise<string[]> {
 
 // Rotates every encrypted collection of the account from one user key to
 // another: a fresh epoch for new writes wrapped to the new key and every
-// earlier epoch re-wrapped to it (was-client's replaceRecipient: one read
+// earlier epoch re-wrapped to it (pws-client's replaceRecipient: one read
 // and one compare-and-swap write per collection), then the old key's wraps
 // dropped from every epoch in a second write, so the old key unwraps
 // nothing the server serves from now on. Records are not re-encrypted: a
@@ -381,7 +380,7 @@ async function rotateCollections({ session, from, to }: { session: Session; from
   const was = await accountClient(session)
   const fromKey = userKeyVaultKeys({ userKey: from }).keyAgreementKey
   const toKey = userKeyVaultKeys({ userKey: to }).keyAgreementKey
-  type EncryptedCollection = ReturnType<ReturnType<WasClient['space']>['collection']>
+  type EncryptedCollection = ReturnType<ReturnType<PwsClient['space']>['collection']>
   const swap = async (collection: EncryptedCollection, retire: typeof fromKey, incoming: typeof toKey) => {
     await replaceRecipient({
       collection,
@@ -489,7 +488,7 @@ export async function removeCredential({
   let retired = false
   const { asAccount } = await sessionAgents(session)
   if (unlock) {
-    await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
+    await deleteUnlockSpace({ baseServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
     retired = true
   } else if (removedEntry) {
     retired = (await retireCredentialRecords({ serverUrl: config.serverUrl, zcapClient: asAccount.zcapClient, spaceId: removedEntry.unlockSpaceId, capability: removedEntry.capability })).retired
@@ -734,8 +733,7 @@ export async function forgetBrowserCredential({ config, session }: { config: Pic
       email: stored.email,
       did: found.contents.pointer.did,
       controller: agents.controllerDid,
-      serverUrl: found.contents.pointer.host,
-      spaceId: found.contents.pointer.spaceId,
+      ...pointerLocation(found.contents.pointer),
       signingSeed: found.keys.credential.signingSeed,
       userKey: found.keys.userKey,
     }
@@ -762,7 +760,7 @@ export async function leaveAccount({ session, unlock, config }: { session: Sessi
       }
     }
   })
-  await deleteUnlockSpace({ storageServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
+  await deleteUnlockSpace({ baseServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
 }
 
 // After a sign-in, in the background: the maintenance the account may need,

@@ -16,7 +16,10 @@ export default function BatchIssuer({ host }: { host: WalletHost }) {
 
   const adapter = useMemo<BatchIssuerAdapter>(
     () => ({
-      getSession: host.getSession,
+      // The panel still types its client as was-client's WasClient; the host
+      // hands it a pws-client PwsClient, the renamed successor with the same
+      // Space, Collection and Resource handles (batch-issuer-ui follows).
+      getSession: host.getSession as unknown as BatchIssuerAdapter['getSession'],
       spaces: host.spaces,
       notifyRecipients,
       // The revocation token is the authorization, so this talks to the

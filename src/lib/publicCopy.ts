@@ -8,7 +8,7 @@
 // LinkedIn entry, an email or a job application that carries it works again.
 // Decided with James and Kerri on 21 October 2026 (#153); the mobile wallet
 // gave each share a new link only because of how VerifierPlus created links.
-import type { Collection } from '@interop/was-client';
+import type { Collection } from '@interop/pws-client';
 
 export function publicCopyId(collectionId: string, credentialId: string): string {
   return `${collectionId}--${credentialId}`;

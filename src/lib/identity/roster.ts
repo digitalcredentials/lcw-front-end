@@ -1,5 +1,5 @@
-import { WasClient, type CollectionEncryptionRecipient } from '@interop/was-client'
-import { wrapEpochSecret, unwrapEpochSecret, type RecipientPublicKey } from '@interop/was-client/edv'
+import { PwsClient, type CollectionEncryptionRecipient } from '@interop/pws-client'
+import { wrapEpochSecret, unwrapEpochSecret, type RecipientPublicKey } from '@interop/pws-client/edv'
 import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key'
 import type { IKeyAgreementKey } from '@interop/data-integrity-core'
 import { multibaseOf, type UserKey } from './keys'
@@ -49,7 +49,7 @@ export function recipientOf(keyAgreementKey: IKeyAgreementKey): RecipientPublicK
   return { id, publicKeyMultibase, ...(type && { type }) }
 }
 
-function rosterResource(was: WasClient, spaceId: string) {
+function rosterResource(was: PwsClient, spaceId: string) {
   return was.space(spaceId).collection(COLLECTION, { encryption: 'plaintext' }).resource(RESOURCE)
 }
 
@@ -62,7 +62,7 @@ function parse(data: unknown): UserKeyRoster {
 }
 
 // The stored roster with its validator, or null when the account has none.
-export async function readRoster({ was, spaceId }: { was: WasClient; spaceId: string }): Promise<{ roster: UserKeyRoster; etag?: string } | null> {
+export async function readRoster({ was, spaceId }: { was: PwsClient; spaceId: string }): Promise<{ roster: UserKeyRoster; etag?: string } | null> {
   const read = await rosterResource(was, spaceId).getWithEtag()
   if (!read || read.data instanceof Blob) {
     return null
@@ -70,7 +70,7 @@ export async function readRoster({ was, spaceId }: { was: WasClient; spaceId: st
   return { roster: parse(read.data), etag: read.etag }
 }
 
-export async function writeRoster({ was, spaceId, roster, ifMatch }: { was: WasClient; spaceId: string; roster: UserKeyRoster; ifMatch?: string }): Promise<void> {
+export async function writeRoster({ was, spaceId, roster, ifMatch }: { was: PwsClient; spaceId: string; roster: UserKeyRoster; ifMatch?: string }): Promise<void> {
   await rosterResource(was, spaceId).put(new TextEncoder().encode(JSON.stringify(roster)), { contentType: 'application/json', ...(ifMatch && { ifMatch }) })
 }
 
@@ -87,7 +87,7 @@ export async function wrapUserKey({ userKey, recipients }: { userKey: UserKey; r
 // creating the roster when the account has none yet. `userKey` is the
 // session's; it must be the key the roster carries. Idempotent for a
 // recipient already listed.
-export async function addRosterRecipient({ was, spaceId, userKey, recipient }: { was: WasClient; spaceId: string; userKey: UserKey; recipient: RecipientPublicKey }): Promise<void> {
+export async function addRosterRecipient({ was, spaceId, userKey, recipient }: { was: PwsClient; spaceId: string; userKey: UserKey; recipient: RecipientPublicKey }): Promise<void> {
   const current = await readRoster({ was, spaceId })
   if (current && current.roster.userKey !== userKey.id) {
     throw new Error('The user-key roster carries a different user key than this session.')

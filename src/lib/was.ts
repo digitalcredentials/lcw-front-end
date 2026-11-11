@@ -1,10 +1,6 @@
-import { WasClient, discoverService } from '@interop/was-client'
-import type { ServiceDescription } from '@interop/was-client'
+import { PwsClient, discoverService } from '@interop/pws-client'
+import type { ServiceDescription } from '@interop/pws-client'
 import { getSession, sessionAgents, sessionEncryption } from './identity/session'
-
-// The spaces repository URL a was-client is built with (0.96+ takes the
-// repository, not the server base).
-export const spacesUrlOf = (serverUrl: string) => `${serverUrl.replace(/\/+$/, '')}/spaces/`
 
 // The server's service description, discovered once per server for the
 // session: a client reads it before its first signed request, and the
@@ -30,7 +26,7 @@ export function parseSpaceUrl(spaceUrl: string): { serverUrl: string; spaceId: s
 }
 
 // A client for the session's Main Space, or null when there is no session.
-export async function getSessionWASClient(): Promise<{ client: WasClient; spaceId: string } | null> {
+export async function getSessionWASClient(): Promise<{ client: PwsClient; spaceId: string } | null> {
   const session = getSession()
   if (!session) {
     return null
@@ -43,15 +39,15 @@ export async function getSessionWASClient(): Promise<{ client: WasClient; spaceI
 // with the user key.
 export async function getSessionWASClientFor(
   spaceUrl: string
-): Promise<{ client: WasClient; spaceId: string } | null> {
+): Promise<{ client: PwsClient; spaceId: string } | null> {
   const session = getSession()
   const parsed = parseSpaceUrl(spaceUrl)
   if (!session || !parsed) {
     return null
   }
   const { asAccount } = await sessionAgents(session)
-  const client = await WasClient.fromSigner({
-    serverUrl: spacesUrlOf(parsed.serverUrl),
+  const client = await PwsClient.fromSigner({
+    baseServerUrl: parsed.serverUrl,
     signer: asAccount.signer,
     encryption: sessionEncryption(session),
     serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
@@ -61,7 +57,7 @@ export async function getSessionWASClientFor(
 
 // A client signed as the key's did:key form, for a Space whose promotion to
 // the account tore and that still answers to the key. Null without a session.
-export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceId: string } | null> {
+export async function getSessionKeyClient(): Promise<{ client: PwsClient; spaceId: string } | null> {
   const session = getSession()
   if (!session) {
     return null
@@ -71,15 +67,15 @@ export async function getSessionKeyClient(): Promise<{ client: WasClient; spaceI
 
 export async function getSessionKeyClientFor(
   spaceUrl: string
-): Promise<{ client: WasClient; spaceId: string } | null> {
+): Promise<{ client: PwsClient; spaceId: string } | null> {
   const session = getSession()
   const parsed = parseSpaceUrl(spaceUrl)
   if (!session || !parsed) {
     return null
   }
   const { asKey } = await sessionAgents(session)
-  const client = await WasClient.fromSigner({
-    serverUrl: spacesUrlOf(parsed.serverUrl),
+  const client = await PwsClient.fromSigner({
+    baseServerUrl: parsed.serverUrl,
     signer: asKey.signer,
     encryption: sessionEncryption(session),
     serviceDescription: await serviceDescriptionFor(parsed.serverUrl),

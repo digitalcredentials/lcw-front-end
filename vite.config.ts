@@ -10,7 +10,7 @@ export default defineConfig({
     // its own node_modules; without dedupe its externalized react import
     // resolves through the symlink to a SECOND React copy, and the panel
     // white-screens with an invalid-hook TypeError (null dispatcher).
-    dedupe: ['react', 'react-dom', '@interop/was-client'],
+    dedupe: ['react', 'react-dom', '@interop/pws-client'],
   },
   build: {
     rollupOptions: {

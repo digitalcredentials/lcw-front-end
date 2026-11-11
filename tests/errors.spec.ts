@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mapError, EncryptionError, ValidationError, WasServerError } from '@interop/was-client';
+import { mapError, EncryptionError, ValidationError, PwsServerError } from '@interop/pws-client';
 import { describeError, isSessionEnded, outsideText, technicalDetail, CollectionExistsError, CredentialMissingError, IssuerError, PlainError } from '../src/lib/errors';
 
 // Node-side unit assertions over the sentence each failure gets; no browser
@@ -51,7 +51,7 @@ test('a server fault on a read says to try again in a few minutes', () => {
   expect(describeError('open', status(500)).text).toBe("We couldn't open this credential. Your storage had a problem. Try again in a few minutes.");
   // A gateway timeout answered, so it is a fault, not "didn't respond"
   expect(describeError('load-spaces', mapError({ status: 504, message: 'Endpoint request timed out' })).text).toBe("We couldn't load your spaces. Your storage had a problem. Try again in a few minutes.");
-  expect(describeError('load-spaces', new WasServerError('Internal error')).text).toBe("We couldn't load your spaces. Your storage had a problem. Try again in a few minutes.");
+  expect(describeError('load-spaces', new PwsServerError('Internal error')).text).toBe("We couldn't load your spaces. Your storage had a problem. Try again in a few minutes.");
 });
 
 test('a write that may have stored a copy says to check before trying again', () => {
@@ -109,7 +109,7 @@ test('anything else names the action and says to try again', () => {
 });
 
 test('the technical detail keeps the error name, message and status', () => {
-  expect(describeError('load-collections', status(503)).detail).toBe('WasServerError: Request failed with status code 503 (HTTP 503)');
+  expect(describeError('load-collections', status(503)).detail).toBe('PwsServerError: Request failed with status code 503 (HTTP 503)');
   expect(describeError('open', new CredentialMissingError('gone')).detail).toBe('CredentialMissingError: gone');
 });
 
@@ -122,9 +122,9 @@ test('the console gets the summary, not the request the error carries', () => {
     options: { json: { coupon: 'registration-token' } },
   }));
   describeError('create-space', error);
-  expect(logged).toEqual(['Wallet: create-space failed: WasServerError: Request failed with status code 500 (HTTP 500)']);
+  expect(logged).toEqual(['Wallet: create-space failed: PwsServerError: Request failed with status code 500 (HTTP 500)']);
   // The same summary, used where a failure is only logged
-  expect(technicalDetail(error)).toBe('WasServerError: Request failed with status code 500 (HTTP 500)');
+  expect(technicalDetail(error)).toBe('PwsServerError: Request failed with status code 500 (HTTP 500)');
 });
 
 // The claim pop-up, the browser-wallet prompts and the welcome email

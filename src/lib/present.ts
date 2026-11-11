@@ -17,7 +17,7 @@ const documentLoader = securityLoader().build()
 // `<fingerprint>.json` ids are found the same way. The collection holds one
 // small key document per claimed credential, so the scan is cheap.
 async function findStoredKey(
-  session: { client: import('@interop/was-client').WasClient; spaceId: string },
+  session: { client: import('@interop/pws-client').PwsClient; spaceId: string },
   holderDid: string
 ): Promise<unknown | null> {
   const dids = session.client.space(session.spaceId).collection('dids')

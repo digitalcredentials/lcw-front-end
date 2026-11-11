@@ -1,4 +1,4 @@
-import type { WasClient } from '@interop/was-client'
+import type { PwsClient } from '@interop/pws-client'
 import { getEmail } from './auth'
 import { getSession, sessionVaultKeys } from './identity/session'
 import { listSpaces, type SpaceInfo } from './spaces'
@@ -22,7 +22,7 @@ export interface WalletExport {
 // promotion tore still answers to the session key's did:key, so that form is
 // tried when the account's is refused.
 async function exportArchive(space: SpaceInfo): Promise<Uint8Array> {
-  const attempt = async (handle: { client: WasClient; spaceId: string } | null) => {
+  const attempt = async (handle: { client: PwsClient; spaceId: string } | null) => {
     if (!handle) {
       throw new Error('UNAUTHORIZED')
     }
