@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
@@ -55,8 +55,13 @@ function credentialCard(page: Page, title: string) {
 async function logIn(page: Page) {
   // The test browser never has the CHAPI wallet enabled, so suppress the
   // enable-browser-wallet prompt (same flag its "Not now" button sets) or its
-  // overlay would intercept the tests' clicks.
-  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+  // overlay would intercept the tests' clicks. A password sign-in offers a
+  // passkey once per account on a browser with WebAuthn; the offer is
+  // dismissed up front the way its "Not now" button does.
+  await page.addInitScript((email) => {
+    sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
+    localStorage.setItem(`lcw_passkey_offer_dismissed:${email}`, 'true');
+  }, DEMO_EMAIL);
   await page.goto(`${DEPLOYED_URL}/`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
@@ -64,6 +69,39 @@ async function logIn(page: Page) {
   // Login lands on the spaces card view; every test works inside the demo
   // account's credential space (a batch space's card opens a batch-view or
   // space-view prompt instead of the space)
+  await page.locator('[data-space-type="credential"]').first().click();
+}
+
+// A virtual authenticator with the PRF extension, so a passkey can be
+// registered and asserted without a device. Chromium only.
+async function virtualAuthenticator(page: Page): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable', { enableUI: false });
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      ctap2Version: 'ctap2_1',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      hasPrf: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+}
+
+// Signs in with the password and adds a passkey in the offer step, which
+// continues the session as a remembered client: what managing spaces (the
+// batch tests) and staying signed in need.
+async function logInWithPasskey(page: Page) {
+  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+  await virtualAuthenticator(page);
+  await page.goto(`${DEPLOYED_URL}/`);
+  await page.getByLabel('Email').fill(DEMO_EMAIL);
+  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: 'Add a passkey' }).click();
   await page.locator('[data-space-type="credential"]').first().click();
 }
 
@@ -268,37 +306,6 @@ test('offers the welcome credential on first open after registration', async ({ 
   }
 });
 
-test('creates, saves, and deletes a batch', async ({ page }) => {
-  const noise = capture(page);
-  await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
-  await page.goto(`${DEPLOYED_URL}/`);
-  await page.getByLabel('Email').fill(DEMO_EMAIL);
-  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  try {
-    await page.getByRole('link', { name: 'Credential issuer' }).click();
-    await page.getByRole('button', { name: 'New batch' }).click();
-
-    // Saving creates the batch's own space and writes batch.json into its
-    // fresh (description-less) batch collection — the path that broke when
-    // the client became encryption-capable.
-    const name = `Deployed test batch ${Date.now()}`;
-    await page.getByLabel('Batch name').fill(name);
-    await page.getByRole('button', { name: 'Save batch' }).click();
-    await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 20000 });
-
-    // Delete the batch (its whole space); confirm() is a browser dialog
-    page.once('dialog', (dialog) => void dialog.accept());
-    await page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText(name)).toBeHidden();
-  } finally {
-    if (noise.length) {
-      console.log(`--- browser noise ---\n${noise.join('\n')}`);
-    }
-  }
-});
-
 test('lists the sign-in credentials under Settings', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
@@ -319,40 +326,76 @@ test('lists the sign-in credentials under Settings', async ({ page }) => {
   }
 });
 
-test('stays signed in on this browser until sign-out', async ({ page, context }) => {
-  const noise = capture(page);
-  try {
-    await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
-    await page.goto(`${DEPLOYED_URL}/`);
-    await page.getByLabel('Email').fill(DEMO_EMAIL);
-    await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
-    await page.getByLabel('Stay signed in on this browser').check();
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
-    // The browser credential is made in the background after sign-in
-    await expect.poll(() => page.evaluate(() => localStorage.getItem('lcw_browser_credential')), { timeout: 30_000 }).toBeTruthy();
+// The flows that need a remembered session (a session signed in with a
+// passkey signs as the account: managing spaces, staying signed in) share
+// one browser context, so each run adds one passkey to the demo account.
+// A passkey is a credential of its own, with an unlock Space of its own,
+// and removing one is not part of this wallet yet.
+test.describe('with a passkey', () => {
+  test.describe.configure({ mode: 'serial' });
+  let context: BrowserContext;
+  let page: Page;
+  let noise: string[] = [];
 
-    // A second tab has no session of its own; the browser credential opens
-    // the account without the login form
+  test.beforeAll(async ({ browser }) => {
+    context = await browser.newContext();
+    page = await context.newPage();
+    noise = capture(page);
+    // The password sign-in offers a passkey; adding one makes this browser
+    // a remembered client of the account
+    await logInWithPasskey(page);
+    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
+  });
+
+  test.afterAll(async () => {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+    await context?.close();
+  });
+
+  test('creates, saves, and deletes a batch', async () => {
+    await page.getByRole('link', { name: 'Credential issuer' }).click();
+    await page.getByRole('button', { name: 'New batch' }).click();
+
+    // Saving creates the batch's own space and writes batch.json into its
+    // fresh (description-less) batch collection — the path that broke when
+    // the client became encryption-capable.
+    const name = `Deployed test batch ${Date.now()}`;
+    await page.getByLabel('Batch name').fill(name);
+    await page.getByRole('button', { name: 'Save batch' }).click();
+    await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 20000 });
+
+    // Delete the batch (its whole space); confirm() is a browser dialog
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText(name)).toBeHidden();
+  });
+
+  test('the passkey keeps this browser signed in until it is forgotten', async () => {
+    // A second tab has no session of its own; the remembered browser
+    // offers the passkey instead of the login form, and its tap opens the
+    // account (the virtual authenticator answers without a prompt)
     const second = await context.newPage();
     await second.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
+    await virtualAuthenticator(second);
     await second.goto(`${DEPLOYED_URL}/#/files`);
+    await second.getByRole('button', { name: 'Continue with passkey' }).click();
     await expect(second.locator('[data-space-type]').first()).toBeVisible();
     await expect(second.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
     await second.close();
 
-    // Sign Out forgets the browser credential: a fresh tab asks for a password
-    await page.getByRole('button', { name: 'Sign Out' }).click();
-    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+    // Forgetting the browser drops its record: a fresh tab asks to sign in
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Sign-in credentials' }).click();
+    await page.getByRole('button', { name: 'Forget this browser' }).click();
+    await expect(page.getByRole('status')).toContainText('no longer keeps you signed in');
     const third = await context.newPage();
     await third.goto(`${DEPLOYED_URL}/#/files`);
     await expect(third.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
     await third.close();
-  } finally {
-    if (noise.length) {
-      console.log(`--- browser noise ---\n${noise.join('\n')}`);
-    }
-  }
+  });
 });
 
 // Settings → Download my data: the tar is read back, and the demo credential

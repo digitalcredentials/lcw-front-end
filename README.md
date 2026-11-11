@@ -13,107 +13,79 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
 
 ## How it works
 
-- **Identity** (`src/lib/identity/`): nothing about the account derives from
-  the passphrase. Registration mints the account's keys at random: a user
-  key (X25519, the recipient of every encrypted collection, one per account)
-  and, for the passphrase credential, a signing key and a did:webvh update
-  key. It records the email against the signing key's `did:key` with the
-  lcw-back-end (`POST /register`, which emails the confirmation link),
-  creates the Main Space on the PWS server with the registration code as
-  coupon, publishes the account's `did:webvh` log into the space's
+- **Identity** (`src/lib/identity/`): the account is
+  [`@interop/wallet-core`](https://www.npmjs.com/package/@interop/wallet-core)'s
+  credential-anchored account, the model FreeWallet uses, so an account
+  made here is a web space another wallet can join. Nothing about the
+  account derives from the passphrase: registration (`signup.ts`) mints the
+  account's keys at random, and the passphrase only derives an **unlock
+  credential** (wallet-core's keyring derivation, FreeWallet's salts) that
+  opens them. A bootstrap `did:key` creates two Spaces through the PWS
+  server's `POST /spaces/` with the registration code as coupon. The
+  **account Space** holds the account's `did:webvh` log in its
   world-readable `id` collection (served through the identity domain,
-  `VITE_ID_DOMAIN`) and promotes the space to it, then binds the passphrase:
-  the passphrase derives an unlock identity (wallet-core's derivation, the
-  same as FreeWallet's) whose own small unlock space on the server holds
-  FreeWallet's signed pointer record and a sealed record of the credential's
-  keys and the user key. Any browser holding the passphrase can open the
-  account; a credential that is lost is removed and its keys rotated. Sign-in
-  derives the unlock identity, opens those records, and proves the signing
-  key to the back end's `POST /login` under the account's `did:webvh` (the
-  back end verifies it against the account document), which returns the
-  registration token (the PWS server's space-creation coupon). The back
-  end registers the account's `did:webvh`, so any credential's key signs
-  for it. **Passkeys** (`src/lib/identity/passkey.ts`): after a passphrase
-  sign-in on a browser that supports them, the login page offers to add a
-  passkey, and offers **Sign in with a passkey** beside the form. A passkey
-  is a credential of its own: the WebAuthn PRF extension (FreeWallet's
-  input and derivation) gives it an unlock secret, it gets its own signing
-  and update keys, published to the account document in two log entries
-  signed by the passphrase credential's update key (held for that step
-  alone), and its own unlock space. Authenticators without PRF support are
-  refused. Every Space is promoted to the account DID at creation, so a
-  session opened by any credential signs for all of them. **Recovery**
-  (`src/lib/identity/recovery`, `src/pages/ForgotPage.tsx`): the account's
-  recovery code is a credential of its own (uppercase base32 in groups of
-  four, derived with HKDF under a salt of its own, its own signing and update
-  keys and unlock space). After any sign-in, an account with no code stored
-  at the back end gets one, minted and stored (`PUT /recovery`, encrypted
-  there); the user never sees it, because it reaches them by email. That
-  check, the pruning of forgotten browser credentials and the did:web
-  projection check run together after sign-in in the background
-  (`housekeeping` in `src/lib/identity/index.ts`), reading the account log
-  and the catalogue once, so the user reaches their spaces as soon as the
-  session exists.
-  **Forgot your password?** on the login page asks the back end to mail the
-  code (`POST /forgot`); the recovery page takes the code and a new password,
-  opens the account through the recovery credential, adds the new password
-  as a credential, signs in with it, replaces the used code (it is in a
-  mailbox) with a fresh credential and removes the old one from the account
-  document and its unlock space from the server. **Credential management**
-  (`src/lib/identity/catalogue.ts`, `src/pages/CredentialsPage.tsx`, under
-  **Settings → Sign-in credentials**): the account document says which keys
-  sign for the account, not what they are, so the wallet keeps a catalogue
-  (the Main Space's encrypted `account` collection, `credentials.json`) that
-  records, per signing key, the credential's kind, when it was added, the
-  keys that remove it, and the management capability its unlock identity
-  delegated to the account at binding (GET, PUT and DELETE on its unlock
-  space, ten years). The settings page lists the document's credentials
-  joined with the catalogue. Removing one needs an update key, which a
-  session does not hold: the user confirms with a password or a passkey of
-  the account, and that credential's keys sign the one log entry dropping
-  the removed keys. The same entry **rotates the user key** the removed
-  credential held: a fresh user key replaces it under `keyAgreement`; the
-  removed credential's records are deleted from its unlock space under the
-  delegated capability (the space itself is root-only to delete and stays,
-  empty); every encrypted collection of every Space gets a fresh epoch
-  wrapped to the new key, its earlier epochs re-wrapped to it, and the old
-  key's wraps dropped (records are not re-encrypted: a copy of ciphertext
-  taken before the rotation stays readable to a copy of the old key); a
-  fresh **user-key roster** is written; and the catalogue forgets the
-  credential and is re-sealed to the new key. The roster
-  (`src/lib/identity/roster.ts`, the Main Space's `account/user-key.json`)
-  is how every credential holds the one user key: a JWE-style record whose
-  `recipients` array wraps the key to each credential's unlock
-  key-agreement key, the way an encrypted collection's epoch key is wrapped
-  to its readers. Adding a credential appends a recipient; a rotation
-  writes a new roster for the new key with the remaining credentials, in
-  one compare-and-swap. A credential signing in reads its own keys record
-  from its unlock space, signs as the account, unwraps its roster entry,
-  and accepts the key only if its public half is the one the account
-  document names under `keyAgreement`, read from the Space's public log.
-  The session
-  continues on the new key; a session open elsewhere signs in again. The
-  session's own credential and the recovery code are not removable from the
-  page; recovery itself removes the used recovery credential the same way,
-  so an emailed code reaches nothing once used. **Stay signed in on this
-  browser** (`src/lib/identity/browser.ts`), a checkbox on the login form,
-  makes the browser a credential of the account: a random secret kept in
-  local storage derives an unlock identity the way a passkey's PRF output
-  does, with its own keys in the document, its own unlock space and its own
-  roster entry, listed under Sign-in credentials as "Browser: Chrome on
-  macOS" and removable from any other sign-in (with the rotation). On a
-  return visit the signed-in pages open the account with it before showing
-  the login form (`RequireAuth`). Sign Out forgets it: the secret, its
-  roster entry, its catalogue entry and its unlock space go, and the next
-  password or passkey sign-in drops its keys from the document
-  (`housekeeping`), since a credential cannot drop its own. One per
-  browser; anyone who can use the browser profile can open the account until
-  it is removed. The session (the unwrapped keys
-  and the account pointer) lives in this tab's `sessionStorage`: it is gone
-  when the tab closes, and the CHAPI popup, a window of its own, signs the
-  user in itself. Requests sign as `<did:webvh>#<multibase>`; only the
-  creation of a Space uses the key's `did:key` form, which the server
-  requires, before the Space is promoted. On the first open after registering, the
+  `VITE_ID_DOMAIN`), the user key (X25519, the recipient of every encrypted
+  collection, one per account), the **user-key roster**
+  (`account/user-key.json`: the user key wrapped to each credential's
+  unlock key) and the **unlock-methods registry**
+  (`unlock-methods/methods.json`, FreeWallet's shape member for member, the
+  list behind Settings → Sign-in credentials). The **client annex** Space
+  carries a `did:webvh` of its own, named by the account document's
+  `DelegatedClients` service entry. The credential's own small **unlock
+  Space** holds its signed pointer record and a sealed record of its keys.
+  Both Spaces are promoted to the account DID; just before that, the email
+  is recorded against the account DID with the lcw-back-end
+  (`POST /register`, which emails the confirmation link). Sign-in opens
+  one of two session kinds (`session.ts`). A **transient session**, from
+  the password or a recovery code, signs as the client annex under a
+  delegation the annex holds for the account Space, so it reads and writes
+  the account Space and nothing else: it signs in to the back end
+  (`POST /login`, which verifies the annex against the account document
+  and returns the registration token, the PWS server's space-creation
+  coupon), claims credentials with a fresh `did:key`, and refuses to
+  create, rename or delete Spaces, to notify the batch issuer, and to sign
+  a presentation as the account (`PasskeySessionRequiredError`: those need
+  a passkey). A **remembered session**, from a passkey, signs as the
+  account itself and reaches every Space. It holds a client key record in
+  IndexedDB (`lcw-session`), sealed to the passkey's unlock key; the first
+  passkey sign-in on a browser enrolls that browser's client key in the
+  account document (`remembered.ts`). On a browser holding a record, the
+  signed-in pages offer **Continue with passkey** before the login form
+  (`RequireAuth`). Either session's keys live in this tab's
+  `sessionStorage`: gone when the tab closes, and the CHAPI popup, a window
+  of its own, signs the user in itself. **Passkeys** (`passkey.ts`,
+  `standing.ts`): after a password sign-in on a browser that supports them,
+  the login page offers **Add a passkey?** (once per account and browser;
+  Not now is remembered) and offers **Sign in with a passkey** beside the
+  form. A passkey is a credential of its own: the WebAuthn PRF extension
+  (FreeWallet's input and derivation) gives it its unlock secret, and
+  adding it (`addStandingCredential`) delegates it a write on the account
+  log, publishes its unlock key to the account document, adds its roster
+  recipient, writes its unlock Space and lists it in the registry.
+  Authenticators without PRF support are refused. The back end's
+  `POST /login` accepts an invocation signed by any key the account
+  document lists or by the client annex it names. **Recovery**
+  (`recovery.ts`, `src/pages/ForgotPage.tsx`): the recovery code is a
+  credential of its own (uppercase base32 in groups of four, derived with
+  HKDF under a salt of its own). After any sign-in, an account with no code
+  stored at the back end gets one, issued and stored there (`PUT
+  /recovery`, encrypted); the user never sees it, because it reaches them
+  by email. **Forgot your password?** asks the back end to mail it
+  (`POST /forgot`); the recovery page takes the code and a new password,
+  opens the account through the code (a transient session), adds the new
+  password as a further credential, and replaces the used code with a
+  fresh one at the back end. **Sign-in credentials**
+  (`src/pages/CredentialsPage.tsx`, `unlockMethods.ts`, under
+  **Settings**): the registry's methods (the password, each passkey, the
+  recovery code), with **Add a passkey** and, on a remembered browser,
+  **Forget this browser**, which drops the browser's client key record
+  (the client stays listed in the account document until it is
+  disconnected). Removing a sign-in method, disconnecting a client and
+  rotating the user key are not offered yet on this model, so a password
+  replaced through recovery stays valid until they are. Requests sign as
+  `<did:webvh>#<multibase>`; only the creation of a Space uses a key's
+  `did:key` form, which the server requires, before the Space is promoted.
+  On the first open after registering, the
   wallet offers to issue a **welcome credential** (the test issuer's LCW
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
@@ -124,7 +96,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   `POST /spaces/` (controller DID, type array, coupon); renaming and
   describing a space replaces its metadata object under `If-Match`. A space
   whose type array carries `BatchSpace` is a batch space: its card asks
-  whether to open the batch view or the standard space view.
+  whether to open the batch view or the standard space view. Creating,
+  renaming and deleting spaces sign as the account, so they need a session
+  opened with a passkey; a password session lists the account Space alone
+  and says so when asked for more.
 - **Space browser**: a space's collections and resources through
   [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client),
   signing every request with the account's signing key. Collections and credentials are
@@ -181,8 +156,9 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   as you type.
 - **Download my data** (`src/lib/exportWallet.ts`, `src/lib/dataExport.ts`,
   `src/lib/tar.ts`, the dialog in `src/components/ExportDataModal.tsx`):
-  **Settings → Download my data** saves every document in every space of the
-  account to one plain tar, a folder per space (its name, or its id) and a
+  **Settings → Download my data** saves every document in every space the
+  session reaches (all of them under a passkey, the account Space alone
+  under a password) to one plain tar, a folder per space (its name, or its id) and a
   folder per collection inside it, each document under its resource id with
   a `manifest.json` first (the spaces, collections and counts, and any
   document left out). Each space is read through the PWS server's Export
@@ -330,10 +306,13 @@ Opt-in smoke tests against a deployed instance: login and the space
 collections, opening and verifying a credential, the batch issuer screen,
 sharing to LinkedIn, the My Spaces and title navigation resets, the
 welcome-credential dialog, creating, saving and deleting a batch (a
-scratch batch space), the sign-in credentials and stay-signed-in settings,
-the phone layout, and the data download (the tar is read back and the demo
-credential found decrypted in it) — with console errors and failed requests captured for
-debugging. Skipped unless `DEPLOYED_URL` is set. Run it after every deploy.
+scratch batch space, under a passkey session), the sign-in credentials
+page, a passkey added at sign-in that keeps the browser signed in until it
+is forgotten (a virtual authenticator with the PRF extension, through the
+Chrome DevTools Protocol), the phone layout, and the data download (the tar
+is read back and the demo credential found decrypted in it) — with console
+errors and failed requests captured for debugging. Skipped unless
+`DEPLOYED_URL` is set. Run it after every deploy.
 
 The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
 passphrase in the spec file) is registered by `npm run register:demo`
@@ -343,15 +322,19 @@ Its Main Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`): an
 encrypted `UniversityOfToronto` collection holding the LCW Experience Badge
 fixture, created the way the wallet creates collections. Both scripts run the
 identity layer under `tsx`, and both are idempotent. `npm run test:identity`
-(`WAS_URL=... COUPON=... ID_DOMAIN=...`) exercises the identity layer against
-a deployed PWS server without the back end, on scratch spaces it deletes.
-`tests/scripts/recovery-demo.ts` (`DEMO_EMAIL=...`) runs account recovery
-against the deployed back end on the demo account, once, right after it is
-registered: later its code is known only to the stored copy and the mailbox.
-`npm run test:credentials` (`DEMO_EMAIL=...`) lists the demo account's
-credentials, adds a stand-in passkey, removes it, and checks the document,
-the catalogue and the unlock space. It is idempotent and leaves the
-account's other credentials alone.
+(`WAS_URL=... COUPON=...`, or `WAS_URL=... PROVISIONING=open` against a
+server that creates Spaces by id) exercises the identity layer against a
+PWS server without the back end: signup, the transient login, a passkey
+credential added from it, the remembered logins, recovery codes from both
+session kinds, and the passphrase again. The account it creates is left
+behind. `npm run test:recovery` (`DEMO_EMAIL=...`) runs account recovery
+against the deployed back end on the demo account: it issues a code,
+recovers with it under a new passphrase, checks that the demo passphrase
+still signs in, and leaves a replacement code stored. Each run adds a
+passphrase credential to the account. `npm run test:credentials`
+(`DEMO_EMAIL=...`) lists the demo account's sign-in methods, adds a
+stand-in passkey credential, signs in with it as a remembered client and
+lists the methods again; the passkey stays listed. Each run adds one.
 `npm run test:holder` (`DEMO_EMAIL=...`) claims a badge from the deployed
 test issuer as the demo account's `did:web` projection, checking the
 projection the identity domain serves, the issuer's `acceptedMethods`, and

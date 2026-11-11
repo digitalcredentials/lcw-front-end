@@ -9,6 +9,9 @@ const bytes = (length: number) => Array.from({ length }, (_, i) => i);
 
 const credentialWith = (prf: unknown) => ({
   rawId: new Uint8Array([1, 2, 3]).buffer,
+  // A registration's descriptive members: the transports and the
+  // authenticator data whose flags byte (index 32) carries the backup bits
+  response: { getTransports: () => ['internal'], getAuthenticatorData: () => new Uint8Array(37).buffer },
   getClientExtensionResults: () => ({ prf }),
 });
 
@@ -80,7 +83,7 @@ test('refuses any output that is not 32 bytes as unusable with this wallet', asy
   }
 });
 
-const register = () => registerPasskey({ email: 'a@example.org', rpName: 'Wallet' });
+const register = () => registerPasskey({ userHandle: Uint8Array.from(bytes(16)), email: 'a@example.org', rpName: 'Wallet' });
 
 test('a passkey whose creation gives the output keeps it, without signing in', async () => {
   answerWith(bytes(32).reverse(), { results: { first: bytes(32) } });

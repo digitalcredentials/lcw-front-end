@@ -8,6 +8,5 @@ export function identityConfig(): IdentityConfig {
   return {
     apiBase: trim(import.meta.env.VITE_API_BASE_URL),
     serverUrl: trim(import.meta.env.VITE_WAS_BASE_URL),
-    idDomain: import.meta.env.VITE_ID_DOMAIN ?? '',
   }
 }

@@ -1,193 +1,146 @@
-// Exercises the identity layer against a deployed PWS server without the
-// back end: mints an account's keys, creates a scratch Main Space with the
-// coupon, publishes and promotes its did:webvh, binds a passphrase as a
-// credential, opens the account again from the passphrase alone, writes and
-// reads an encrypted collection with the user key, adds a second credential
-// (a stand-in passkey), removes it with the user-key rotation that implies,
-// checks what each key can still open, then deletes everything.
+// The identity layer against a PWS server, end to end and without the back
+// end: signup (the credential-anchored genesis), the transient login on the
+// passphrase, a passkey credential added from it (a random secret under the
+// passkey KDF stands in for the PRF output), the remembered login that
+// self-enrolls this "browser" and the one that reuses its record, a
+// recovery code issued from each session kind and used, and the passphrase
+// again at the end.
 //
-//   WAS_URL=https://was.lcw-sandbox.org COUPON=... ID_DOMAIN=id.lcw-sandbox.org \
-//     npx tsx tests/scripts/identity-roundtrip.ts
+//   WAS_URL=https://was.lcw-sandbox.org COUPON=... npx tsx tests/scripts/identity-roundtrip.ts
+//   WAS_URL=http://localhost:3002 PROVISIONING=open npx tsx tests/scripts/identity-roundtrip.ts
+//
+// With a COUPON the two Spaces are created through POST /spaces/ (this
+// server); with PROVISIONING=open the ceremony creates them by id (the
+// reference server). The account it creates is left behind.
 import '@interop/http-client'
 import { PwsClient } from '@interop/pws-client'
-import { ensureFirstEpoch, ownerRecipient, resolveEpochKeys } from '@interop/pws-client/edv'
-import type { CollectionEncryption } from '@interop/pws-client'
-import { resolveDID } from '@interop/did-method-webvh'
-import { createAccountLog, publishAccountLog, promoteSpace } from '../../src/lib/identity/account'
-import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed } from '../../src/lib/identity/keys'
-import { bindCredential, openPassphrase, pointerLocation, pointerOf, readCredential } from '../../src/lib/identity/unlock'
-import { addCredential, addRosterRecipient, catalogueCredential, leaveAccount, listCredentials, pruneCredentials, readRoster, recipientOf, removeCredential, browserUnlock } from '../../src/lib/identity'
+import { signUp } from '../../src/lib/identity/signup'
+import { deriveUnlockCredential, passphraseCredential } from '../../src/lib/identity/credential'
 import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
-import { randomBytes } from '../../src/lib/identity/bytes'
-import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
-import { userKeyVaultKeys } from '@interop/wallet-core/keys'
-import { sessionAgents, sessionEncryption, sessionKeyAgreementKey, type Session } from '../../src/lib/identity/session'
+import { fetchStandingRecord } from '../../src/lib/identity/records'
+import { openTransientSession } from '../../src/lib/identity/transient'
+import { addStandingCredential } from '../../src/lib/identity/standing'
+import { openRememberedSession } from '../../src/lib/identity/remembered'
+import { memoryClientKeyStore } from '../../src/lib/identity/clientKeyRecord'
+import { issueRecoveryCode, recoverWithCode } from '../../src/lib/identity/recovery'
+import { readUnlockMethods, updateUnlockMethods, upsertMethod } from '../../src/lib/identity/unlockMethods'
+import { sessionAgents, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
+import { serviceDescriptionFor } from '../../src/lib/identity/service'
+import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 
-const serverUrl = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
-const coupon = process.env.COUPON
-const idDomain = process.env.ID_DOMAIN ?? 'id.lcw-sandbox.org'
-if (!coupon) {
-  console.error('Set COUPON to a valid space-creation coupon.')
-  process.exit(2)
-}
-const config = { serverUrl }
+const WAS = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
+const PROVISIONING = (process.env.PROVISIONING as 'open' | 'coupon' | undefined) ?? (process.env.COUPON ? 'coupon' : 'open')
+const COUPON = process.env.COUPON ?? 'no-coupon'
+const passphrase = `roundtrip-passphrase-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const email = `roundtrip-${Date.now()}@example.test`
 
 let failures = 0
 const check = (label: string, ok: boolean, detail?: unknown) => {
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail !== undefined ? ` (${String(detail)})` : ''}`)
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail !== undefined ? ` (${typeof detail === 'string' ? detail : JSON.stringify(detail)})` : ''}`)
   if (!ok) failures++
 }
-
-const passphrase = `roundtrip-${Date.now()}-${Math.random().toString(36).slice(2)}`
-const email = 'roundtrip@example.test'
-
-// --- mint and provision, as registerAccount does ---------------------------
-const credential = mintCredentialKeys()
-const userKey = await mintUserKey()
-const agents = await signingAgents(credential.signingSeed)
-const controller = agents.controllerDid
-const created = await agents.zcapClient.request({
-  url: `${serverUrl}/spaces/`,
-  method: 'POST',
-  action: 'POST',
-  json: { controller, name: 'Roundtrip', type: ['Space'], coupon },
-})
-const spaceId = (created.data as { id: string }).id
-check('scratch Main Space created under the signing did:key', created.status === 201, spaceId)
-
-const was = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: agents.keyAgent.getSigner() })
-const updateKey = await updateKeyFromSeed(credential.updateSeed)
-const { did, jsonl } = await createAccountLog({
-  idDomain,
-  spaceId,
-  signingMultibase: multibaseOf(controller),
-  userKeyMultibase: multibaseOf(userKey.id),
-  updateKey,
-  stagedMultibase: await multibaseOfSeed(credential.stagedSeed),
-})
-await publishAccountLog({ was, spaceId, jsonl })
-check('account log published', jsonl.length > 0, did)
-const resolved = await resolveDID(did)
-check('the DID resolves through the identity domain', resolved.didDocument?.id === did, resolved.didResolutionMetadata?.error)
-const doc = resolved.didDocument as { keyAgreement?: unknown[]; capabilityInvocation?: unknown[] } | null
-check('the document lists the signing key and the user key', (doc?.capabilityInvocation?.length ?? 0) === 1 && (doc?.keyAgreement?.length ?? 0) === 1)
-const projection = (await (await fetch(`https://${idDomain}/${spaceId}/did.json`)).json().catch(() => null)) as { id?: string; alsoKnownAs?: string[] } | null
-check('the did:web projection is served beside the log', projection?.id === `did:web:${idDomain}:${spaceId}` && projection?.alsoKnownAs?.includes(did) === true)
-const promotion = await promoteSpace({ was, spaceId, did, name: 'Roundtrip' })
-check('the Main Space is promoted to the did:webvh', promotion === 'promoted', promotion)
-
-const unlock = await openPassphrase(passphrase)
-const { capability } = await bindCredential({ unlock, serverUrl, controller, email, pointer: pointerOf({ did, spaceId, serverUrl }), credential })
-check('the passphrase is bound (unlock space, pointer and keys records, capability)', Boolean(capability), unlock.spaceId)
-const asAccountEarly = (await sessionAgents({ email, did, controller, serverUrl, spaceId, signingSeed: credential.signingSeed, userKey })).asAccount
-await addRosterRecipient({ was: await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccountEarly.signer }), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
-check('the user-key roster names the passphrase as its one recipient', (await readRoster({ was: await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccountEarly.signer }), spaceId }))?.roster.recipients.length === 1)
-
-// --- open the account from the passphrase alone, as loginWithPassphrase does
-const reopened = await readCredential({ unlock: await openPassphrase(passphrase), serverUrl })
-check('the credential opens', reopened !== null)
-check('the pointer names the account', reopened?.contents.pointer?.did === did && reopened?.contents.pointer !== undefined && pointerLocation(reopened.contents.pointer).spaceId === spaceId)
-check('the pointer carries the email', reopened?.contents.email === email)
-check('the signing seed round-trips', Buffer.from(reopened!.keys.credential.signingSeed).equals(Buffer.from(credential.signingSeed)))
-check('the user key round-trips', reopened!.keys.userKey.id === userKey.id && Buffer.from(reopened!.keys.userKey.secret).equals(Buffer.from(userKey.secret)))
-const wrong = await readCredential({ unlock: await openPassphrase(`${passphrase}-wrong`), serverUrl })
-check('a wrong passphrase finds no account', wrong === null)
-
-// --- a session over the opened keys ------------------------------------------
-const session: Session = {
-  email,
-  did,
-  controller,
-  serverUrl,
-  spaceId,
-  signingSeed: reopened!.keys.credential.signingSeed,
-  userKey: reopened!.keys.userKey,
+const time = async <T,>(label: string, fn: () => Promise<T>): Promise<T> => {
+  const started = Date.now()
+  try {
+    return await fn()
+  } finally {
+    console.log(`     ${label}: ${Date.now() - started} ms`)
+  }
 }
-await catalogueCredential({ session, keys: credential, kind: 'passphrase', unlock, capability })
-const { asAccount } = await sessionAgents(session)
-const asAccountClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount.signer, encryption: sessionEncryption(session) })
-const space = asAccountClient.space(spaceId)
-check('the session reads the promoted Space as the account', (await space.describe())?.controller === did)
-const vault = await space.createCollection({ id: 'vault', encryption: { scheme: 'edv' } })
-await ensureFirstEpoch({ collection: vault, recipients: [ownerRecipient({ keyAgreementKey: sessionKeyAgreementKey(session) })] })
-const added = await vault.add({ hello: 'world' })
-const back = (await vault.get(added.id)) as { hello?: string } | null
-check('an encrypted collection round-trips under the user key', back?.hello === 'world')
 
-// --- a second credential: a passkey stood in for by a random PRF output ------
-const prfOutput = randomBytes(32)
-const passkeyUnlock = await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF })
-const passkeyKeys = await addCredential({ session, acting: credential, config, unlock: passkeyUnlock, kind: 'passkey', label: 'Roundtrip passkey' })
-const passkeyAgents = await signingAgents(passkeyKeys.signingSeed)
-const grown = await resolveDID(did)
-const grownDoc = grown.didDocument as { capabilityInvocation?: unknown[]; verificationMethod?: unknown[] } | null
-check("the document lists both credentials' signing keys", (grownDoc?.capabilityInvocation?.length ?? 0) === 2, grown.didResolutionMetadata?.error)
-check('the log authorizes both update keys', (grown.didDocumentMetadata as { updateKeys?: unknown[] })?.updateKeys?.length === 2)
-const reopenedPasskey = await readCredential({ unlock: await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF }), serverUrl })
-check('the passkey credential opens to the same account and user key', reopenedPasskey?.contents.pointer?.did === did && reopenedPasskey?.keys.userKey.id === userKey.id)
-check('the roster now names both credentials', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 2)
-const passkeySession: Session = { ...session, controller: passkeyAgents.controllerDid, signingSeed: passkeyKeys.signingSeed }
-const { asAccount: asAccount2 } = await sessionAgents(passkeySession)
-const asPasskeyClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount2.signer, encryption: sessionEncryption(passkeySession) })
-check("the passkey's key reads the Space as the account", (await asPasskeyClient.space(spaceId).describe())?.controller === did)
-const backAsPasskey = (await asPasskeyClient.space(spaceId).collection('vault').get(added.id)) as { hello?: string } | null
-check('the passkey session decrypts what the passphrase session wrote', backAsPasskey?.hello === 'world')
-const listed = await listCredentials({ session })
-check('both credentials are catalogued with their kinds', listed.map((c) => c.kind).sort().join(',') === 'passkey,passphrase', listed.map((c) => c.kind).join(','))
+async function registryOf(session: TransientSession | RememberedSession) {
+  const { signer, capabilityFor } = await sessionAgents(session)
+  const pws = PwsClient.fromSigner({ baseServerUrl: WAS, signer, serviceDescription: await serviceDescriptionFor(WAS) })
+  return { pws, capability: capabilityFor(session.spaceId) }
+}
 
-// --- remove the passkey: its keys leave the document, the user key rotates --
-const passkeyRow = listed.find((c) => c.kind === 'passkey')!
-const { session: rotated, retired, rotatedCollections } = await removeCredential({ session, acting: credential, credential: passkeyRow, config })
-check("the passkey's unlock records are retired under the delegated capability", retired)
-check('the user key was rotated and the vault collection with it', rotated.userKey.id !== session.userKey.id && rotatedCollections === 1, rotatedCollections)
-const shrunk = await resolveDID(did)
-const shrunkDoc = shrunk.didDocument as { capabilityInvocation?: unknown[]; keyAgreement?: unknown[] } | null
-const agreement = shrunkDoc?.keyAgreement?.map((entry) => (typeof entry === 'string' ? entry : (entry as { id?: string }).id)) ?? []
-check('the document lists one signing key and the new user key', shrunkDoc?.capabilityInvocation?.length === 1 && agreement.length === 1 && String(agreement[0]).endsWith(`#${multibaseOf(rotated.userKey.id)}`))
-check('the removed passkey secret opens nothing', (await readCredential({ unlock: await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF }), serverUrl })) === null)
-const afterRotation = await readCredential({ unlock: await openPassphrase(passphrase), serverUrl })
-check('the passphrase credential now opens with the new user key (from the fresh roster)', afterRotation?.keys.userKey.id === rotated.userKey.id)
-const freshRoster = (await readRoster({ was: asAccountClient, spaceId }))?.roster
-check('the fresh roster carries the new key and names the passphrase alone', freshRoster?.userKey === rotated.userKey.id && freshRoster?.recipients.length === 1 && freshRoster.recipients[0].header.kid === unlock.keyAgreementKey.id)
-const vaultDescriptor = ((await space.collection('vault').describe()) as { encryption?: CollectionEncryption } | null)?.encryption
-const oldKid = userKeyVaultKeys({ userKey: session.userKey }).keyAgreementKey.id
-const newKid = userKeyVaultKeys({ userKey: rotated.userKey }).keyAgreementKey.id
-const epochs = vaultDescriptor?.epochs ?? []
-check('the vault has a fresh epoch and no epoch names the old user key', epochs.length === 2 && epochs.every((epoch) => !epoch.recipients.some((entry) => entry.header.kid === oldKid)), epochs.length)
-check('every epoch names the new user key', epochs.length > 0 && epochs.every((epoch) => epoch.recipients.some((entry) => entry.header.kid === newKid)))
-const oldResolves = vaultDescriptor ? await resolveEpochKeys({ encryption: vaultDescriptor, keyAgreementKey: userKeyVaultKeys({ userKey: session.userKey }).keyAgreementKey }).catch(() => null) : null
-check('the old user key resolves no epoch key', oldResolves === null, oldResolves ? 'still unwraps' : undefined)
-const rotatedClient = await PwsClient.fromSigner({ baseServerUrl: serverUrl, signer: asAccount.signer, encryption: sessionEncryption(rotated) })
-const oldRecord = (await rotatedClient.space(spaceId).collection('vault').get(added.id)) as { hello?: string } | null
-check('the new user key still reads the record written before the rotation', oldRecord?.hello === 'world')
-const addedAfter = await rotatedClient.space(spaceId).collection('vault').add({ hello: 'again' })
-const newRecord = (await rotatedClient.space(spaceId).collection('vault').get(addedAfter.id)) as { hello?: string } | null
-check('and reads one written after it', newRecord?.hello === 'again')
-const remaining = await listCredentials({ session: rotated })
-check('the catalogue, re-sealed to the new key, lists the passphrase alone', remaining.length === 1 && remaining[0].kind === 'passphrase' && remaining[0].current)
+console.log(`server ${WAS}, provisioning ${PROVISIONING}`)
+const signup = await time('signup', () => signUp({ email, passphrase, registrationCode: COUPON, config: { serverUrl: WAS, provisioning: PROVISIONING } }))
+check('signup publishes a did:webvh', signup.establishment.did.startsWith('did:webvh:'), signup.establishment.did)
+check('signup reports no failed stages', signup.establishment.failed.length === 0, signup.establishment.failed)
 
-// --- stay signed in: a browser credential, signed out again, then pruned -------
-const browserSecret = randomBytes(32)
-const browserId = await browserUnlock(browserSecret)
-await addCredential({ session: rotated, acting: credential, config, unlock: browserId, kind: 'browser', label: 'Roundtrip browser' })
-check('a browser credential joins the roster', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 2)
-const viaBrowser = await readCredential({ unlock: await browserUnlock(browserSecret), serverUrl })
-check('the browser secret opens the account with the current user key', viaBrowser?.keys.userKey.id === rotated.userKey.id)
-check('it is catalogued as a browser', (await listCredentials({ session: rotated })).some((c) => c.kind === 'browser' && c.label === 'Roundtrip browser'))
-await leaveAccount({ session: rotated, unlock: browserId, config })
-check('signing out drops its roster entry', (await readRoster({ was: asAccountClient, spaceId }))?.roster.recipients.length === 1)
-check('and its unlock records', (await readCredential({ unlock: await browserUnlock(browserSecret), serverUrl })) === null)
-const beforePrune = await resolveDID(did)
-check('its keys stay in the document until pruned', ((beforePrune.didDocument as { capabilityInvocation?: unknown[] })?.capabilityInvocation?.length ?? 0) === 2)
-check('a password sign-in prunes them', (await pruneCredentials({ session: rotated, acting: credential, minAgeMs: 0 })) === 1)
-const afterPrune = await resolveDID(did)
-check('the document lists the passphrase alone again', ((afterPrune.didDocument as { capabilityInvocation?: unknown[] })?.capabilityInvocation?.length ?? 0) === 1)
+// --- the transient login on the passphrase ---
+const credential = await time('passphrase derivation', () => passphraseCredential(passphrase))
+const found = await fetchStandingRecord({ credential, serverUrl: WAS })
+check('the standing record points at the account', found?.pointer.did === signup.establishment.did)
+check('the record proof verified', found?.proofState === 'verified', found?.proofState)
+if (!found) {
+  throw new Error('no record')
+}
+const entry = await time('transient login', () => openTransientSession({ credential, found, serverUrl: WAS }))
+const session: TransientSession = { ...entry.session, email }
+check('the session signs as the client annex', session.clientAnnexDid.startsWith('did:webvh:') && session.clientAnnexDid !== session.did)
+const first = await registryOf(session)
+const registry = await readUnlockMethods({ pws: first.pws, spaceId: session.spaceId, userKey: session.userKey, capability: first.capability })
+check('the registry lists the passphrase', registry?.record.methods.some((m) => m.type === 'passphrase'), registry?.record.methods.map((m) => m.type))
 
-// --- clean up -----------------------------------------------------------------
-const gone = await space.deleteWithOutcome()
-check('scratch Main Space deleted', gone.outcome === 'deleted')
-const unlockGone = await deleteUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, spaceId: unlock.spaceId })
-check('unlock space deleted', unlockGone.outcome === 'deleted')
-const passkeyUnlockGone = await deleteUnlockSpace({ baseServerUrl: serverUrl, zcapClient: passkeyUnlock.zcapClient, spaceId: passkeyUnlock.spaceId })
-check('the emptied passkey unlock space deleted', passkeyUnlockGone.outcome === 'deleted')
+// --- a passkey credential, added from the transient session ---
+const prf = randomBytes(32)
+const passkey = await deriveUnlockCredential({ secret: prf, kdf: PASSKEY_KDF })
+const established = await time('add a passkey credential (ladder branch)', () => addStandingCredential({ session, credential: passkey, lowEntropy: false, email }))
+check('the passkey credential has its own unlock Space', established.unlockSpaceId === passkey.unlock.spaceId)
+await updateUnlockMethods({
+  pws: first.pws,
+  spaceId: session.spaceId,
+  userKey: session.userKey,
+  capability: first.capability,
+  mutate: (existing) =>
+    upsertMethod({
+      record: existing!,
+      entry: {
+        type: 'passkey',
+        label: 'Round-trip passkey',
+        createdAt: new Date().toISOString(),
+        credentialId: toBase64url(randomBytes(16)),
+        transports: ['internal'],
+        backupEligibility: false,
+        backupState: false,
+        unlockSpaceId: established.unlockSpaceId,
+        ...(established.manageCapability && { manageCapability: established.manageCapability }),
+        ...established.standingFields,
+      },
+    }),
+})
+
+// --- the remembered login on the passkey: a fresh "browser" self-enrolls ---
+const store = memoryClientKeyStore()
+const passkeyFound = await fetchStandingRecord({ credential: passkey, serverUrl: WAS })
+check('the passkey record carries the standing layout', Boolean(passkeyFound?.ladderSeed && passkeyFound.delegation && passkeyFound.delegatedClients))
+if (!passkeyFound) {
+  throw new Error('no passkey record')
+}
+const remembered = await time('remembered login (self-enrollment)', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
+check('the fresh browser enrolled a client', remembered.enrolled)
+check('the remembered session signs as the account', remembered.session.did === session.did)
+check('the remembered session reads the same user key', remembered.session.userKey.id === session.userKey.id)
+const again = await time('remembered login (record present)', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
+check('a second remembered login reuses the record', !again.enrolled && toBase64url(again.session.clientSeed) === toBase64url(remembered.session.clientSeed))
+const rememberedSession: RememberedSession = { ...again.session, email }
+const second = await registryOf(rememberedSession)
+const registry2 = await readUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, capability: second.capability })
+check('the registry lists both methods', registry2?.record.methods.map((m) => m.type).sort().join(',') === 'passkey,passphrase', registry2?.record.methods.map((m) => m.type))
+
+// --- a recovery code, issued from the remembered session, then used ---
+const issued = await time('issue a recovery code (enrolled branch)', () => issueRecoveryCode({ session: rememberedSession }))
+check('the code entry names its unlock Space', issued.entry.unlockSpaceId.length > 0)
+await updateUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, mutate: (existing) => upsertMethod({ record: existing!, entry: issued.entry }) })
+const recovered = await time('recovery login (transient)', () => recoverWithCode({ code: issued.code, serverUrl: WAS }))
+check('the recovery code opens the account', recovered?.session.did === session.did)
+check('the recovery session holds the user key', recovered?.session.userKey.id === session.userKey.id)
+
+// --- a second recovery code, issued from the recovery (transient) session ---
+if (recovered) {
+  const transientRecovery: TransientSession = { ...recovered.session, email }
+  const issuedAgain = await time('issue a recovery code (ladder branch)', () => issueRecoveryCode({ session: transientRecovery, label: 'Second code' }))
+  const recoveredAgain = await time('second code login', () => recoverWithCode({ code: issuedAgain.code, serverUrl: WAS }))
+  check('the second code opens the account', recoveredAgain?.session.did === session.did)
+}
+
+// --- the passphrase still works after all of it ---
+const later = await time('passphrase login after the changes', () => openTransientSession({ credential, found, serverUrl: WAS }))
+check('the passphrase still opens the account', later.session.userKey.id === session.userKey.id)
+const wrong = await fetchStandingRecord({ credential: await passphraseCredential(`${passphrase}-wrong`), serverUrl: WAS })
+check('a wrong passphrase finds no record', wrong === null)
+
+console.log(failures ? `\n${failures} FAILED` : '\nall ok')
 process.exit(failures ? 1 : 0)

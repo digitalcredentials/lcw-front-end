@@ -2,8 +2,20 @@ import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
-import { recoverAccount, requestRecoveryEmail, setSession, recoverySecretOf } from '../lib/identity';
+import { decodeRecoveryCode, normalizeRecoveryCode } from '@interop/wallet-core/recovery';
+import { recoverAccount, requestRecoveryEmail, setSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
+
+// Whether the typed text is a recovery code at all (the right alphabet
+// and length), before the server is asked.
+function looksLikeRecoveryCode(input: string): boolean {
+  try {
+    decodeRecoveryCode({ code: normalizeRecoveryCode({ input }) });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // "Forgot your password?": two steps. The address asks the back end to email
 // the account's recovery code; the code, with a new password, opens the
@@ -36,7 +48,7 @@ export default function ForgotPage() {
   async function handleRecover(e: FormEvent) {
     e.preventDefault();
     setError('');
-    if (!recoverySecretOf(code)) {
+    if (!looksLikeRecoveryCode(code)) {
       setError('That does not look like a recovery code. Copy it from the email exactly as sent.');
       return;
     }
@@ -50,7 +62,7 @@ export default function ForgotPage() {
       const session = await recoverAccount({
         email: email.trim(),
         code,
-        newPassphrase: password,
+        passphrase: password,
         config: identityConfig(),
       });
       setSession(session);

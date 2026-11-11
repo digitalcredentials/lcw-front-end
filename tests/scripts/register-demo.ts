@@ -1,13 +1,15 @@
 // Registers the deployed demo account the way the wallet's register page
-// does (src/lib/identity): mints its keys, records the email with the back
-// end (which emails the confirmation link), creates the Main Space, publishes
-// and promotes the did:webvh, and binds the passphrase. The confirmation
-// link still has to be clicked before login works.
+// does (src/lib/identity): creates the account and client-annex Spaces with
+// the registration code as the coupon, runs the credential-anchored
+// genesis on the passphrase, records the email with the back end (which
+// emails the confirmation link), and promotes the Spaces to the account's
+// did:webvh. The confirmation link still has to be clicked before login
+// works.
 //
 //   DEMO_EMAIL=jc.chartrand@gmail.com REGISTRATION_CODE=... npx tsx tests/scripts/register-demo.ts
 //
 // Environment: DEMO_EMAIL and REGISTRATION_CODE (required), DEMO_PASSPHRASE
-// (defaults to the deployed tests' passphrase), API_BASE, WAS_URL, ID_DOMAIN
+// (defaults to the deployed tests' passphrase), API_BASE and WAS_URL
 // (default to the sandbox).
 import '@interop/http-client'
 import { registerAccount } from '../../src/lib/identity'
@@ -25,7 +27,6 @@ const message = await registerAccount({
   config: {
     apiBase: (process.env.API_BASE ?? 'https://api.lcw-sandbox.org').replace(/\/+$/, ''),
     serverUrl: (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, ''),
-    idDomain: process.env.ID_DOMAIN ?? 'id.lcw-sandbox.org',
   },
   onStage: (stage) => console.log(`${stage}…`),
 })

@@ -1,5 +1,6 @@
 import { PwsClient, discoverService } from '@interop/pws-client'
-import type { ServiceDescription } from '@interop/pws-client'
+import type { ServiceDescription, Space } from '@interop/pws-client'
+import type { IZcap } from '@interop/data-integrity-core/zcap'
 import { getSession, sessionAgents, sessionEncryption } from './identity/session'
 
 // The server's service description, discovered once per server for the
@@ -25,8 +26,35 @@ export function parseSpaceUrl(spaceUrl: string): { serverUrl: string; spaceId: s
   return match ? { serverUrl: match[1], spaceId: match[2] } : null
 }
 
-// A client for the session's Main Space, or null when there is no session.
-export async function getSessionWASClient(): Promise<{ client: PwsClient; spaceId: string } | null> {
+// A client whose Space handles ride the capability the session holds for
+// that Space (a transient session reaches the account Space through its
+// generation delegation; a remembered session invokes as the account), and
+// whose other members are the underlying client's.
+function sessionClient(client: PwsClient, capabilityFor: (spaceId: string) => IZcap | undefined): PwsClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (property === 'space') {
+        return (spaceId: string, options?: { capability?: IZcap }): Space => {
+          const capability = options?.capability ?? capabilityFor(spaceId)
+          return target.space(spaceId, capability ? { ...options, capability } : options)
+        }
+      }
+      const value = Reflect.get(target, property, receiver)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+export interface SessionClient {
+  client: PwsClient
+  spaceId: string
+  // The Space's handle, with the session's capability for it applied
+  space: Space
+}
+
+// A client for the session's account Space, or null when there is no
+// session.
+export async function getSessionWASClient(): Promise<SessionClient | null> {
   const session = getSession()
   if (!session) {
     return null
@@ -34,51 +62,25 @@ export async function getSessionWASClient(): Promise<{ client: PwsClient; spaceI
   return getSessionWASClientFor(`${session.serverUrl}/space/${session.spaceId}`)
 }
 
-// A client for a specific space, signed as the account's did:webvh, which
-// every Space is promoted to at creation. Encrypted collections decrypt
-// with the user key.
-export async function getSessionWASClientFor(
-  spaceUrl: string
-): Promise<{ client: PwsClient; spaceId: string } | null> {
+// A client for a specific space, signed as the session's acting identity.
+// Encrypted collections decrypt with the user key. A transient session
+// reaches only the account Space (its generation delegation covers nothing
+// else), so another Space's handle answers 404 to it.
+export async function getSessionWASClientFor(spaceUrl: string): Promise<SessionClient | null> {
   const session = getSession()
   const parsed = parseSpaceUrl(spaceUrl)
   if (!session || !parsed) {
     return null
   }
-  const { asAccount } = await sessionAgents(session)
-  const client = await PwsClient.fromSigner({
-    baseServerUrl: parsed.serverUrl,
-    signer: asAccount.signer,
-    encryption: sessionEncryption(session),
-    serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
-  })
-  return { client, spaceId: parsed.spaceId }
-}
-
-// A client signed as the key's did:key form, for a Space whose promotion to
-// the account tore and that still answers to the key. Null without a session.
-export async function getSessionKeyClient(): Promise<{ client: PwsClient; spaceId: string } | null> {
-  const session = getSession()
-  if (!session) {
-    return null
-  }
-  return getSessionKeyClientFor(`${session.serverUrl}/space/${session.spaceId}`)
-}
-
-export async function getSessionKeyClientFor(
-  spaceUrl: string
-): Promise<{ client: PwsClient; spaceId: string } | null> {
-  const session = getSession()
-  const parsed = parseSpaceUrl(spaceUrl)
-  if (!session || !parsed) {
-    return null
-  }
-  const { asKey } = await sessionAgents(session)
-  const client = await PwsClient.fromSigner({
-    baseServerUrl: parsed.serverUrl,
-    signer: asKey.signer,
-    encryption: sessionEncryption(session),
-    serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
-  })
-  return { client, spaceId: parsed.spaceId }
+  const { signer, capabilityFor } = await sessionAgents(session)
+  const client = sessionClient(
+    PwsClient.fromSigner({
+      baseServerUrl: parsed.serverUrl,
+      signer,
+      encryption: sessionEncryption(session),
+      serviceDescription: await serviceDescriptionFor(parsed.serverUrl),
+    }),
+    capabilityFor
+  )
+  return { client, spaceId: parsed.spaceId, space: client.space(parsed.spaceId) }
 }

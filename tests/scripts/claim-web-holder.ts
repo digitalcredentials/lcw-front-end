@@ -1,7 +1,9 @@
 // Claims a badge from the deployed test issuer as the demo account's did:web
 // projection, the way src/lib/claim.ts does when an issuer accepts did:web:
-// signs in, checks the projection the identity domain serves, creates an
-// exchange, signs the DIDAuth presentation with the session's key under the
+// signs in as a remembered client (a passkey credential added for the run,
+// since only a session signed in with a passkey signs as the account),
+// checks the projection the PWS server serves beside the log, creates an
+// exchange, signs the DIDAuth presentation with the client's key under the
 // did:web, and checks that the issuer verified it (it resolves the did:web
 // over HTTPS) and bound the credential to that DID. Nothing is stored.
 //
@@ -10,7 +12,9 @@ import '@interop/http-client'
 import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
-import { openWithPassphrase, acceptedMethodsOf, chooseAccountMethod, holderSigner, webDidOf } from '../../src/lib/identity'
+import { clientSigningKeyMultibase } from '@interop/wallet-core/webvh'
+import { addPasskeyCredential, acceptedMethodsOf, chooseAccountMethod, holderSigner, loginWithPassphrase, memoryClientKeyStore, requireTransient, sessionAgents, webDidOf } from '../../src/lib/identity'
+import { randomBytes } from '../../src/lib/identity/bytes'
 
 const email = process.env.DEMO_EMAIL
 if (!email) {
@@ -21,7 +25,6 @@ const passphrase = process.env.DEMO_PASSPHRASE ?? 'my-secret-seed-that-is-long-e
 const config = {
   apiBase: (process.env.API_BASE ?? 'https://api.lcw-sandbox.org').replace(/\/+$/, ''),
   serverUrl: (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, ''),
-  idDomain: process.env.ID_DOMAIN ?? 'id.lcw-sandbox.org',
 }
 const issuerApi = (process.argv[2] ?? 'https://ko29d8ljta.execute-api.us-east-1.amazonaws.com').replace(/\/+$/, '')
 let failures = 0
@@ -30,16 +33,21 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   if (!ok) failures++
 }
 
-const { session } = await openWithPassphrase({ email, passphrase, config })
+const transient = await loginWithPassphrase({ email, passphrase, config })
+const session = await addPasskeyCredential({ session: requireTransient(transient), prfOutput: randomBytes(32), config, store: memoryClientKeyStore(), label: 'Claim script passkey' })
+check('the session signs as the account (a remembered client)', session.kind === 'remembered')
 const webDid = webDidOf(session)
-check('the account has a did:web projection id', webDid.startsWith(`did:web:${config.idDomain}:`), webDid)
+check('the account has a did:web projection id', webDid.startsWith('did:web:'), webDid)
 
-// The projection, as a did:web resolver fetches it
-const projectionUrl = `https://${config.idDomain}/${session.spaceId}/did.json`
+// The projection, as a did:web resolver fetches it: beside the log in the
+// account Space's `id` collection
+const projectionUrl = `${config.serverUrl}/space/${session.spaceId}/id/did.json`
 const projection = (await (await fetch(projectionUrl)).json().catch(() => null)) as { id?: string; alsoKnownAs?: string[]; verificationMethod?: { id: string }[] } | null
-check('the identity domain serves did.json', projection !== null, projectionUrl)
+check('the server serves did.json', projection !== null, projectionUrl)
 check('the projection is the did:web, also known as the did:webvh', projection?.id === webDid && projection?.alsoKnownAs?.includes(session.did) === true)
-check("the projection lists the session's key under the did:web", projection?.verificationMethod?.some((vm) => vm.id === `${webDid}#${session.controller.slice('did:key:'.length)}`) === true)
+const { agents } = await sessionAgents(session)
+const multibase = clientSigningKeyMultibase({ keyAgent: agents.keyAgent })
+check("the projection lists the client's key under the did:web", projection?.verificationMethod?.some((vm) => vm.id === `${webDid}#${multibase}`) === true)
 
 // The exchange, as the wallet's claim runs it
 const created = (await (await fetch(`${issuerApi}/workflows/lcw-sandbox-badge/exchanges`, { method: 'POST' })).json()) as {
@@ -52,8 +60,8 @@ const { verifiablePresentationRequest: vpr } = (await (await fetch(exchangeUrl, 
 }
 const accepted = acceptedMethodsOf(vpr)
 check('the issuer states the DID methods it accepts', accepted.length > 0, accepted.join(', ') || 'none')
-const method = chooseAccountMethod(accepted) ?? 'web'
-check('the wallet would answer with an account DID', chooseAccountMethod(accepted) !== null, method)
+const method = chooseAccountMethod(accepted, session) ?? 'web'
+check('the wallet would answer with an account DID', chooseAccountMethod(accepted, session) !== null, method)
 
 const { did: holderDid, signer } = await holderSigner(session, method)
 const signedVp = await jsigs.sign(
