@@ -97,14 +97,18 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
 - **My Spaces** (`src/pages/SpaceBrowserPage.tsx`, `src/lib/spaces.ts`): the
   account's spaces as cards (the WAS server's `GET /spaces/`), with names
   and descriptions read from each space's Space Metadata object
-  (`/space/{s}/meta`). **New Space** provisions a space through the server's
-  `POST /spaces/` (controller DID, type array, coupon); renaming and
-  describing a space replaces its metadata object under `If-Match`. A space
-  whose type array carries `BatchSpace` is a batch space: its card asks
-  whether to open the batch view or the standard space view. Creating,
-  renaming and deleting spaces sign as the account, so they need a session
-  opened with a passkey; a password session lists the account Space alone
-  and says so when asked for more.
+  (`/space/{s}/meta`). The user does not create spaces: the account has its
+  one account space, the model FreeWallet shares, and the only other
+  spaces are batch spaces, which the batch issuer creates when a batch is
+  saved (`createSpace` in `src/lib/spaces.ts`, through the server's
+  `POST /spaces/` with the coupon, then handed to the account DID) and
+  deletes with the batch. Renaming and describing a space replaces its
+  metadata object under `If-Match`. A space whose type array carries
+  `BatchSpace` is a batch space: its card asks whether to open the batch
+  view or the standard space view. Creating, renaming and deleting spaces
+  sign as the account, so they need a session opened with a passkey; a
+  password session lists the account space alone and says so when asked
+  for more.
 - **Space browser**: a space's collections and resources through
   [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client),
   signing every request with the account's signing key. Collections and credentials are

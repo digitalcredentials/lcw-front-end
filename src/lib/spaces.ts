@@ -59,11 +59,14 @@ function spaceInfo(item: { id: string; type?: string[]; name?: string; createdAt
   }
 }
 
-// Provisions a new Space of the given kind. The Space is created under a
-// fresh did:key with the account's coupon (the registration token), then
-// handed to the account's did:webvh, so every client of the account may
-// use it. Resolves to the new Space URL.
-export async function createSpace(type: 'credential' | 'batch', name: string): Promise<string> {
+// Provisions a batch Space, the one kind of Space the wallet creates after
+// registration (the batch issuer calls this when a batch is saved; the user
+// has no "new space" of their own, the account Space being the one
+// credential space, as in FreeWallet's model). The Space is created under
+// a fresh did:key with the account's coupon (the registration token the
+// session carries), then handed to the account's did:webvh, so every
+// client of the account may use it. Resolves to the new Space URL.
+export async function createSpace(type: 'batch', name: string): Promise<string> {
   const session = requireSession()
   if (session.kind !== 'remembered') {
     throw new PasskeySessionRequiredError('Creating a space')

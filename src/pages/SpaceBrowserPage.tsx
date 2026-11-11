@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/pws-client';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
-import { listSpaces, createSpace, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
+import { listSpaces, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
@@ -73,11 +73,6 @@ export default function FileBrowserPage() {
   // A clicked batch space, held while the user chooses between the batch
   // view (the batch issuer, opened on that batch) and the standard space view
   const [batchPrompt, setBatchPrompt] = useState<SpaceInfo | null>(null);
-  const [newSpaceOpen, setNewSpaceOpen] = useState(false);
-  const [newSpaceName, setNewSpaceName] = useState('');
-  const [newSpaceDescription, setNewSpaceDescription] = useState('');
-  const [creatingSpace, setCreatingSpace] = useState(false);
-  const [newSpaceError, setNewSpaceError] = useState<Failure | null>(null);
 
   const session = useMemo(
     () => (activeSpace ? getSessionWASClientFor(activeSpace.url) : getSessionWASClient()),
@@ -696,39 +691,6 @@ export default function FileBrowserPage() {
     setError(null);
   }
 
-  // Creates a credential space, then writes its description into its Space
-  // Metadata object when one was given
-  const createNewSpace = useCallback(async () => {
-    const name = newSpaceName.trim();
-    if (!name) {
-      return;
-    }
-    setCreatingSpace(true);
-    setNewSpaceError(null);
-    try {
-      const spaceUrl = await createSpace('credential', name);
-      const description = newSpaceDescription.trim();
-      if (description) {
-        await updateSpaceMeta(spaceUrl, { description });
-      }
-      setSpaceDetails((current) => ({
-        ...current,
-        [spaceUrl]: { name, ...(description && { description }) },
-      }));
-      setNewSpaceOpen(false);
-      setNewSpaceName('');
-      setNewSpaceDescription('');
-      await loadSpaces();
-    } catch (err) {
-      handleError('create-space', err, setNewSpaceError);
-      if (!isSessionEnded(err)) {
-        void loadSpaces();
-      }
-    } finally {
-      setCreatingSpace(false);
-    }
-  }, [handleError, newSpaceName, newSpaceDescription, loadSpaces]);
-
   function openCollection(collection: CollectionSummary) {
     setSelected(collection);
     setResources([]);
@@ -831,14 +793,9 @@ export default function FileBrowserPage() {
             >
               New Collection
             </button>
-          ) : (
-            <button
-              onClick={() => { setNewSpaceError(null); setNewSpaceName(''); setNewSpaceDescription(''); setNewSpaceOpen(true); }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-            >
-              New Space
-            </button>
-          )}
+          ) : null}
+          {/* The spaces view has no create button: the account has one
+              credential space, and batch spaces come from saving a batch */}
         </div>
 
         {/* The open space's description, with the same raised pencil edit as
@@ -1389,75 +1346,6 @@ export default function FileBrowserPage() {
                 Batch View
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {newSpaceOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4"
-          onClick={() => setNewSpaceOpen(false)}
-        >
-          <div
-            role="dialog"
-            aria-label="New Space"
-            className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">New Space</h2>
-            <form
-              onSubmit={(e) => { e.preventDefault(); createNewSpace(); }}
-              className="space-y-4"
-            >
-              <div>
-                <label htmlFor="space-name" className="block text-sm font-medium text-gray-700 mb-1">
-                  Name
-                </label>
-                <input
-                  id="space-name"
-                  type="text"
-                  autoFocus
-                  value={newSpaceName}
-                  onChange={(e) => setNewSpaceName(e.target.value)}
-                  placeholder="e.g. Professional credentials"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label htmlFor="space-description" className="block text-sm font-medium text-gray-700 mb-1">
-                  Description <span className="font-normal text-gray-400">(optional)</span>
-                </label>
-                <textarea
-                  id="space-description"
-                  rows={2}
-                  value={newSpaceDescription}
-                  onChange={(e) => setNewSpaceDescription(e.target.value)}
-                  placeholder="What this space holds"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                />
-              </div>
-              {newSpaceError && (
-                <div role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <FailureText failure={newSpaceError} />
-                </div>
-              )}
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewSpaceOpen(false)}
-                  className="border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creatingSpace || !newSpaceName.trim()}
-                  className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2 transition-colors"
-                >
-                  {creatingSpace ? 'Creating…' : 'Create'}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

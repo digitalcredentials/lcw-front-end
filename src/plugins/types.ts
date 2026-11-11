@@ -10,9 +10,10 @@ import type { SpaceInfo } from '../lib/spaces';
 export interface WalletHost {
   // The signed-in session's WAS client; null when the session is gone.
   getSession(): Promise<{ client: PwsClient } | null>;
-  // The WAS server's /spaces API, authenticated as the session's DID.
+  // The WAS server's /spaces API, authenticated as the session's DID. Only
+  // batch spaces are created: the account has its one credential space.
   spaces: {
-    create(type: 'credential' | 'batch', name: string): Promise<string>;
+    create(type: 'batch', name: string): Promise<string>;
     list(): Promise<SpaceInfo[]>;
     remove(spaceUrl: string): Promise<void>;
   };
