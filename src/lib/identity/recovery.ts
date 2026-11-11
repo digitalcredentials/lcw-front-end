@@ -7,6 +7,7 @@ import { wrapUnlockRecord } from '@interop/wallet-core/unlock'
 import { accountControllerResolver, pwsWebvhIdStore, webvhZcapClient } from '@interop/wallet-core/webvh'
 import { addUserKeyRosterRecipient, userKeyRosterDescriptorStore, userKeyRosterLogSigner } from '@interop/wallet-core/keys'
 import type { UnlockCredential } from './credential'
+import { provisionUnlockSpace } from './provision'
 import { delegateUnlockManagement, fetchStandingRecord, pointerOf, type StandingRecord } from './records'
 import type { Session, RememberedSession, TransientSession } from './session'
 import { actingAuthority } from './standing'
@@ -41,8 +42,11 @@ export interface IssuedRecoveryCode {
   entry: RecoveryCodeUnlockMethod
 }
 
-// Issues a new recovery code for the account from a live session.
-export async function issueRecoveryCode({ session, label = 'Recovery code' }: { session: Session; label?: string }): Promise<IssuedRecoveryCode> {
+// Issues a new recovery code for the account from a live session. The
+// code's unlock Space is created with the coupon (the session's
+// registration token unless given), so the server's capped coupon-less
+// path is not used.
+export async function issueRecoveryCode({ session, label = 'Recovery code', coupon = session.coupon }: { session: Session; label?: string; coupon?: string }): Promise<IssuedRecoveryCode> {
   const code = generateRecoveryCode()
   const credential = await recoveryCredential(code)
   const { client, unlock } = credential
@@ -64,6 +68,7 @@ export async function issueRecoveryCode({ session, label = 'Recovery code' }: { 
     signer: unlock.recordSigner,
     bindingMacKey: client.bindingMacKey,
   })
+  await provisionUnlockSpace({ credential, serverUrl, coupon })
   await ensureUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   await putUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
   const manageCapability = await delegateUnlockManagement({ credential, serverUrl, to: session.did })
