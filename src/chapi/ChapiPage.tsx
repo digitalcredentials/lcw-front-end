@@ -6,7 +6,7 @@ import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces } from '../lib/spaces';
 import { isAuthenticated, getEmail } from '../lib/auth';
-import { loginWithPassphrase, openWithBrowserCredential, setSession } from '../lib/identity';
+import { loginWithPassphrase, loginWithPasskey, passkeySupported, setSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
@@ -77,18 +77,9 @@ function hostOf(origin: string | undefined): string {
 const NEW_COLLECTION = '__new__';
 
 // Whether this pop-up has a session it can use. A pop-up is a window of its
-// own, so it has none of the main tab's; a browser credential kept by "Stay
-// signed in on this browser" opens the account before the sign-in form shows.
+// own, so it has none of the main tab's: the user signs in here, with a
+// password or a passkey.
 async function signedIn(): Promise<boolean> {
-  if (!isAuthenticated()) {
-    const opened = await openWithBrowserCredential({ config: identityConfig() }).catch((err) => {
-      console.error('Could not sign in with the browser credential:', err);
-      return null;
-    });
-    if (opened) {
-      setSession(opened.session);
-    }
-  }
   return isAuthenticated() && Boolean(await getSessionWASClient());
 }
 
@@ -726,9 +717,32 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
     }
   }
 
+  async function handlePasskey() {
+    setError('');
+    setLoading(true);
+    try {
+      setSession(await loginWithPasskey({ config: identityConfig() }));
+      await onSignedIn();
+    } catch (err) {
+      console.error('Passkey sign-in failed:', err);
+      setError('Unable to sign in with a passkey. Please try again.');
+      setLoading(false);
+    }
+  }
+
   return (
     <form onSubmit={handleSubmit} className="space-y-3" noValidate>
       <p className="text-sm text-gray-700">Sign in to continue.</p>
+      {passkeySupported() && (
+        <button
+          type="button"
+          onClick={handlePasskey}
+          disabled={loading}
+          className="w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2"
+        >
+          Sign in with a passkey
+        </button>
+      )}
       <div>
         <label htmlFor="chapi-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
         <input

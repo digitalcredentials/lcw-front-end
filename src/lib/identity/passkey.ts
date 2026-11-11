@@ -1,11 +1,11 @@
 // WebAuthn ceremonies for passkey credentials. A passkey unlocks the account
 // through the PRF extension: the authenticator evaluates an HMAC, keyed
 // per credential, over a fixed input, and the 32-byte output is the unlock
-// secret the credential's unlock identity derives from (wallet-core's
-// passkey derivation, the same constants as FreeWallet's, so a passkey
-// registered here derives the same unlock identity there). Nothing is
-// verified server-side: the challenge is throwaway, and the one property
-// used is the PRF output, which a replayed assertion never exposes.
+// secret the credential derives from (FreeWallet's passkey derivation, the
+// same constants, so a passkey registered here derives the same unlock
+// identity there). Nothing is verified server-side: the challenge is
+// throwaway, and the one property used is the PRF output, which a replayed
+// assertion never exposes.
 import type { UnlockKdf } from '@interop/wallet-core/keyring'
 
 // FreeWallet's passkey parameters, verbatim: the derivation that turns a
@@ -84,28 +84,54 @@ function prfOutputOf(credential: PublicKeyCredential): Uint8Array | null {
   return output
 }
 
-// The WebAuthn user handle for an account: a stable function of the email,
-// so a second registration on the same authenticator replaces the first
-// rather than piling up.
-export async function userHandleFor(email: string): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email.trim().toLowerCase())))
+// The backup flags of a registration (whether the passkey can be, and is,
+// synced), from the authenticator data's flags byte; unknown reads as false.
+function backupFlagsOf(credential: PublicKeyCredential): { backupEligibility: boolean; backupState: boolean } {
+  try {
+    const response = credential.response as AuthenticatorAttestationResponse & { getAuthenticatorData?: () => ArrayBuffer }
+    const data = response.getAuthenticatorData?.()
+    if (!data || data.byteLength < 33) {
+      return { backupEligibility: false, backupState: false }
+    }
+    const flags = new Uint8Array(data)[32]
+    return { backupEligibility: (flags & 0x08) !== 0, backupState: (flags & 0x10) !== 0 }
+  } catch {
+    return { backupEligibility: false, backupState: false }
+  }
+}
+
+export interface PasskeyRegistration {
+  credentialId: Uint8Array
+  prfOutput: Uint8Array
+  transports: string[]
+  backupEligibility: boolean
+  backupState: boolean
 }
 
 // Registers a passkey for the account: a discoverable credential with user
-// verification, under the page's own registrable domain. Resolves to the
-// credential id and the PRF output. When the authenticator will not
+// verification, under the page's own registrable domain, with the
+// account's WebAuthn user handle (one per account, from its unlock-methods
+// registry). Resolves to the credential id, the PRF output and the
+// registration's descriptive members. When the authenticator will not
 // evaluate the PRF at creation, one assertion follows to obtain it; an
 // authenticator that cannot evaluate it at all is refused.
-export async function registerPasskey({ email, rpName }: { email: string; rpName: string }): Promise<{
-  credentialId: Uint8Array
-  prfOutput: Uint8Array
-}> {
+export async function registerPasskey({
+  userHandle,
+  email,
+  rpName,
+  excludeCredentialIds = [],
+}: {
+  userHandle: Uint8Array
+  email: string
+  rpName: string
+  excludeCredentialIds?: Uint8Array[]
+}): Promise<PasskeyRegistration> {
   let credential: PublicKeyCredential
   try {
     credential = (await navigator.credentials.create({
       publicKey: {
         rp: { name: rpName },
-        user: { id: (await userHandleFor(email)) as BufferSource, name: email, displayName: email },
+        user: { id: userHandle as BufferSource, name: email, displayName: email },
         challenge: challenge(),
         pubKeyCredParams: [
           { type: 'public-key', alg: -8 },
@@ -113,6 +139,7 @@ export async function registerPasskey({ email, rpName }: { email: string; rpName
           { type: 'public-key', alg: -257 },
         ],
         authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        excludeCredentials: excludeCredentialIds.map((id) => ({ type: 'public-key' as const, id: id as BufferSource })),
         attestation: 'none',
         extensions: PRF_EXTENSION,
       },
@@ -121,6 +148,8 @@ export async function registerPasskey({ email, rpName }: { email: string; rpName
     mapError(err)
   }
   const credentialId = copyBytes(credential.rawId)
+  const response = credential.response as AuthenticatorAttestationResponse & { getTransports?: () => string[] }
+  const transports = response.getTransports?.() ?? []
   let prfOutput = prfOutputOf(credential)
   if (!prfOutput) {
     if (credential.getClientExtensionResults().prf?.enabled === false) {
@@ -128,7 +157,7 @@ export async function registerPasskey({ email, rpName }: { email: string; rpName
     }
     prfOutput = (await assertPasskey({ credentialIds: [credentialId] })).prfOutput
   }
-  return { credentialId, prfOutput }
+  return { credentialId, prfOutput, transports, ...backupFlagsOf(credential) }
 }
 
 // Asserts a passkey and evaluates the PRF: with no credential ids, the

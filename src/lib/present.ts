@@ -17,10 +17,10 @@ const documentLoader = securityLoader().build()
 // `<fingerprint>.json` ids are found the same way. The collection holds one
 // small key document per claimed credential, so the scan is cheap.
 async function findStoredKey(
-  session: { client: import('@interop/pws-client').PwsClient; spaceId: string },
+  session: { space: import('@interop/pws-client').Space },
   holderDid: string
 ): Promise<unknown | null> {
-  const dids = session.client.space(session.spaceId).collection('dids')
+  const dids = session.space.collection('dids')
   const list = await dids.list().catch(() => null)
   for (const item of list?.items ?? []) {
     const stored = await dids.resource(item.id).get().catch(() => null)
@@ -51,7 +51,7 @@ export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   if (!session) {
     throw new Error('UNAUTHORIZED')
   }
-  const space = session.client.space(session.spaceId)
+  const space = session.space
   const list = await space.collections()
   const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
 
@@ -101,7 +101,9 @@ export async function presentationFor({
   const subject = credentials[0]?.credentialSubject as { id?: unknown } | undefined
   const subjectId = typeof subject?.id === 'string' ? subject.id : undefined
   const account = getSession()
-  const own = account && subjectId ? accountMethodOf(account, subjectId) : null
+  // The account's own DIDs are signed for by a session opened with a
+  // passkey; a password session presents them unsigned
+  const own = account && subjectId && account.kind === 'remembered' ? accountMethodOf(account, subjectId) : null
   const holderDid = subjectId && (own || subjectId.startsWith('did:key:')) ? subjectId : undefined
 
   if (!didAuth || !challenge || !holderDid) {

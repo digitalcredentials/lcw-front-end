@@ -12,7 +12,7 @@ import {
 } from '@interop/wallet-core/clientAnnex'
 import { accountControllerResolver, clientSigningKeyMultibase, delegatedWebvhLogStore, didKeyZcapClient, verifyAccountLog, webvhZcapClient, isWebvhDid, type PublishedWebvhLog, type VerifiedAccountLog } from '@interop/wallet-core/webvh'
 import { readUserKeyRoster, userKeyRosterDescriptorStore, userKeyRosterLogSigner } from '@interop/wallet-core/keys'
-import { ID_COLLECTION } from '@interop/wallet-core/space'
+import { ID_COLLECTION, plaintextCollection } from '@interop/wallet-core/space'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import type { UnlockCredential } from './credential'
 import { bindStandingRecord, pointerLocation, type StandingRecord } from './records'
@@ -201,6 +201,18 @@ export async function openTransientSession({
   if (!generationDelegation) {
     throw new TransientLoginUnavailableError({ reason: 'no-generation-delegation' })
   }
+  // The generation's log is a did:webvh log a resolver outside this server
+  // (the back end verifying a sign-in signed as the annex) reads over
+  // HTTPS, so it is made world-readable, as the account's `id` is. Best
+  // effort through the sibling delegation; a refusal changes nothing here.
+  void plaintextCollection({
+    pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
+    spaceId: annexSpaceId,
+    collectionId: clientAnnexDidParts({ did: clientAnnexDid }).generationId,
+    capability: sibling,
+  })
+    .setPublic()
+    .catch(() => undefined)
 
   // 4. The user key, from the credential's standing roster wrap, read as
   // the annex identity under the generation delegation

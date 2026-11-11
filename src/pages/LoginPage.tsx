@@ -1,23 +1,21 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  openWithPassphrase,
-  openWithPasskey,
-  housekeeping,
+  loginWithPassphrase,
+  loginWithPasskey,
   addPasskey,
-  addBrowserCredential,
+  ensureRecoveryCode,
   setSession,
   passkeySupported,
   PasskeyCancelledError,
   PasskeyUnsupportedError,
-  type CredentialKeys,
   type Session,
 } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 
-const RP_NAME = 'Learner Credential Wallet';
+export const RP_NAME = 'Learner Credential Wallet';
 const DISMISSED_KEY = (email: string) => `lcw_passkey_offer_dismissed:${email.trim().toLowerCase()}`;
 
 function offerDismissed(email: string): boolean {
@@ -36,27 +34,13 @@ function dismissOffer(email: string): void {
   }
 }
 
-// After a sign-in, in the background, so the user is not kept waiting: the
-// account's maintenance (the recovery code, forgotten browser credentials,
-// the did:web projection) and, when asked, "Stay signed in on this
-// browser", which makes the browser a credential of the account. Best
-// effort: the user is signed in either way, and the next sign-in tries
-// again. The acting credential's keys are held only for this.
-function afterSignIn(session: Session, acting: CredentialKeys, stay: boolean): void {
-  void (async () => {
-    if (stay) {
-      try {
-        await addBrowserCredential({ session, acting, config: identityConfig() });
-      } catch (err) {
-        console.error('Could not keep this browser signed in:', err);
-      }
-    }
-    try {
-      await housekeeping({ session, acting, config: identityConfig() });
-    } catch (err) {
-      console.error('Account maintenance after sign-in failed:', err);
-    }
-  })();
+// After a sign-in, in the background: the account's recovery code is
+// issued and handed to the back end when it holds none yet. Best effort:
+// the user is signed in either way, and the next sign-in tries again.
+function afterSignIn(session: Session): void {
+  void ensureRecoveryCode({ session, config: identityConfig() }).catch((err) => {
+    console.error('The recovery code could not be issued after sign-in:', err);
+  });
 }
 
 function describe(err: unknown, fallback: string): string {
@@ -81,15 +65,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [stay, setStay] = useState(false);
-  // After a passphrase sign-in on a browser with passkey support, the page
-  // offers to add a passkey before continuing. The passphrase credential's
-  // keys (its update key among them) are held only for that step.
+  // After a password sign-in on a browser with passkey support, the page
+  // offers to add a passkey before continuing: a passkey is what lets this
+  // browser stay signed in and manage the account's spaces.
   const [offering, setOffering] = useState<Session | null>(null);
-  const actingRef = useRef<CredentialKeys | null>(null);
 
   function enter(session: Session) {
     setSession(session);
+    afterSignIn(session);
     navigate('/files');
   }
 
@@ -98,13 +81,12 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      // The passphrase derives the unlock identity, whose space holds the
-      // account pointer and the credential's keys; the signing key then
-      // proves the account to the back end (src/lib/identity).
-      const { session, keys } = await openWithPassphrase({ email, passphrase: password, config: identityConfig() });
-      afterSignIn(session, keys.credential, stay);
+      // The password derives the credential whose unlock Space holds the
+      // account pointer; this visit then enters the account as a client of
+      // its annex (src/lib/identity).
+      const session = await loginWithPassphrase({ email, passphrase: password, config: identityConfig() });
       if (passkeySupported() && !offerDismissed(session.email)) {
-        actingRef.current = keys.credential;
+        setSession(session);
         setOffering(session);
       } else {
         enter(session);
@@ -120,9 +102,7 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const { session, keys } = await openWithPasskey({ config: identityConfig() });
-      afterSignIn(session, keys.credential, stay);
-      enter(session);
+      enter(await loginWithPasskey({ config: identityConfig() }));
     } catch (err) {
       setError(describe(err, 'Unable to sign in with a passkey. Please try again.'));
     } finally {
@@ -131,18 +111,19 @@ export default function LoginPage() {
   }
 
   async function handleAddPasskey() {
-    if (!offering || !actingRef.current) {
+    if (!offering) {
       return;
     }
     setError('');
     setLoading(true);
     try {
-      await addPasskey({ session: offering, acting: actingRef.current, config: identityConfig(), rpName: RP_NAME });
+      // The passkey becomes a credential of the account, and this browser
+      // a remembered client of it: the session continues as that client
+      const remembered = await addPasskey({ session: offering, config: identityConfig(), rpName: RP_NAME });
       dismissOffer(offering.email);
-      actingRef.current = null;
-      enter(offering);
+      enter(remembered);
     } catch (err) {
-      setError(describe(err, 'The passkey could not be added. You can try again next time you sign in.'));
+      setError(describe(err, 'The passkey could not be added. You can try again from Sign-in credentials.'));
     } finally {
       setLoading(false);
     }
@@ -153,7 +134,6 @@ export default function LoginPage() {
       return;
     }
     dismissOffer(offering.email);
-    actingRef.current = null;
     enter(offering);
   }
 
@@ -174,8 +154,9 @@ export default function LoginPage() {
           <div role="status">
             <h2 className="text-2xl font-semibold text-gray-800 mb-1">Add a passkey?</h2>
             <p className="text-sm text-gray-500 mb-6">
-              A passkey lets you sign in to this account with your device&#39;s screen lock instead of
-              your password. You can add one now or the next time you sign in.
+              A passkey lets you sign in with your device&#39;s screen lock and keeps this browser signed
+              in. Signing in with a passkey is also what lets you manage this account&#39;s spaces. You can
+              add one now or later from Sign-in credentials.
             </p>
             {error && (
               <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4">
@@ -225,21 +206,9 @@ export default function LoginPage() {
             </label>
             <PasswordInput id="password" autoComplete="current-password" value={password} onChange={setPassword} />
           </div>
-          <label htmlFor="stay" className="flex items-start gap-2 text-sm text-gray-700">
-            <input
-              id="stay"
-              type="checkbox"
-              checked={stay}
-              onChange={(e) => setStay(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <span>
-              Stay signed in on this browser
-              <span className="block text-xs text-gray-500">
-                Not on a shared computer. This browser is listed under Sign-in credentials, where it can be removed.
-              </span>
-            </span>
-          </label>
+          <p className="text-xs text-gray-500">
+            A password signs you in for this tab only. To stay signed in on this browser, add a passkey after signing in.
+          </p>
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}

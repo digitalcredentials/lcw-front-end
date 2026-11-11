@@ -1,11 +1,12 @@
-// Seeds the deployed demo account's Main Space with what the deployed tests
+// Seeds the deployed demo account's Space with what the deployed tests
 // expect: a "UniversityOfToronto" collection (encrypted, the way the wallet
 // creates collections) holding the LCW Experience Badge fixture. Idempotent:
 // a collection or credential already there is left alone.
 //
 // The account itself must exist first (tests/scripts/register-demo.ts, and
 // its confirmation email clicked). The account is opened the way the wallet
-// signs in: the passphrase unlocks the credential, which carries the keys.
+// signs in with a password: a transient session riding the account's
+// generation delegation.
 //
 //   DEMO_EMAIL=jc.chartrand@gmail.com npx tsx tests/scripts/seed-demo.ts
 //
@@ -16,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { PwsClient } from '@interop/pws-client'
 import { ensureFirstEpoch, ownerRecipient } from '@interop/pws-client/edv'
 import { loginWithPassphrase, sessionAgents, sessionEncryption, sessionKeyAgreementKey } from '../../src/lib/identity'
+import { serviceDescriptionFor } from '../../src/lib/identity/service'
 
 const email = process.env.DEMO_EMAIL
 if (!email) {
@@ -35,13 +37,15 @@ const session = await loginWithPassphrase({
 })
 console.log(`space ${session.serverUrl}/space/${session.spaceId} (${session.did})`)
 
-const { asAccount } = await sessionAgents(session)
-const was = await PwsClient.fromSigner({
+const { signer, capabilityFor } = await sessionAgents(session)
+const was = PwsClient.fromSigner({
   baseServerUrl: session.serverUrl,
-  signer: asAccount.signer,
+  signer,
   encryption: sessionEncryption(session),
+  serviceDescription: await serviceDescriptionFor(session.serverUrl),
 })
-const space = was.space(session.spaceId)
+const capability = capabilityFor(session.spaceId)
+const space = was.space(session.spaceId, capability ? { capability } : undefined)
 
 let collection = space.collection(COLLECTION)
 const described = (await collection.describe()) as { encryption?: unknown } | null

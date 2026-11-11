@@ -1,8 +1,7 @@
-import type { PwsClient } from '@interop/pws-client'
 import { getEmail } from './auth'
 import { getSession, sessionVaultKeys } from './identity/session'
 import { listSpaces, type SpaceInfo } from './spaces'
-import { getSessionKeyClientFor, getSessionWASClientFor, parseSpaceUrl } from './was'
+import { getSessionWASClientFor, parseSpaceUrl } from './was'
 import { exportedCollections, packDataExport, readArchivedSpace, type ExportedSpace, type ExportManifest } from './dataExport'
 
 // "Download my data": every space of the account is read through the PWS
@@ -18,25 +17,15 @@ export interface WalletExport {
   manifest: ExportManifest
 }
 
-// Every space answers to the account's did:webvh once promoted; one whose
-// promotion tore still answers to the session key's did:key, so that form is
-// tried when the account's is refused.
+// The Space's archive, read as the session (a transient session reaches
+// its account Space through its generation delegation, which covers the
+// export; a remembered one reaches every Space of the account).
 async function exportArchive(space: SpaceInfo): Promise<Uint8Array> {
-  const attempt = async (handle: { client: PwsClient; spaceId: string } | null) => {
-    if (!handle) {
-      throw new Error('UNAUTHORIZED')
-    }
-    return handle.client.space(handle.spaceId).export()
+  const handle = await getSessionWASClientFor(space.url)
+  if (!handle) {
+    throw new Error('UNAUTHORIZED')
   }
-  try {
-    return await attempt(await getSessionWASClientFor(space.url))
-  } catch (err) {
-    const status = (err as { status?: number })?.status
-    if (status === 401 || status === 403 || status === 404) {
-      return attempt(await getSessionKeyClientFor(space.url))
-    }
-    throw err
-  }
+  return handle.space.export()
 }
 
 async function exportSpace(space: SpaceInfo, problems: string[]): Promise<ExportedSpace> {

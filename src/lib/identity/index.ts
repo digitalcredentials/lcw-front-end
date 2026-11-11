@@ -1,87 +1,59 @@
 import { PwsClient } from '@interop/pws-client'
-import { collectionDescriptorStore, ownerRecipient, replaceRecipient } from '@interop/pws-client/edv'
-import { deriveUnlockIdentity, deleteUnlockSpace } from '@interop/wallet-core/keyring'
-import { userKeyVaultKeys } from '@interop/wallet-core/keys'
-import { webvhZcapClient } from '@interop/wallet-core/webvh'
-import { createAccountLog, projectionOf, publishProjection, publishAccountLog, promoteSpace } from './account'
-import { addCredentialToLog, credentialsInLog, publicKeysOf, readAccountLog, removeCredentialFromLog, type RemovableCredential } from './credentials'
-import { readCatalogue, updateCatalogue, type CatalogueEntry, type CredentialKind } from './catalogue'
-import { RECOVERY_KDF, mintRecoveryCode, recoverySecretOf } from './recoveryCode'
-import { mintCredentialKeys, mintUserKey, multibaseOf, multibaseOfSeed, signingAgents, updateKeyFromSeed, type CredentialKeys, type UserKey } from './keys'
+import type { ZcapClient } from '@interop/ezcap'
+import { KEYRING_KDF } from '@interop/wallet-core/keyring'
+import { formatRecoveryCode } from '@interop/wallet-core/recovery'
+import { deriveUnlockCredential, passphraseCredential, type UnlockCredential } from './credential'
+import { fetchStandingRecord, type StandingRecord } from './records'
+import { openTransientSession, TransientLoginUnavailableError } from './transient'
+import { openRememberedSession } from './remembered'
+import { addStandingCredential } from './standing'
+import { signUp, AccountExistsError } from './signup'
+import { issueRecoveryCode, recoverWithCode } from './recovery'
+import { readUnlockMethods, updateUnlockMethods, upsertMethod, upsertPassphraseMethod, emptyRegistry, type UnlockMethod, type UnlockMethodsRecord } from './unlockMethods'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
-import { bindCredential, openPassphrase, pointerLocation, pointerOf, readCredential, retireCredentialRecords, type IZcap, type UnlockIdentity, type UnlockedKeys } from './unlock'
-import { addRosterRecipient, readRoster, recipientOf, unlockKeyAgreementKeyOf, wrapUserKey, writeRoster } from './roster'
-import { sessionAgents, type Session } from './session'
-import { browserLabel, browserUnlock, forgetStoredBrowserCredential, storeBrowserCredential, storedBrowserCredential } from './browser'
-import { randomBytes } from './bytes'
+import { defaultClientKeyStore, deleteAllClientKeyRecords, hasAnyClientKeyRecord, type ClientKeyStore } from './clientKeyRecord'
+import { sessionAgents, type Session, type TransientSession } from './session'
 import { serviceDescriptionFor } from './service'
+import { fromBase64url, toBase64url } from './bytes'
 
-// The identity layer's entry points: registration, sign-in with either kind
-// of credential, adding and removing credentials (a removal rotates the
-// account's user key), and recovery. All take their configuration as
-// arguments so the same code runs in the wallet (from Vite's env) and in the
-// test scripts (from the shell).
+// The identity layer's entry points: registration, sign-in with a
+// passphrase (a transient session), a passkey (a remembered one) or a
+// recovery code, adding a passkey, changing the passphrase, recovery codes
+// held by the back end, and the list of sign-in methods. All take their
+// configuration as arguments so the same code runs in the wallet (from
+// Vite's env) and in the test scripts (from the shell).
 
 export interface IdentityConfig {
-  // lcw-back-end, which registers the email and verifies sign-in
+  // lcw-back-end, which registers the email, verifies sign-in and holds the
+  // recovery code
   apiBase: string
   // The PWS server the account's spaces live on
   serverUrl: string
-  // The identity domain the account's did:webvh names
-  idDomain: string
 }
-
-export const MAIN_SPACE_NAME = 'Main Space'
-const spacesUrl = (serverUrl: string) => `${serverUrl}/spaces/`
 
 interface ErrorBody {
   message?: string
   error?: string
 }
 
-async function accountClient(session: Session): Promise<PwsClient> {
-  const { asAccount } = await sessionAgents(session)
-  return PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer: asAccount.signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
+export interface LoginResult {
+  verified: boolean
+  email: string
+  controller: string
+  token?: string
 }
 
-// Records a credential in the account's catalogue (catalogue.ts).
-export async function catalogueCredential({
-  session,
-  keys,
-  kind,
-  label,
-  unlock,
-  capability,
-}: {
-  session: Session
-  keys: CredentialKeys
-  kind: CredentialKind
-  label?: string
-  unlock: UnlockIdentity
-  capability: IZcap
-}): Promise<void> {
-  const pub = await publicKeysOf(keys)
-  const entry: CatalogueEntry = {
-    kind,
-    ...(label && { label }),
-    createdAt: new Date().toISOString(),
-    updateMultibase: pub.updateMultibase,
-    stagedMultibase: pub.stagedMultibase,
-    unlockDid: unlock.agent.id,
-    unlockSpaceId: unlock.spaceId,
-    capability,
-  }
-  await updateCatalogue(session, (catalogue) => {
-    catalogue.credentials[pub.signingMultibase] = entry
-  })
+export const invalidCredentials = () => Object.assign(new Error('Invalid email or password.'), { status: 401 })
+
+// Proves the session to the back end: the acting identity signs the login
+// (the enrolled client as the account, or the visit's annex identity),
+// and the registration token comes back as the session's coupon.
+async function backEndLogin({ session, email, config }: { session: Omit<Session, 'email' | 'coupon'>; email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<LoginResult> {
+  const { zcapClient } = await sessionAgents({ ...session, email } as Session)
+  const response = await zcapClient.request({ url: `${config.apiBase}/login`, method: 'POST', action: 'write', json: { email } })
+  return response.data as LoginResult
 }
 
-// Registers an account. In order: the Main Space is created with the
-// registration code as coupon (a wrong code stops here); the account's DID
-// log is minted and published into the space; the back end records the
-// email against the account's did:webvh and emails the confirmation link;
-// the space is promoted to the DID; the passphrase is bound as the first
-// credential and catalogued. Every key is minted here at random.
 export async function registerAccount({
   email,
   passphrase,
@@ -95,779 +67,267 @@ export async function registerAccount({
   config: IdentityConfig
   onStage?: (stage: string) => void
 }): Promise<string> {
-  const credential = mintCredentialKeys()
-  const userKey = await mintUserKey()
-  const agents = await signingAgents(credential.signingSeed)
-  const controller = agents.controllerDid
-
-  onStage?.('Creating your storage space')
-  const created = await agents.zcapClient.request({
-    url: spacesUrl(config.serverUrl),
-    method: 'POST',
-    action: 'POST',
-    json: { controller, name: MAIN_SPACE_NAME, type: ['Space'], coupon: registrationCode },
-  })
-  const spaceId = (created.data as { id: string }).id
-  const was = await PwsClient.fromSigner({ baseServerUrl: config.serverUrl, signer: agents.keyAgent.getSigner(), serviceDescription: await serviceDescriptionFor(config.serverUrl) })
-
-  onStage?.('Publishing your identity')
-  const updateKey = await updateKeyFromSeed(credential.updateSeed)
-  const { did, jsonl } = await createAccountLog({
-    idDomain: config.idDomain,
-    spaceId,
-    signingMultibase: multibaseOf(controller),
-    userKeyMultibase: multibaseOf(userKey.id),
-    updateKey,
-    stagedMultibase: await multibaseOfSeed(credential.stagedSeed),
-  })
-  await publishAccountLog({ was, spaceId, jsonl })
-
-  onStage?.('Registering the account')
-  const res = await fetch(`${config.apiBase}/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, did, registrationCode }),
-  })
-  const body = (await res.json().catch(() => ({}))) as ErrorBody
-  if (!res.ok) {
-    // The space is the only thing created so far; it still answers to the key
-    await was.space(spaceId).deleteWithOutcome().catch(() => undefined)
-    throw new Error(body.error ?? 'Unable to register. Please try again.')
-  }
-  await promoteSpace({ was, spaceId, did, name: MAIN_SPACE_NAME })
-
-  onStage?.('Securing your passphrase')
-  const unlock = await openPassphrase(passphrase)
-  const { capability } = await bindCredential({
-    unlock,
-    serverUrl: config.serverUrl,
-    controller,
-    email,
-    pointer: pointerOf({ did, spaceId, serverUrl: config.serverUrl }),
-    credential,
-  })
-  const session: Session = { email, did, controller, serverUrl: config.serverUrl, spaceId, signingSeed: credential.signingSeed, userKey }
-  await addRosterRecipient({ was: await accountClient(session), spaceId, userKey, recipient: recipientOf(unlock.keyAgreementKey) })
-  await catalogueCredential({ session, keys: credential, kind: 'passphrase', unlock, capability })
-
-  return body.message ?? 'Registration started. Check your email for a confirmation link.'
+  const { message } = await signUp({ email, passphrase, registrationCode, config, onStage })
+  return message
 }
 
-export interface LoginResult {
-  verified: boolean
-  email: string
-  controller: string
-  token?: string
-}
-
-// Opens the account an unlock identity is bound to and proves it to the
-// back end: the credential's signing key signs the login under the
-// account's did:webvh, which the back end verifies against the account
-// document. Resolves to the session and the credential's full keys (the
-// update keys among them, for a caller about to add a credential).
-async function openCredential({
-  unlock,
+async function enterTransiently({
+  credential,
+  found,
   email,
   config,
 }: {
-  unlock: UnlockIdentity
-  // The typed email, or undefined to take the credential's record
-  email?: string
+  credential: UnlockCredential
+  found: StandingRecord
+  email: string
   config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<{ session: Session; keys: UnlockedKeys }> {
-  const found = await readCredential({ unlock, serverUrl: config.serverUrl })
+}): Promise<TransientSession> {
+  const { session } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
+  const login = await backEndLogin({ session, email, config })
+  return { ...session, email: login.email ?? email, coupon: login.token }
+}
+
+// Signs in with a passphrase: a transient session for this tab.
+export async function loginWithPassphrase({ email, passphrase, config }: { email: string; passphrase: string; config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<Session> {
+  const credential = await passphraseCredential(passphrase)
+  const found = await fetchStandingRecord({ credential, serverUrl: config.serverUrl })
   if (!found) {
-    throw Object.assign(new Error('Invalid email or password.'), { status: 401 })
+    throw invalidCredentials()
   }
-  const { contents, keys } = found
-  const pointer = contents.pointer
-  if (!pointer?.did) {
-    throw new Error('This credential is not bound to a promoted account.')
-  }
-  const agents = await signingAgents(keys.credential.signingSeed)
-  if (agents.controllerDid !== contents.controller) {
-    throw new Error('The stored keys do not match the credential.')
-  }
-  const accountEmail = email ?? contents.email
-  if (!accountEmail) {
-    throw new Error('The credential carries no account email.')
-  }
-  const zcapClient = webvhZcapClient({ keyAgent: agents.keyAgent, did: pointer.did })
-  const response = await zcapClient.request({
-    url: `${config.apiBase}/login`,
-    method: 'POST',
-    action: 'write',
-    json: { email: accountEmail },
-  })
-  const result = response.data as LoginResult
-  const session: Session = {
-    email: result.email ?? accountEmail,
-    coupon: result.token,
-    did: pointer.did,
-    controller: contents.controller,
-    ...pointerLocation(pointer),
-    signingSeed: keys.credential.signingSeed,
-    userKey: keys.userKey,
-  }
-  return { session, keys }
-}
-
-// Signs in with a passphrase, returning the session and the credential's
-// keys (for the add-a-passkey step that may follow).
-export async function openWithPassphrase({
-  email,
-  passphrase,
-  config,
-}: {
-  email: string
-  passphrase: string
-  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<{ session: Session; keys: UnlockedKeys }> {
-  return openCredential({ unlock: await openPassphrase(passphrase), email, config })
-}
-
-export async function loginWithPassphrase(options: {
-  email: string
-  passphrase: string
-  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<Session> {
-  return (await openWithPassphrase(options)).session
+  return enterTransiently({ credential, found, email, config })
 }
 
 // Signs in with a passkey: the browser offers the account's discoverable
-// passkeys, the chosen one's PRF output derives its unlock identity, and
-// the account email comes from the credential's record.
-export async function openWithPasskey({ config }: { config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<{ session: Session; keys: UnlockedKeys }> {
+// passkeys, the chosen one's PRF output derives its credential, and this
+// browser's client-key record (or a self-enrollment on a fresh browser)
+// opens a remembered session. The email comes from the credential's record.
+export async function loginWithPasskey({ config, store = defaultClientKeyStore }: { config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>; store?: ClientKeyStore }): Promise<Session> {
   const { prfOutput } = await assertPasskey()
-  const unlock = await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF })
-  return openCredential({ unlock, config })
+  return loginWithPasskeySecret({ prfOutput, config, store })
 }
 
-export async function loginWithPasskey(options: { config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<Session> {
-  return (await openWithPasskey(options)).session
-}
-
-// Adds a credential to the signed-in account: mints its signing and update
-// keys, publishes them to the account document (signed by the acting
-// credential's update key, unwrapped for this operation alone), binds its
-// unlock space with the pointer record and the sealed keys record, makes it
-// a recipient of the user-key roster, and catalogues it with the management
-// capability the binding delegated. Resolves to the new credential's keys.
-export async function addCredential({
-  session,
-  acting,
+export async function loginWithPasskeySecret({
+  prfOutput,
   config,
-  unlock,
-  kind,
-  label,
+  store = defaultClientKeyStore,
+  email: typedEmail,
 }: {
-  session: Session
-  acting: CredentialKeys
-  config: Pick<IdentityConfig, 'serverUrl'>
-  unlock: UnlockIdentity
-  kind: CredentialKind
-  label?: string
-}): Promise<CredentialKeys> {
-  const keys = mintCredentialKeys()
-  await addCredentialToLog({ was: await accountClient(session), spaceId: session.spaceId, did: session.did, acting, added: await publicKeysOf(keys) })
-  const agents = await signingAgents(keys.signingSeed)
-  const { capability } = await bindCredential({
-    unlock,
-    serverUrl: config.serverUrl,
-    controller: agents.controllerDid,
-    email: session.email,
-    pointer: pointerOf({ did: session.did, spaceId: session.spaceId, serverUrl: session.serverUrl }),
-    credential: keys,
-  })
-  await addRosterRecipient({ was: await accountClient(session), spaceId: session.spaceId, userKey: session.userKey, recipient: recipientOf(unlock.keyAgreementKey) })
-  await catalogueCredential({ session, keys, kind, label, unlock, capability })
-  return keys
-}
-
-// Adds a passkey to the signed-in account as a credential of its own:
-// registers it with the browser, then adds it like any credential.
-export async function addPasskey({
-  session,
-  acting,
-  config,
-  rpName,
-}: {
-  session: Session
-  acting: CredentialKeys
-  config: Pick<IdentityConfig, 'serverUrl'>
-  rpName: string
-}): Promise<void> {
-  const { prfOutput } = await registerPasskey({ email: session.email, rpName })
-  const unlock = await deriveUnlockIdentity({ secret: prfOutput, kdf: PASSKEY_KDF })
-  await addCredential({ session, acting, config, unlock, kind: 'passkey' })
-}
-
-// ---- credential management ---------------------------------------------------
-
-// A credential of the account as the settings page lists it: the document's
-// view joined with the catalogue's.
-export interface AccountCredential {
-  signingMultibase: string
-  updateMultibase: string | null
-  stagedHash: string | null
-  kind: CredentialKind | 'unknown'
-  label?: string
-  addedAt: string
-  // Opened this session
-  current: boolean
-  // Whether removeCredential will take it: not this session's, not the
-  // recovery code (replaced automatically; see mintRecoveryCredential), and
-  // paired with an update key in the log
-  removable: boolean
-}
-
-export async function listCredentials({ session }: { session: Session }): Promise<AccountCredential[]> {
-  const [{ log }, catalogue] = await Promise.all([readAccountLog({ was: await accountClient(session), spaceId: session.spaceId }), readCatalogue(session)])
-  const mine = multibaseOf(session.controller)
-  const listed = await credentialsInLog(log)
-  return listed
-    .map((entry) => {
-      const known = catalogue.credentials[entry.signingMultibase]
-      const current = entry.signingMultibase === mine
-      const kind = known?.kind ?? 'unknown'
-      return {
-        ...entry,
-        kind,
-        ...(known?.label && { label: known.label }),
-        addedAt: known?.createdAt ?? entry.addedAt,
-        current,
-        removable: !current && entry.updateMultibase !== null && kind !== 'recovery',
-      }
-    })
-    .sort((a, b) => a.addedAt.localeCompare(b.addedAt))
-}
-
-// The ids of every Space of the account: the server lists by signing DID,
-// and every Space is promoted to the account's did:webvh, but one whose
-// promotion tore stays under the signing key's did:key, so both listings are
-// read and merged, following each listing's `next` links.
-async function accountSpaceIds(session: Session): Promise<string[]> {
-  const { asAccount, asKey } = await sessionAgents(session)
-  const ids = new Set<string>()
-  for (const zcapClient of [asAccount.zcapClient, asKey.zcapClient]) {
-    let url: string | undefined = spacesUrl(session.serverUrl)
-    while (url) {
-      const response = await zcapClient.request({ url, method: 'GET', action: 'GET' })
-      const page = response.data as { items?: { id?: string; url?: string }[]; next?: string }
-      for (const item of page.items ?? []) {
-        const id = item.id ?? item.url?.replace(/\/+$/, '').split('/').pop()
-        if (id) {
-          ids.add(id)
-        }
-      }
-      url = page.next
-    }
-  }
-  return [...ids]
-}
-
-// Rotates every encrypted collection of the account from one user key to
-// another: a fresh epoch for new writes wrapped to the new key and every
-// earlier epoch re-wrapped to it (pws-client's replaceRecipient: one read
-// and one compare-and-swap write per collection), then the old key's wraps
-// dropped from every epoch in a second write, so the old key unwraps
-// nothing the server serves from now on. Records are not re-encrypted: a
-// copy of ciphertext taken before the rotation stays readable to a copy of
-// the old key. When a collection fails, the ones already rotated are rotated
-// back and the error propagates; the caller gets the same rollback for its
-// own later failures, so the account is never left half on each key.
-async function rotateCollections({ session, from, to }: { session: Session; from: UserKey; to: UserKey }): Promise<{ count: number; rollback: () => Promise<void> }> {
-  const was = await accountClient(session)
-  const fromKey = userKeyVaultKeys({ userKey: from }).keyAgreementKey
-  const toKey = userKeyVaultKeys({ userKey: to }).keyAgreementKey
-  type EncryptedCollection = ReturnType<ReturnType<PwsClient['space']>['collection']>
-  const swap = async (collection: EncryptedCollection, retire: typeof fromKey, incoming: typeof toKey) => {
-    await replaceRecipient({
-      collection,
-      retire: retire.id as string,
-      recipient: ownerRecipient({ keyAgreementKey: incoming }),
-      owner: { keyAgreementKey: retire },
-      resolveRecipientKey: async () => null,
-      pull: async () => {},
-    })
-    // The retiring key's wraps leave the history too; the incoming key is a
-    // recipient of every epoch by now, so nothing becomes unreadable
-    const store = collectionDescriptorStore({ collection })
-    const read = await store.read()
-    if (read) {
-      const retired = retire.id as string
-      const descriptor = {
-        ...read.descriptor,
-        epochs: (read.descriptor.epochs ?? []).map((epoch) => ({ ...epoch, recipients: epoch.recipients.filter((entry) => entry.header.kid !== retired) })),
-      }
-      await store.replace(descriptor, { ifMatch: read.etag })
-    }
-  }
-  const rotated: EncryptedCollection[] = []
-  const rollback = async () => {
-    for (const collection of rotated.splice(0)) {
-      await swap(collection, toKey, fromKey).catch((undo) => console.error('A collection could not be rotated back:', undo))
-    }
-  }
-  try {
-    for (const spaceId of await accountSpaceIds(session)) {
-      const space = was.space(spaceId)
-      const listing = await space.collections().catch(() => null)
-      for (const item of listing?.items ?? []) {
-        if ('deleted' in item && item.deleted) {
-          continue
-        }
-        const collection = space.collection(item.id)
-        const described = (await collection.describe().catch(() => null)) as { encryption?: { scheme?: string } } | null
-        if (described?.encryption?.scheme !== 'edv') {
-          continue
-        }
-        await swap(collection, fromKey, toKey)
-        rotated.push(collection)
-      }
-    }
-  } catch (err) {
-    await rollback()
-    throw err
-  }
-  return { count: rotated.length, rollback }
-}
-
-// Removes a credential from the account and rotates the user key it held:
-//
-//   1. One log entry drops the removed credential's keys from the document
-//      and replaces the account's user key under keyAgreement (signed by the
-//      acting credential's update key, unwrapped for this operation alone).
-//   2. The removed credential's records are retired from its unlock space
-//      under the management capability the catalogue holds (or the space
-//      deleted outright when the caller holds its unlock identity).
-//   3. Every encrypted collection of every Space is rotated to the new key.
-//   4. A fresh user-key roster for the new key names the remaining
-//      credentials as its recipients, in one write; should it fail, the
-//      collections are rotated back.
-//   5. The catalogue forgets the credential and is re-sealed to the new key.
-//
-// Resolves to the session on the new user key (the caller stores it) and
-// whether the records were retired. A session open elsewhere keeps the old
-// key and signs in again.
-export async function removeCredential({
-  session,
-  acting,
-  credential,
-  config,
-  unlock,
-}: {
-  session: Session
-  acting: CredentialKeys
-  credential: RemovableCredential | AccountCredential
-  config: Pick<IdentityConfig, 'serverUrl'>
-  unlock?: UnlockIdentity
-}): Promise<{ session: Session; retired: boolean; rotatedCollections: number }> {
-  if (credential.signingMultibase === multibaseOf(session.controller)) {
-    throw new Error('The credential this session signed in with cannot be removed from it.')
-  }
-  if (!credential.updateMultibase) {
-    throw new Error('That credential has no update key of its own in the log and cannot be removed.')
-  }
-  const removed: RemovableCredential = { ...credential, updateMultibase: credential.updateMultibase }
-  const catalogue = await readCatalogue(session)
-  const removedEntry = catalogue.credentials[credential.signingMultibase]
-  const remaining = Object.entries(catalogue.credentials).filter(([signing]) => signing !== credential.signingMultibase)
-  const newUserKey = await mintUserKey()
-  const was = await accountClient(session)
-
-  await removeCredentialFromLog({
-    was,
-    spaceId: session.spaceId,
-    did: session.did,
-    acting,
-    removed,
-    userKey: { retire: multibaseOf(session.userKey.id), add: multibaseOf(newUserKey.id) },
-  })
-
-  let retired = false
-  const { asAccount } = await sessionAgents(session)
-  if (unlock) {
-    await deleteUnlockSpace({ baseServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
-    retired = true
-  } else if (removedEntry) {
-    retired = (await retireCredentialRecords({ serverUrl: config.serverUrl, zcapClient: asAccount.zcapClient, spaceId: removedEntry.unlockSpaceId, capability: removedEntry.capability })).retired
-  }
-
-  const { count: rotatedCollections, rollback } = await rotateCollections({ session, from: session.userKey, to: newUserKey })
-  try {
-    const current = await readRoster({ was, spaceId: session.spaceId })
-    const recipients = remaining.map(([, entry]) => recipientOf(unlockKeyAgreementKeyOf(entry.unlockDid)))
-    await writeRoster({ was, spaceId: session.spaceId, roster: await wrapUserKey({ userKey: newUserKey, recipients }), ifMatch: current?.etag })
-  } catch (err) {
-    await rollback()
-    throw err
-  }
-
-  const rotated: Session = { ...session, userKey: newUserKey }
-  await updateCatalogue(
-    session,
-    (current) => {
-      delete current.credentials[credential.signingMultibase]
-    },
-    { sealWith: rotated }
-  )
-  return { session: rotated, retired, rotatedCollections }
-}
-
-// Re-authentication for credential management: opens a credential of this
-// account and hands back its keys (the update key among them) for one
-// operation. The credential may be any of the account's, not only the one
-// the session opened.
-export async function confirmWithPassphrase({
-  session,
-  passphrase,
-  config,
-}: {
-  session: Session
-  passphrase: string
+  prfOutput: Uint8Array
   config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<CredentialKeys> {
-  const opened = await openWithPassphrase({ email: session.email, passphrase, config })
-  if (opened.session.did !== session.did) {
-    throw Object.assign(new Error('That password belongs to a different account.'), { status: 401 })
-  }
-  return opened.keys.credential
-}
-
-export async function confirmWithPasskey({ session, config }: { session: Session; config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<CredentialKeys> {
-  const opened = await openWithPasskey({ config })
-  if (opened.session.did !== session.did) {
-    throw Object.assign(new Error('That passkey belongs to a different account.'), { status: 401 })
-  }
-  return opened.keys.credential
-}
-
-// ---- recovery ----------------------------------------------------------------
-//
-// The account's recovery code is a credential like any other: its own signing
-// and update keys in the account document, its own unlock space. The back end
-// also holds the code (encrypted), so "Forgot your password?" can email it.
-
-const apiUrl = (config: Pick<IdentityConfig, 'apiBase'>, path: string) => `${config.apiBase}${path}`
-
-async function accountRequest(session: Session, config: Pick<IdentityConfig, 'apiBase'>, init: { path: string; method: 'GET' | 'PUT'; json?: unknown }) {
-  const { asAccount } = await sessionAgents(session)
-  return asAccount.zcapClient.request({
-    url: apiUrl(config, init.path),
-    method: init.method,
-    action: init.method === 'GET' ? 'read' : 'write',
-    ...(init.json !== undefined && { json: init.json as Record<string, unknown> }),
-  })
-}
-
-// Mints a recovery credential for the account and returns its code: adds it
-// to the account document (signed by `acting`'s update key), binds its unlock
-// space, and stores the code with the back end.
-async function mintRecoveryCredential({
-  session,
-  acting,
-  config,
-}: {
-  session: Session
-  acting: CredentialKeys
-  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<string> {
-  const code = mintRecoveryCode()
-  const secret = recoverySecretOf(code)!
-  const unlock = await deriveUnlockIdentity({ secret, kdf: RECOVERY_KDF })
-  await addCredential({ session, acting, config, unlock, kind: 'recovery' })
-  await accountRequest(session, config, { path: '/recovery', method: 'PUT', json: { email: session.email, code } })
-  return code
-}
-
-// After a sign-in: if the account has no recovery code stored with the back
-// end, or no catalogued recovery credential in its document (the stored code
-// then opens nothing), mint one, replacing any stored code. Idempotent; a
-// failure leaves the account as it was (at worst an unused credential in the
-// document, which credential management removes), so the caller treats it
-// as best effort.
-export async function ensureRecoveryCredential({
-  session,
-  acting,
-  config,
-}: {
-  session: Session
-  acting: CredentialKeys
-  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-}): Promise<string | null> {
-  const status = await accountRequest(session, config, { path: `/recovery?email=${encodeURIComponent(session.email)}`, method: 'GET' })
-  if ((status.data as { stored?: boolean }).stored && (await listCredentials({ session })).some((credential) => credential.kind === 'recovery')) {
-    return null
-  }
-  // The code is returned for the test scripts only: the wallet never shows
-  // it, since it reaches the user by email.
-  return mintRecoveryCredential({ session, acting, config })
-}
-
-// Asks the back end to email the account's recovery code. The answer is the
-// same whether or not the address has an account.
-export async function requestRecoveryEmail({ email, config }: { email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<void> {
-  const res = await fetch(apiUrl(config, '/forgot'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  })
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as ErrorBody
-    throw new Error(body.error ?? 'The recovery email could not be requested.')
-  }
-}
-
-// Recovers an account with its emailed code and a new passphrase: opens the
-// account through the recovery credential, adds the new passphrase as a
-// credential, signs in with it, replaces the used recovery code (the old
-// one is in a mailbox) with a fresh credential, and removes the old
-// recovery credential, which rotates the user key the code could reach.
-// Resolves to the session of the new passphrase, on the new user key.
-export async function recoverAccount({
-  email,
-  code,
-  newPassphrase,
-  config,
-}: {
-  email: string
-  code: string
-  newPassphrase: string
-  config: IdentityConfig
+  store?: ClientKeyStore
+  email?: string
 }): Promise<Session> {
-  const secret = recoverySecretOf(code)
-  if (!secret) {
-    throw Object.assign(new Error('That is not a recovery code.'), { status: 400 })
+  const credential = await deriveUnlockCredential({ secret: prfOutput, kdf: PASSKEY_KDF })
+  const found = await fetchStandingRecord({ credential, serverUrl: config.serverUrl })
+  if (!found) {
+    throw Object.assign(new Error('This passkey is not registered with an account.'), { status: 401 })
   }
-  const recoveryUnlock = await deriveUnlockIdentity({ secret, kdf: RECOVERY_KDF })
-  const { session: viaRecovery, keys: recoveryKeys } = await openCredential({ unlock: recoveryUnlock, email, config })
+  const email = typedEmail ?? found.email
+  if (!email) {
+    throw new Error('The passkey carries no account email.')
+  }
+  const { session } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
+  const login = await backEndLogin({ session, email, config })
+  return { ...session, email: login.email ?? email, coupon: login.token }
+}
 
-  // The new passphrase, as a credential of its own
-  await addCredential({ session: viaRecovery, acting: recoveryKeys.credential, config, unlock: await openPassphrase(newPassphrase), kind: 'passphrase' })
+// Signs in with a recovery code: a transient session on the code's
+// credential.
+export async function loginWithRecoveryCode({ email, code, config }: { email: string; code: string; config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<Session> {
+  const recovered = await recoverWithCode({ code, serverUrl: config.serverUrl })
+  if (!recovered) {
+    throw Object.assign(new Error('That recovery code is not valid.'), { status: 401 })
+  }
+  const login = await backEndLogin({ session: recovered.session, email, config })
+  return { ...recovered.session, email: login.email ?? email, coupon: login.token }
+}
 
-  // From here on the account is the new passphrase's: replace the used code
-  const { session, keys } = await openWithPassphrase({ email, passphrase: newPassphrase, config })
-  await mintRecoveryCredential({ session, acting: keys.credential, config })
-  const { session: rotated } = await removeCredential({
-    session,
-    acting: keys.credential,
-    credential: await publicKeysOf(recoveryKeys.credential),
+// The account's unlock-methods registry, read as the session.
+async function registryClient(session: Session): Promise<{ pws: PwsClient; capability?: import('@interop/data-integrity-core/zcap').IZcap; zcapClient: ZcapClient }> {
+  const { signer, capabilityFor, zcapClient } = await sessionAgents(session)
+  const pws = PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
+  return { pws, capability: capabilityFor(session.spaceId), zcapClient }
+}
+
+export async function readRegistry(session: Session): Promise<UnlockMethodsRecord | null> {
+  const { pws, capability } = await registryClient(session)
+  return (await readUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }) }))?.record ?? null
+}
+
+async function updateRegistry(session: Session, mutate: (existing: UnlockMethodsRecord | null) => UnlockMethodsRecord): Promise<UnlockMethodsRecord> {
+  const { pws, capability } = await registryClient(session)
+  return updateUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }), mutate })
+}
+
+export type SignInMethodKind = 'passphrase' | 'passkey' | 'recovery-code' | 'backup-credential'
+
+export interface SignInMethod {
+  kind: SignInMethodKind
+  label: string
+  createdAt: string
+  unlockSpaceId: string
+  // The method that opened this session
+  current: boolean
+}
+
+function methodLabel(method: UnlockMethod): string {
+  switch (method.type) {
+    case 'passphrase':
+      return 'Password'
+    case 'passkey':
+      return method.label || 'Passkey'
+    case 'recovery-code':
+      return method.label || 'Recovery code'
+    case 'backup-credential':
+      return method.label || 'Backup file'
+  }
+}
+
+export async function listSignInMethods({ session }: { session: Session }): Promise<SignInMethod[]> {
+  const registry = await readRegistry(session)
+  return (registry?.methods ?? []).map((method) => ({
+    kind: method.type,
+    label: methodLabel(method),
+    createdAt: method.createdAt,
+    unlockSpaceId: method.unlockSpaceId,
+    current: method.unlockSpaceId === session.unlockSpaceId,
+  }))
+}
+
+export function requireTransient(session: Session): TransientSession {
+  if (session.kind !== 'transient') {
+    throw new Error('This step runs from a session opened with a password or a recovery code.')
+  }
+  return session
+}
+
+// Adds a passkey to the account from a transient session and remembers
+// this browser under it: the passkey becomes a standing credential, this
+// browser enrolls as a client whose key record the passkey's PRF output
+// opens, and the session continues as that client.
+export async function addPasskey({ session, config, rpName, store = defaultClientKeyStore }: { session: Session; config: Pick<IdentityConfig, 'serverUrl'>; rpName: string; store?: ClientKeyStore }): Promise<Session> {
+  const transient = requireTransient(session)
+  const registry = (await readRegistry(session)) ?? emptyRegistry()
+  const registration = await registerPasskey({ userHandle: fromBase64url(registry.webAuthnUserId), email: session.email, rpName })
+  return addPasskeyCredential({
+    session: transient,
+    prfOutput: registration.prfOutput,
     config,
-    unlock: recoveryUnlock,
+    store,
+    entry: { credentialId: toBase64url(registration.credentialId), transports: registration.transports, backupEligibility: registration.backupEligibility, backupState: registration.backupState },
   })
-  return rotated
 }
 
-// ---- stay signed in on this browser ------------------------------------------
-//
-// A browser credential (browser.ts): a random secret kept in local storage
-// that opens the account like a passkey would.
-
-// Adds this browser as a credential of the signed-in account and keeps its
-// secret here. A browser credential already held is forgotten first.
-export async function addBrowserCredential({
+// The passkey's credential half, separable for tests without WebAuthn.
+export async function addPasskeyCredential({
   session,
-  acting,
+  prfOutput,
   config,
+  store = defaultClientKeyStore,
+  entry,
+  label = `Passkey added ${new Date().toLocaleDateString()}`,
 }: {
-  session: Session
-  acting: CredentialKeys
+  session: TransientSession
+  prfOutput: Uint8Array
   config: Pick<IdentityConfig, 'serverUrl'>
-}): Promise<void> {
-  const previous = storedBrowserCredential()
-  if (previous) {
-    await forgetBrowserCredential({ config, session: previous.email === session.email ? session : undefined }).catch((err) =>
-      console.warn('The previous browser credential could not be retired:', err)
-    )
+  store?: ClientKeyStore
+  entry?: { credentialId: string; transports: string[]; backupEligibility: boolean; backupState: boolean }
+  label?: string
+}): Promise<Session> {
+  const credential = await deriveUnlockCredential({ secret: prfOutput, kdf: PASSKEY_KDF })
+  const established = await addStandingCredential({ session, credential, lowEntropy: false, email: session.email })
+  await updateRegistry(session, (existing) =>
+    upsertMethod({
+      record: existing ?? emptyRegistry(),
+      entry: {
+        type: 'passkey',
+        label,
+        createdAt: new Date().toISOString(),
+        credentialId: entry?.credentialId ?? '',
+        transports: entry?.transports ?? [],
+        backupEligibility: entry?.backupEligibility ?? false,
+        backupState: entry?.backupState ?? false,
+        unlockSpaceId: established.unlockSpaceId,
+        ...(established.manageCapability && { manageCapability: established.manageCapability }),
+        ...established.standingFields,
+      },
+    })
+  )
+  // This browser, enrolled under the new credential
+  const found = await fetchStandingRecord({ credential, serverUrl: config.serverUrl })
+  if (!found) {
+    throw new Error('The passkey credential was not found after it was added.')
   }
-  const secret = randomBytes(32)
-  const unlock = await browserUnlock(secret)
-  await addCredential({ session, acting, config, unlock, kind: 'browser', label: browserLabel() })
-  storeBrowserCredential({ email: session.email, secret })
+  const remembered = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
+  return { ...remembered.session, email: session.email, coupon: session.coupon }
 }
 
-// Opens the account with the browser credential this browser holds, or
-// resolves to null when it holds none or the credential no longer opens the
-// account (removed from another sign-in), in which case it is forgotten.
-export async function openWithBrowserCredential({ config }: { config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<{ session: Session; keys: UnlockedKeys } | null> {
-  const stored = storedBrowserCredential()
-  if (!stored) {
-    return null
+// Sets a new passphrase from a transient session: a new standing
+// credential replaces the registry's passphrase entry. The previous
+// passphrase keeps opening the account until its credential is removed.
+export async function changePassphrase({ session, passphrase }: { session: Session; passphrase: string }): Promise<void> {
+  const transient = requireTransient(session)
+  const credential = await passphraseCredential(passphrase)
+  if (await fetchStandingRecord({ credential, serverUrl: session.serverUrl })) {
+    throw new AccountExistsError()
   }
-  try {
-    return await openCredential({ unlock: await browserUnlock(stored.secret), email: stored.email, config })
-  } catch (err) {
-    if ((err as { status?: number }).status === 401) {
-      forgetStoredBrowserCredential()
-      return null
-    }
-    throw err
+  const established = await addStandingCredential({ session: transient, credential, lowEntropy: true, email: session.email })
+  await updateRegistry(session, (existing) =>
+    upsertPassphraseMethod({ record: existing ?? emptyRegistry(), unlockSpaceId: established.unlockSpaceId, manageCapability: established.manageCapability, standing: established.standingFields })
+  )
+}
+
+// Issues a recovery code and hands it to the back end, which emails it to
+// the account's address on request (the wallet never shows it).
+export async function ensureRecoveryCode({ session, config, force = false }: { session: Session; config: Pick<IdentityConfig, 'apiBase'>; force?: boolean }): Promise<{ issued: boolean; code?: string }> {
+  const stored = await fetch(`${config.apiBase}/recovery?email=${encodeURIComponent(session.email)}`).then((res) => (res.ok ? (res.json() as Promise<{ stored?: boolean }>) : { stored: false })).catch(() => ({ stored: false }))
+  if (stored.stored && !force) {
+    return { issued: false }
+  }
+  const { code, entry } = await issueRecoveryCode({ session })
+  await updateRegistry(session, (existing) => upsertMethod({ record: existing ?? emptyRegistry(), entry }))
+  const formatted = formatRecoveryCode({ code })
+  const { zcapClient } = await sessionAgents(session)
+  await zcapClient.request({ url: `${config.apiBase}/recovery`, method: 'PUT', action: 'write', json: { email: session.email, code: formatted } })
+  // The code is handed back for the scripts; the wallet's pages never show it
+  return { issued: true, code: formatted }
+}
+
+// Asks the back end to email the account's recovery code. Always answers
+// as if it had, so an address cannot be probed.
+export async function requestRecoveryEmail({ email, config }: { email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<void> {
+  const res = await fetch(`${config.apiBase}/forgot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) })
+  if (!res.ok && res.status !== 202) {
+    const body = (await res.json().catch(() => ({}))) as ErrorBody
+    throw new Error(body.error ?? 'The recovery email could not be sent.')
   }
 }
 
-// Forgets the browser credential this browser holds, as signing out does:
-// its roster entry and catalogue entry go (written as the account, from
-// `session` when it is this account's, else from the credential itself),
-// its unlock space is deleted (the credential controls it), and the secret
-// is removed from local storage, so the next visit asks for a password. Its
-// keys stay listed in the account document until a password or passkey
-// sign-in prunes them (pruneCredentials): a credential cannot remove its
-// own keys from the document, and nothing about the account's user key
-// changed, since the secret only ever lived here.
-export async function forgetBrowserCredential({ config, session }: { config: Pick<IdentityConfig, 'serverUrl'>; session?: Session }): Promise<void> {
-  const stored = storedBrowserCredential()
-  if (!stored) {
-    return
-  }
-  forgetStoredBrowserCredential()
-  const unlock = await browserUnlock(stored.secret)
-  let acting = session
-  if (!acting || acting.email !== stored.email) {
-    const found = await readCredential({ unlock, serverUrl: config.serverUrl })
-    if (!found?.contents.pointer?.did) {
-      return
-    }
-    const agents = await signingAgents(found.keys.credential.signingSeed)
-    acting = {
-      email: stored.email,
-      did: found.contents.pointer.did,
-      controller: agents.controllerDid,
-      ...pointerLocation(found.contents.pointer),
-      signingSeed: found.keys.credential.signingSeed,
-      userKey: found.keys.userKey,
-    }
-  }
-  await leaveAccount({ session: acting, unlock, config })
+// Recovers the account with the emailed code: signs in on the code, sets
+// the new passphrase, and replaces the code with a fresh one.
+export async function recoverAccount({ email, code, passphrase, config }: { email: string; code: string; passphrase: string; config: IdentityConfig }): Promise<Session> {
+  const session = await loginWithRecoveryCode({ email, code, config })
+  await changePassphrase({ session, passphrase })
+  await ensureRecoveryCode({ session, config, force: true })
+  return session
 }
 
-// The part of forgetting a credential that touches the account: the roster
-// entry and the catalogue entry go, then the unlock space.
-export async function leaveAccount({ session, unlock, config }: { session: Session; unlock: UnlockIdentity; config: Pick<IdentityConfig, 'serverUrl'> }): Promise<void> {
-  const was = await accountClient(session)
-  const current = await readRoster({ was, spaceId: session.spaceId })
-  if (current) {
-    const kid = (unlock.keyAgreementKey as { id?: string }).id
-    const recipients = current.roster.recipients.filter((entry) => entry.header.kid !== kid)
-    if (recipients.length !== current.roster.recipients.length) {
-      await writeRoster({ was, spaceId: session.spaceId, roster: { ...current.roster, recipients }, ifMatch: current.etag })
-    }
-  }
-  await updateCatalogue(session, (catalogue) => {
-    for (const [signing, entry] of Object.entries(catalogue.credentials)) {
-      if (entry.unlockDid === unlock.agent.id) {
-        delete catalogue.credentials[signing]
-      }
-    }
-  })
-  await deleteUnlockSpace({ baseServerUrl: config.serverUrl, zcapClient: unlock.zcapClient, serviceDescription: await serviceDescriptionFor(config.serverUrl), spaceId: unlock.spaceId })
+// Whether this browser holds a remembered client (a passkey can open the
+// account without the form).
+export const browserRemembered = (): Promise<boolean> => hasAnyClientKeyRecord()
+
+// Forgets every remembered client this browser holds. The clients stay
+// listed in the account document until they are disconnected.
+export async function forgetThisBrowser(): Promise<void> {
+  await deleteAllClientKeyRecords()
 }
 
-// After a sign-in, in the background: the maintenance the account may need,
-// in one pass that reads the account log and the catalogue once.
-//
-//   1. The did:web projection: rewritten when it differs from what the log
-//      says (a failed write left it stale).
-//   2. Pruning: keys of credentials the catalogue no longer lists (browser
-//      credentials forgotten at sign-out), older than `minAgeMs`, leave the
-//      document, one entry each signed by the acting credential's update
-//      key; a credential cannot drop its own.
-//   3. Recovery: when the back end stores no code, or the catalogue lists no
-//      recovery credential behind it, a new one is minted and stored.
-//
-// Each step is best effort and reported; the session stands either way.
-export async function housekeeping({
-  session,
-  acting,
-  config,
-  minAgeMs = 10 * 60 * 1000,
-}: {
-  session: Session
-  acting: CredentialKeys
-  config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
-  minAgeMs?: number
-}): Promise<{ projection: boolean; pruned: number; recoveryMinted: boolean }> {
-  const was = await accountClient(session)
-  const [{ log }, catalogue] = await Promise.all([readAccountLog({ was, spaceId: session.spaceId }), readCatalogue(session)])
-  const result = { projection: false, pruned: 0, recoveryMinted: false }
-
-  try {
-    const id = was.space(session.spaceId).collection('id', { encryption: 'plaintext' })
-    const wanted = await projectionOf(log)
-    const served = await id.resource('did.json').getWithEtag()
-    const servedDoc = served && !(served.data instanceof Blob) ? (typeof served.data === 'string' ? JSON.parse(served.data) : served.data) : null
-    if (!servedDoc || JSON.stringify(servedDoc) !== JSON.stringify(wanted)) {
-      await publishProjection({ was, spaceId: session.spaceId, log })
-      result.projection = true
-    }
-  } catch (err) {
-    console.warn('The did:web projection could not be checked:', err)
-  }
-
-  try {
-    const mine = multibaseOf(session.controller)
-    const cutoff = Date.now() - minAgeMs
-    for (const entry of await credentialsInLog(log)) {
-      if (entry.signingMultibase === mine || catalogue.credentials[entry.signingMultibase] || !entry.updateMultibase) {
-        continue
-      }
-      if (entry.addedAt && Date.parse(entry.addedAt) > cutoff) {
-        continue
-      }
-      await removeCredentialFromLog({ was, spaceId: session.spaceId, did: session.did, acting, removed: { ...entry, updateMultibase: entry.updateMultibase } })
-      result.pruned++
-    }
-  } catch (err) {
-    console.warn('Forgotten browser credentials could not be pruned:', err)
-  }
-
-  try {
-    const status = await accountRequest(session, config, { path: `/recovery?email=${encodeURIComponent(session.email)}`, method: 'GET' })
-    const stored = Boolean((status.data as { stored?: boolean }).stored)
-    const hasRecovery = Object.values(catalogue.credentials).some((entry) => entry.kind === 'recovery')
-    if (!stored || !hasRecovery) {
-      await mintRecoveryCredential({ session, acting, config })
-      result.recoveryMinted = true
-    }
-  } catch (err) {
-    console.warn('Could not set up account recovery:', err)
-  }
-  return result
-}
-
-// Drops from the account document the keys of credentials the catalogue no
-// longer lists (browser credentials forgotten at sign-out), one log entry
-// each, signed by the acting credential's update key. Only entries older
-// than a few minutes are taken, so a credential being added right now is
-// left alone. Resolves to how many were dropped.
-export async function pruneCredentials({ session, acting, minAgeMs = 10 * 60 * 1000 }: { session: Session; acting: CredentialKeys; minAgeMs?: number }): Promise<number> {
-  const was = await accountClient(session)
-  const [{ log }, catalogue] = await Promise.all([readAccountLog({ was, spaceId: session.spaceId }), readCatalogue(session)])
-  const mine = multibaseOf(session.controller)
-  const cutoff = Date.now() - minAgeMs
-  let pruned = 0
-  for (const entry of await credentialsInLog(log)) {
-    if (entry.signingMultibase === mine || catalogue.credentials[entry.signingMultibase] || !entry.updateMultibase) {
-      continue
-    }
-    if (entry.addedAt && Date.parse(entry.addedAt) > cutoff) {
-      continue
-    }
-    await removeCredentialFromLog({ was, spaceId: session.spaceId, did: session.did, acting, removed: { ...entry, updateMultibase: entry.updateMultibase } })
-    pruned++
-  }
-  return pruned
-}
-
-export type { Session } from './session'
-export type { CredentialKeys } from './keys'
-export type { CredentialKind } from './catalogue'
-export type { UnlockIdentity } from './unlock'
-export { getSession, setSession, clearSession, sessionAgents, sessionEncryption, sessionKeyAgreementKey, sessionSpaceUrl } from './session'
+export { KEYRING_KDF, PASSKEY_KDF }
+export { getSession, setSession, clearSession, sessionAgents, sessionEncryption, sessionKeyAgreementKey, sessionSpaceUrl, sessionVaultKeys, sessionReachesOtherSpaces } from './session'
+export type { Session, TransientSession, RememberedSession } from './session'
 export { passkeySupported, PasskeyCancelledError, PasskeyUnsupportedError } from './passkey'
-export { recoverySecretOf } from './recoveryCode'
-export { removeCredentialFromLog } from './credentials'
 export { acceptedMethodsOf, chooseAccountMethod, accountDid, accountMethodOf, holderSigner, webDidOf } from './holder'
-export { addRosterRecipient, readRoster, recipientOf } from './roster'
-export { BROWSER_KDF, browserLabel, browserUnlock, storedBrowserCredential, forgetStoredBrowserCredential } from './browser'
 export type { AccountDidMethod, HolderSigner } from './holder'
+export { AccountExistsError, TransientLoginUnavailableError }
+export { memoryClientKeyStore } from './clientKeyRecord'
+export type { ClientKeyStore } from './clientKeyRecord'

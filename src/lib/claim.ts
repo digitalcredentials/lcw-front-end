@@ -52,8 +52,9 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     throw new PlainError("The issuer's request was incomplete, so we couldn't collect the credential. Go back to the issuer's page and try again.")
   }
 
-  // 2. The holder DID and its signer
-  const method = chooseAccountMethod(acceptedMethodsOf(vpr))
+  // 2. The holder DID and its signer: an account DID only when the session
+  // can sign for it (one opened with a passkey), else a did:key of its own
+  const method = chooseAccountMethod(acceptedMethodsOf(vpr), account)
   let holderDid: string
   let signer: HolderSigner
   if (method) {
@@ -68,7 +69,7 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     holderDid = `did:key:${key.fingerprint()}`
     key.controller = holderDid
     key.id = `${holderDid}#${key.fingerprint()}`
-    const space = session.client.space(session.spaceId)
+    const space = session.space
     const dids = space.collection('dids')
     await ensureEncryptedCollection({ space, id: 'dids', name: 'dids' })
     const exported = await key.export({ secretKey: true, includeContext: true })
@@ -135,7 +136,7 @@ export async function saveCredential(
     throw new Error('UNAUTHORIZED')
   }
   return writeResource({
-    collection: session.client.space(session.spaceId).collection(collectionId),
+    collection: session.space.collection(collectionId),
     name,
     body: envelope as unknown as ResourceData,
   })

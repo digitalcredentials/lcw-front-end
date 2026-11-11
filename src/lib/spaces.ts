@@ -1,17 +1,16 @@
-import type { ZcapClient } from '@interop/ezcap'
-import { getCoupon } from './auth'
-import { getSession, sessionAgents } from './identity/session'
-import { promoteSpace } from './identity/account'
 import { PwsClient } from '@interop/pws-client'
-import { getSessionWASClientFor } from './was'
+import { agentsFromSeed } from '@interop/pws-client/identity'
+import { didKeyZcapClient } from '@interop/wallet-core/webvh'
+import { getCoupon } from './auth'
+import { getSession, sessionAgents, type Session } from './identity/session'
+import { randomBytes } from './identity/bytes'
+import { getSessionWASClientFor, serviceDescriptionFor } from './was'
 
-// The WAS server's Spaces Repository (Wallet Attached Storage v0.5):
-// POST /spaces/ provisions a Space, GET /spaces/ lists the caller's, and
-// DELETE on the Space's own URL deletes one. Create and list are zcap
-// invocations of their own URL signed with the session key that
-// authenticated at login (the server verifies them against the signer's
-// DID); delete invokes the Space URL, which the server verifies against the
-// Space's registered controller.
+// The PWS server's Spaces Repository: POST /spaces/ provisions a Space,
+// GET /spaces/ lists the caller's, and DELETE on the Space's own URL
+// deletes one. Creating and managing Spaces needs a session that signs as
+// the account (one opened with a passkey): a transient session's authority
+// is its generation delegation on the account Space alone.
 //
 // Space URLs are kept without the trailing slash the spec's canonical form
 // carries (that is how the login API and the registry name them); the
@@ -30,20 +29,23 @@ export interface SpaceInfo {
 
 export const BATCH_SPACE_TYPE = 'BatchSpace'
 
+export class PasskeySessionRequiredError extends Error {
+  constructor(action = 'This action') {
+    super(`${action} needs a session signed in with a passkey.`)
+    this.name = 'PasskeySessionRequiredError'
+  }
+}
+
 function wasBase(): string {
   return (import.meta.env.VITE_WAS_BASE_URL ?? '').replace(/\/+$/, '')
 }
 
-// The session's two signing forms: every Space answers to the account's
-// did:webvh once promoted; the did:key form creates Spaces and lists any
-// whose promotion tore (src/lib/identity).
-async function sessionContext(): Promise<{ asKey: ZcapClient; asAccount: ZcapClient }> {
+function requireSession(): Session {
   const session = getSession()
   if (!session) {
     throw new Error('UNAUTHORIZED')
   }
-  const { asKey, asAccount } = await sessionAgents(session)
-  return { asKey: asKey.zcapClient, asAccount: asAccount.zcapClient }
+  return session
 }
 
 function spaceInfo(item: { id: string; type?: string[]; name?: string; createdAt?: string }): SpaceInfo {
@@ -57,55 +59,50 @@ function spaceInfo(item: { id: string; type?: string[]; name?: string; createdAt
   }
 }
 
-// Provisions a new Space of the given kind. Per the spec the body names a
-// did:key controller and the invocation is signed by it, so the Space is
-// created under the signing key's did:key form (this server additionally
-// requires a coupon, the account's registration token), then promoted to
-// the account's did:webvh so every credential's key may use it. Resolves to
-// the new Space URL.
+// Provisions a new Space of the given kind. The Space is created under a
+// fresh did:key with the account's coupon (the registration token), then
+// handed to the account's did:webvh, so every client of the account may
+// use it. Resolves to the new Space URL.
 export async function createSpace(type: 'credential' | 'batch', name: string): Promise<string> {
-  const session = getSession()
-  if (!session) {
-    throw new Error('UNAUTHORIZED')
+  const session = requireSession()
+  if (session.kind !== 'remembered') {
+    throw new PasskeySessionRequiredError('Creating a space')
   }
-  const { asKey } = await sessionAgents(session)
-  const response = await asKey.zcapClient.request({
+  const seed = randomBytes(32)
+  const { keyAgent, controllerDid } = await agentsFromSeed({ seed })
+  const asKey = didKeyZcapClient({ keyAgent })
+  const response = await asKey.request({
     url: `${wasBase()}/spaces/`,
     method: 'POST',
     action: 'POST',
-    json: {
-      controller: session.controller,
-      name,
-      type: type === 'batch' ? ['Space', BATCH_SPACE_TYPE] : ['Space'],
-      coupon: getCoupon(),
-    },
+    json: { controller: controllerDid, name, type: type === 'batch' ? ['Space', BATCH_SPACE_TYPE] : ['Space'], coupon: getCoupon() },
   })
   const { id } = response.data as { id: string }
-  const was = await PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer: asKey.signer })
-  await promoteSpace({ was, spaceId: id, did: session.did, name })
+  const pws = new PwsClient({ baseServerUrl: session.serverUrl, zcapClient: asKey, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
+  // The promotion: the creating key hands the Space to the account
+  await pws.space(id).configure({ name, controller: session.did, force: true })
   return spaceInfo({ id }).url
 }
 
-// Lists the account's Spaces: the server lists by the signing DID. Every
-// Space is promoted to the account's did:webvh, but a Space whose promotion
-// tore stays under the signing key's did:key, so both listings are read and
-// merged, following each listing's `next` links.
+// Lists the account's Spaces. A remembered session lists by the account
+// DID; a transient session knows its account Space and nothing else.
 export async function listSpaces(): Promise<SpaceInfo[]> {
-  const { asKey, asAccount } = await sessionContext()
-  const seen = new Map<string, SpaceInfo>()
-  for (const zcapClient of [asAccount, asKey]) {
-    let url: string | undefined = `${wasBase()}/spaces/`
-    while (url) {
-      const response = await zcapClient.request({ url, method: 'GET', action: 'GET' })
-      const page = response.data as { items: Parameters<typeof spaceInfo>[0][]; next?: string }
-      for (const item of page.items) {
-        const info = spaceInfo(item)
-        if (!seen.has(info.url)) {
-          seen.set(info.url, info)
-        }
-      }
-      url = page.next
+  const session = requireSession()
+  const account = spaceInfo({ id: session.spaceId })
+  if (session.kind !== 'remembered') {
+    return [account]
+  }
+  const { zcapClient } = await sessionAgents(session)
+  const seen = new Map<string, SpaceInfo>([[account.url, account]])
+  let url: string | undefined = `${wasBase()}/spaces/`
+  while (url) {
+    const response = await zcapClient.request({ url, method: 'GET', action: 'GET' })
+    const page = response.data as { items: Parameters<typeof spaceInfo>[0][]; next?: string }
+    for (const item of page.items) {
+      const info = spaceInfo(item)
+      seen.set(info.url, info)
     }
+    url = page.next
   }
   return [...seen.values()]
 }
@@ -113,28 +110,29 @@ export async function listSpaces(): Promise<SpaceInfo[]> {
 // Deletes a Space (its registry row and its whole bucket) by invoking the
 // Space's canonical URL; the capability action equals the HTTP method.
 export async function deleteSpace(spaceUrl: string): Promise<void> {
-  const { asAccount } = await sessionContext()
-  await asAccount.request({
-    url: `${spaceUrl}/`,
-    method: 'DELETE',
-    action: 'DELETE',
-  })
+  const session = requireSession()
+  if (session.kind !== 'remembered') {
+    throw new PasskeySessionRequiredError('Deleting a space')
+  }
+  const { zcapClient } = await sessionAgents(session)
+  await zcapClient.request({ url: `${spaceUrl}/`, method: 'DELETE', action: 'DELETE' })
 }
 
 // Replaces the writable fields of a Space's metadata object (its name and
 // description) under If-Match, keeping everything else the object holds.
 // The pws-client's configure() carries only name/controller/type, so the
-// description goes through a request of its own.
-export async function updateSpaceMeta(
-  spaceUrl: string,
-  fields: { name?: string; description?: string }
-): Promise<void> {
+// description goes through a request of its own. A root operation on the
+// server, so a remembered session's.
+export async function updateSpaceMeta(spaceUrl: string, fields: { name?: string; description?: string }): Promise<void> {
+  const session = requireSession()
+  if (session.kind !== 'remembered') {
+    throw new PasskeySessionRequiredError('Renaming a space')
+  }
   const s = await getSessionWASClientFor(spaceUrl)
   if (!s) {
     throw new Error('UNAUTHORIZED')
   }
-  const space = s.client.space(s.spaceId)
-  const current = await space.describeWithEtag()
+  const current = await s.space.describeWithEtag()
   if (!current) {
     throw new Error('The space could not be read.')
   }
