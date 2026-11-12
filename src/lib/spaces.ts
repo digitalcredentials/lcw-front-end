@@ -3,7 +3,6 @@ import { agentsFromSeed } from '@interop/pws-client/identity'
 import { didKeyZcapClient } from '@interop/wallet-core/webvh'
 import { getCoupon } from './auth'
 import { getSession, sessionAgents, type Session } from './identity/session'
-import { randomBytes } from './identity/bytes'
 import { getSessionWASClientFor, serviceDescriptionFor } from './was'
 
 // The PWS server's Spaces Repository: POST /spaces/ provisions a Space,
@@ -62,17 +61,20 @@ function spaceInfo(item: { id: string; type?: string[]; name?: string; createdAt
 // Provisions a batch Space, the one kind of Space the wallet creates after
 // registration (the batch issuer calls this when a batch is saved; the user
 // has no "new space" of their own, the account Space being the one
-// credential space, as in FreeWallet's model). The Space is created under
-// a fresh did:key with the account's coupon (the registration token the
-// session carries), then handed to the account's did:webvh, so every
-// client of the account may use it. Resolves to the new Space URL.
+// credential space, as in FreeWallet's model). The Space is created with
+// the account's coupon (the registration token the session carries) under
+// the session's own client key in its did:key form, then handed to the
+// account's did:webvh, so every client of the account may use it. The
+// server hands a Space over only to a DID whose document lists the key
+// asking, which the account document does for an enrolled client's key
+// and would not for a key minted for the occasion. Resolves to the new
+// Space URL.
 export async function createSpace(type: 'batch', name: string): Promise<string> {
   const session = requireSession()
   if (session.kind !== 'remembered') {
     throw new PasskeySessionRequiredError('Creating a space')
   }
-  const seed = randomBytes(32)
-  const { keyAgent, controllerDid } = await agentsFromSeed({ seed })
+  const { keyAgent, controllerDid } = await agentsFromSeed({ seed: session.clientSeed })
   const asKey = didKeyZcapClient({ keyAgent })
   const response = await asKey.request({
     url: `${wasBase()}/spaces/`,
