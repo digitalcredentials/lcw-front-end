@@ -3,22 +3,20 @@ import Brand from '../components/Brand';
 import * as polyfill from 'credential-handler-polyfill';
 import * as WebCredentialHandler from 'web-credential-handler';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
-import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
-import { listSpaces } from '../lib/spaces';
-import { isAuthenticated, getEmail } from '../lib/auth';
+import { getSessionWASClient } from '../lib/was';
+import { isAuthenticated } from '../lib/auth';
 import { loginWithPassphrase, loginWithPasskey, passkeySupported, setSession } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
-import { ensureEncryptedCollection } from '../lib/edv';
-import { isAccountCollection } from '../lib/accountCollections';
+import { normalizeTags } from '../lib/credentials';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
 import { verifyForSharing } from '../lib/verify';
-import { suggestCollectionName, collectionIdFor, lastCollection, rememberLastCollection } from '../lib/collectionName';
+import { suggestTag } from '../lib/collectionName';
 import FailureText from '../components/FailureText';
-import { describeError, isSessionEnded, PlainError, technicalDetail, type Failure, type WalletAction } from '../lib/errors';
+import { describeError, isSessionEnded, PlainError, type Failure, type WalletAction } from '../lib/errors';
 
 // The window CHAPI opens when this wallet is chosen. Two kinds of request
 // arrive at the get() hook: an issuer's exchange (interact.service endpoint —
@@ -31,23 +29,14 @@ import { describeError, isSessionEnded, PlainError, technicalDetail, type Failur
 
 type GetResponse = { type: 'response'; dataType: string; data: unknown };
 
-// The save target choices: every credential space's collections, grouped.
-interface SpaceCollections {
-  spaceUrl: string;
-  spaceName: string;
-  collections: { id: string; name?: string }[];
-}
-
 type Phase =
   | { step: 'starting' }
   | { step: 'not-signed-in' }
   // `from` is the requesting site's host, named while the claim runs
   | { step: 'claiming'; from: string }
-  // `listFailed`: the collections could not be listed, so the picker is
-  // replaced by an error with Retry rather than shown as an empty wallet
-  | { step: 'choose'; claim: ClaimResult; spaces: SpaceCollections[]; listFailed: boolean }
-  // Display names, as the wallet shows them elsewhere, not storage ids
-  | { step: 'saved'; credential: string; collection: string; space: string }
+  // The issued credential, shown with the tags it will be saved under
+  | { step: 'choose'; claim: ClaimResult }
+  | { step: 'saved'; credential: string; tags: string[] }
   // The verifier-request flow: consent first (naming the requester up front),
   // then a picker over the credentials that match the request
   | { step: 'consent'; origin: string; reasons: string[] }
@@ -74,8 +63,6 @@ function hostOf(origin: string | undefined): string {
 }
 
 // Sentinel select value: the user wants to type a new collection name.
-const NEW_COLLECTION = '__new__';
-
 // Whether this pop-up has a session it can use. A pop-up is a window of its
 // own, so it has none of the main tab's: the user signs in here, with a
 // password or a passkey.
@@ -85,13 +72,13 @@ async function signedIn(): Promise<boolean> {
 
 export default function ChapiPage() {
   const [phase, setPhase] = useState<Phase>({ step: 'starting' });
-  const [collectionId, setCollectionId] = useState('');
-  const [newCollectionName, setNewCollectionName] = useState('');
+  // The tags the credential is saved under, as typed: comma-separated,
+  // pre-filled with the category its type suggests
+  const [tagsDraft, setTagsDraft] = useState('');
   const [saving, setSaving] = useState(false);
   // A failed save, shown on the save step: the issued credential is still
   // held, so Save can be pressed again
   const [saveError, setSaveError] = useState<Failure | null>(null);
-  const [listing, setListing] = useState(false);
   // Resolves the get() hook's promise, handing the issued credential back to
   // the mediator (and closing the popup).
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
@@ -200,135 +187,37 @@ export default function ChapiPage() {
     }
   }
 
-  // Lists every credential space's collections for the save picker and picks
-  // the default. Called once the claim has run, and again by Retry, which
-  // must never re-run the exchange: the credential is already issued.
-  async function loadSaveStep(claim: ClaimResult) {
-    setListing(true);
-    let spaces: SpaceCollections[] = [];
-    let listFailed = false;
-    try {
-      // Batch spaces are working storage for the issuer, and dids/Trash/
-      // public are the wallet's own, so neither is offered
-      const spaceInfos = (await listSpaces()).filter((info) => info.type === 'credential');
-      spaces = (await Promise.all(
-        spaceInfos.map(async (info): Promise<SpaceCollections | null> => {
-          const s = await getSessionWASClientFor(info.url);
-          if (!s) {
-            return null;
-          }
-          const [list, desc] = await Promise.all([
-            s.client.space(s.spaceId).collections(),
-            s.client.space(s.spaceId).describe().catch(() => null),
-          ]);
-          return {
-            spaceUrl: info.url,
-            spaceName: (desc as { name?: string } | null)?.name ?? s.spaceId,
-            collections: (list?.items ?? [])
-              .filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
-              .map((c) => ({ id: c.id, name: 'name' in c ? c.name : c.id })),
-          };
-        })
-      )).filter((sp): sp is SpaceCollections => sp !== null);
-    } catch (err) {
-      console.error(`Listing collections failed: ${technicalDetail(err)}`);
-      listFailed = true;
-    } finally {
-      setListing(false);
-    }
-    setPhase({ step: 'choose', claim, spaces, listFailed });
-    if (listFailed) {
-      return;
-    }
-
-    // The default, first match wins: a collection named for the suggested
-    // category (compared as an id, since listings report an encrypted
-    // collection's id as its name); the one this account last saved into;
-    // the first collection anywhere; else a new collection, pre-named.
-    const suggestion = suggestCollectionName(claim.credential);
-    const suggestedId = collectionIdFor(suggestion).toLowerCase();
-    const options = spaces.flatMap((sp) => sp.collections.map((c) => ({ sp, c })));
-    const named = options.find(({ c }) =>
-      c.id.toLowerCase() === suggestedId || collectionIdFor(c.name ?? '').toLowerCase() === suggestedId
-    );
-    const last = lastCollection(getEmail());
-    const lastStillThere = options.find(({ sp, c }) => `${sp.spaceUrl}|${c.id}` === last);
-    const first = options[0];
-    const pick = named ?? lastStillThere ?? first;
-    if (pick) {
-      setCollectionId(`${pick.sp.spaceUrl}|${pick.c.id}`);
-    } else if (spaces[0]) {
-      setCollectionId(`${spaces[0].spaceUrl}|${NEW_COLLECTION}`);
-      setNewCollectionName(suggestion);
-    } else {
-      setCollectionId('');
-    }
+  // Offers the issued credential for saving, with the tag its type suggests.
+  // Called once the claim has run; Save never re-runs the exchange, since
+  // the credential is already issued.
+  function loadSaveStep(claim: ClaimResult) {
+    setTagsDraft(suggestTag(claim.credential));
+    setSaveError(null);
+    setPhase({ step: 'choose', claim });
   }
 
   async function save() {
-    if (phase.step !== 'choose' || !collectionId || !claimRef.current) {
+    if (phase.step !== 'choose' || !claimRef.current) {
       return;
     }
     setSaving(true);
     setSaveError(null);
-    // Which part failed: creating the collection leaves the credential
-    // unsaved, so trying again is safe; the credential's own write may have
-    // landed
-    let step: WalletAction = 'save-claim';
     try {
-      // The selection encodes its space: "<spaceUrl>|<collectionId or __new__>"
-      const [spaceUrl, choice] = collectionId.split('|');
-      const space = phase.spaces.find((sp) => sp.spaceUrl === spaceUrl);
-      let targetId = choice;
-      let collectionName: string;
-      if (choice !== NEW_COLLECTION) {
-        collectionName = space?.collections.find((c) => c.id === choice)?.name ?? choice;
-      } else {
-        // Create the collection first, end-to-end encrypted like every new
-        // credential collection; the id is the name with whitespace dashed
-        // (it becomes a path segment).
-        const name = newCollectionName.trim();
-        if (!name) {
-          return;
-        }
-        collectionName = name;
-        const session = await getSessionWASClientFor(spaceUrl);
-        if (!session) {
-          setPhase({ step: 'not-signed-in' });
-          return;
-        }
-        targetId = collectionIdFor(name);
-        step = 'claim-collection';
-        await ensureEncryptedCollection({
-          space: session.client.space(session.spaceId),
-          id: targetId,
-          name,
-        });
-        step = 'save-claim';
-      }
-      // One name for both the stored file and the message: the display name,
-      // with whitespace and slashes dashed (it becomes a path segment)
+      const tags = normalizeTags(tagsDraft.split(','));
       const displayName = credentialName(claimRef.current.credential);
-      const resourceName = `${displayName.replace(/[\s/]+/g, '-')}-${Date.now()}.json`;
-      await saveCredential(targetId, resourceName, claimRef.current.envelope, spaceUrl);
-      rememberLastCollection(getEmail(), `${spaceUrl}|${targetId}`);
+      await saveCredential({ tags, envelope: claimRef.current.envelope });
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
         dataType: 'VerifiablePresentation',
         data: claimRef.current.envelope,
       });
-      setPhase({
-        step: 'saved',
-        credential: displayName,
-        collection: collectionName,
-        space: space?.spaceName ?? '',
-      });
+      setPhase({ step: 'saved', credential: displayName, tags });
     } catch (err) {
       if (isSessionEnded(err)) {
         fail('save-claim', err);
       } else {
-        setSaveError(describeError(step, err));
+        setSaveError(describeError('save-claim', err));
       }
     } finally {
       setSaving(false);
@@ -461,58 +350,21 @@ export default function ChapiPage() {
               {receivedFrom ? ` from ${receivedFrom}` : ''}.
             </p>
             <div>
-              <label htmlFor="collection" className="block text-sm font-medium text-gray-700 mb-1">
-                Save to collection
+              <label htmlFor="tags" className="block text-sm font-medium text-gray-700 mb-1">
+                Tags
               </label>
-              {phase.listFailed && (
-                <div className="flex items-center gap-3">
-                  <p role="alert" className="flex-1 text-sm text-red-600">Your collections could not be loaded.</p>
-                  <button
-                    onClick={() => void loadSaveStep(phase.claim)}
-                    disabled={listing}
-                    className="border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-3 py-1.5"
-                  >
-                    {listing ? 'Retrying…' : 'Retry'}
-                  </button>
-                </div>
-              )}
-              {!phase.listFailed && phase.spaces.length > 0 && (
-                <select
-                  id="collection"
-                  value={collectionId}
-                  onChange={(e) => {
-                    setCollectionId(e.target.value);
-                    setSaveError(null);
-                    // A new collection starts with the suggested name
-                    if (e.target.value.endsWith(`|${NEW_COLLECTION}`) && !newCollectionName.trim()) {
-                      setNewCollectionName(suggestCollectionName(phase.claim.credential));
-                    }
-                  }}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  {phase.spaces.map((sp) => (
-                    <optgroup key={sp.spaceUrl} label={sp.spaceName}>
-                      {sp.collections.map((c) => (
-                        <option key={c.id} value={`${sp.spaceUrl}|${c.id}`}>{c.name ?? c.id}</option>
-                      ))}
-                      <option value={`${sp.spaceUrl}|${NEW_COLLECTION}`}>New collection…</option>
-                    </optgroup>
-                  ))}
-                </select>
-              )}
-              {!phase.listFailed && collectionId.endsWith(`|${NEW_COLLECTION}`) && (
-                <input
-                  type="text"
-                  value={newCollectionName}
-                  onChange={(e) => {
-                    setNewCollectionName(e.target.value);
-                    setSaveError(null);
-                  }}
-                  placeholder="New collection name"
-                  aria-label="New collection name"
-                  className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              )}
+              <input
+                id="tags"
+                type="text"
+                value={tagsDraft}
+                onChange={(e) => {
+                  setTagsDraft(e.target.value);
+                  setSaveError(null);
+                }}
+                placeholder="e.g. Degrees, University of Toronto"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">Separate tags with commas. You can change them later in the wallet.</p>
             </div>
             {saveError && (
               <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -523,15 +375,13 @@ export default function ChapiPage() {
               <button onClick={cancel} className="flex-1 border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
                 Cancel
               </button>
-              {!phase.listFailed && (
               <button
                 onClick={save}
-                disabled={saving || !collectionId || (collectionId.endsWith(`|${NEW_COLLECTION}`) && !newCollectionName.trim())}
+                disabled={saving}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
               >
                 {saving ? 'Saving…' : 'Save'}
               </button>
-              )}
             </div>
           </div>
         )}
@@ -539,7 +389,7 @@ export default function ChapiPage() {
         {phase.step === 'saved' && (
           <div>
             <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              Saved {phase.credential} to {phase.collection}{phase.space ? ` in ${phase.space}` : ''}. You can close this window.
+              Saved {phase.credential}{phase.tags.length ? ` with the ${phase.tags.length === 1 ? 'tag' : 'tags'} ${phase.tags.join(', ')}` : ''}. You can close this window.
             </p>
             <button onClick={() => window.close()} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
               Done
@@ -608,7 +458,7 @@ export default function ChapiPage() {
                               {credentialName(credential)}
                             </span>
                             <span className="block text-xs text-gray-500">
-                              {issuerName(credential) ?? 'Unnamed issuer'} · {collectionId}
+                              {issuerName(credential) ?? 'Unnamed issuer'}
                             </span>
                           </span>
                         </label>

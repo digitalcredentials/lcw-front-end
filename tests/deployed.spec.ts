@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 //   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 //
 // They use the deployed demo account, seeded by `npm run seed:demo` (tests/scripts/seed-demo.ts)
-// (a UniversityOfToronto collection holding the LCW Experience Badge), and
+// (the LCW Experience Badge, tagged University of Toronto), and
 // only read it -- the batch test creates and deletes a space of its own.
 
 const DEPLOYED_URL = process.env.DEPLOYED_URL ?? '';
@@ -46,10 +46,10 @@ function capture(page: Page): string[] {
   return lines;
 }
 
-// A credential card, found by its title: resource ids in an encrypted
-// collection are opaque, so the card's text is what identifies it.
+// A credential card, found by its title: credential ids are opaque content
+// ids, so the card's text is what identifies it.
 function credentialCard(page: Page, title: string) {
-  return page.locator('[data-resource-id]').filter({ hasText: title });
+  return page.locator('[data-credential-id]').filter({ hasText: title });
 }
 
 async function logIn(page: Page) {
@@ -66,10 +66,8 @@ async function logIn(page: Page) {
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  // Login lands on the spaces card view; every test works inside the demo
-  // account's credential space (a batch space's card opens a batch-view or
-  // space-view prompt instead of the space)
-  await page.locator('[data-space-type="credential"]').first().click();
+  // Login lands on the credentials list
+  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible();
 }
 
 // A virtual authenticator with the PRF extension, so a passkey can be
@@ -102,10 +100,10 @@ async function logInWithPasskey(page: Page) {
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByRole('button', { name: 'Add a passkey' }).click();
-  await page.locator('[data-space-type="credential"]').first().click();
+  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible();
 }
 
-test('logs in and lists the space collections', async ({ page }) => {
+test('logs in and lists the credentials with their tags', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
@@ -114,7 +112,9 @@ test('logs in and lists the space collections', async ({ page }) => {
     await expect(page.getByText('Learner Credential Wallet').first()).toBeVisible();
     // The sidebar names the signed-in account
     await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
-    await expect(page.getByText('UniversityOfToronto').first()).toBeVisible();
+    // The seeded credential's tag is a filter chip, and the credential a card
+    await expect(page.getByRole('button', { name: /University of Toronto/ })).toBeVisible();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
@@ -126,10 +126,8 @@ test('verifies a credential from the deployed space', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
-    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
-    // Open replaces the per-row Verify/View Source/Share/Delete buttons: the
-    // detail view shows the summary, source, and verification side by side
-    // Cards no longer show file names; the card carries its resource id
+    // Open takes a card into the detail view: the summary, source and
+    // verification side by side
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
@@ -177,9 +175,7 @@ test('shares a credential to LinkedIn', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
-    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
-    // Sharing now goes through the credential detail view's bottom buttons
-    // Cards no longer show file names; the card carries its resource id
+    // Sharing goes through the credential detail view's buttons
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await page.getByRole('button', { name: 'Share', exact: true }).click();
@@ -229,17 +225,16 @@ test('shares a credential to LinkedIn', async ({ page }) => {
   }
 });
 
-test('My Spaces and the title link back to the spaces view', async ({ page }) => {
+test('My Credentials and the title link back to the list', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
   try {
-    // Deep into a credential's detail view
-    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
-    // At laptop width Add Credential sits beside the breadcrumb, not under it
+    // At laptop width Add Credential sits beside the heading, not under it
     await expect(page.getByRole('button', { name: 'Add Credential' })).toBeVisible();
-    const crumbs = await page.getByRole('navigation', { name: 'Breadcrumb' }).boundingBox();
+    const heading = await page.getByRole('heading', { name: 'My Credentials' }).boundingBox();
     expect((await page.getByRole('button', { name: 'Add Credential' }).boundingBox())?.y)
-      .toBeLessThan((crumbs?.y ?? 0) + (crumbs?.height ?? 0));
+      .toBeLessThan((heading?.y ?? 0) + (heading?.height ?? 0));
+    // Deep into a credential's detail view
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
@@ -250,18 +245,16 @@ test('My Spaces and the title link back to the spaces view', async ({ page }) =>
     expect((await page.getByRole('button', { name: 'Back to list' }).boundingBox())?.y)
       .toBe((await page.getByRole('button', { name: 'Share', exact: true }).boundingBox())?.y);
 
-    // The sidebar nav link resets to the spaces cards
-    await page.getByRole('link', { name: 'My Spaces' }).click();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    // The sidebar nav link resets to the list
+    await page.getByRole('link', { name: 'My Credentials' }).click();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
 
     // Back into the detail view, then the wallet title resets too
-    await page.locator('[data-space-type="credential"]').first().click();
-    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     await credentialCard(page, 'LCW Experience Badge')
       .getByRole('button', { name: 'Open' }).click();
     await expect(page.getByText('Credential Source')).toBeVisible();
     await page.getByRole('link', { name: /Digital Credentials Commons/ }).click();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
@@ -298,7 +291,7 @@ test('offers the welcome credential on first open after registration', async ({ 
     // Declining clears it and the wallet is usable
     await page.getByRole('button', { name: 'No thanks' }).click();
     await expect(page.getByRole('dialog', { name: 'Welcome Credential' })).toBeHidden();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
@@ -384,7 +377,7 @@ test.describe('with a passkey', () => {
     await page.goto(`${DEPLOYED_URL}/#/files`);
     await page.reload();
     await page.getByRole('button', { name: 'Continue with passkey' }).click();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
     await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
 
     // Forgetting the browser drops its record: a fresh tab asks to sign in
@@ -422,11 +415,12 @@ test('downloads every document unencrypted as one tar', async ({ page }) => {
     expect(manifest.format).toBe('lcw-data-export/1');
     expect(manifest.account).toBe(DEMO_EMAIL);
     expect(manifest.problems).toEqual([]);
-    // No account collection reaches the file
-    expect(names.filter((n) => /\/(id|account|dids|public)\//.test(n))).toEqual([]);
-    // The demo credential, decrypted, under its space and collection folders
+    // No account collection, holder key or public copy reaches the file
+    expect(names.filter((n) => /\/(id|account|dids|public|public-credentials|key-map|unlock-methods|connections|inbox|app-keys)\//.test(n))).toEqual([]);
+    // The demo credential, decrypted, under its space folder and the
+    // private-credentials collection
     const badge = entries.find(
-      (e) => /\/UniversityOfToronto\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
+      (e) => /\/private-credentials\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
     );
     expect(badge, names.join('\n')).toBeTruthy();
     // The demo seed stores the credential inside a presentation; either way
@@ -470,7 +464,7 @@ test.describe('on a phone', () => {
 
   test('fits the screen, with the links behind Menu', async ({ page }) => {
     await logIn(page);
-    await expect(page.getByRole('button', { name: /UniversityOfToronto/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /University of Toronto/ })).toBeVisible();
     const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
     expect(await fits()).toBe(true);
     // The title bar spans the screen, not the laptop sidebar's 240px
@@ -489,15 +483,15 @@ test.describe('on a phone', () => {
     const folded = await icon();
     // Screen readers hear the same name, "Menu", with collapsed or expanded
     await expect(menu).toHaveAttribute('aria-expanded', 'false');
-    await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
+    await expect(page.getByRole('link', { name: 'My Credentials' })).toBeHidden();
     await expect(page.getByRole('button', { name: 'Sign Out' })).toBeHidden();
     await menu.click();
     await expect(page.getByRole('button', { name: 'Sign Out' })).toBeVisible();
     await expect(menu).toHaveAttribute('aria-expanded', 'true');
     expect(await icon()).not.toBe(folded);
-    await page.getByRole('link', { name: 'My Spaces' }).click();
-    await expect(page.locator('[data-space-type]').first()).toBeVisible();
-    await expect(page.getByRole('link', { name: 'My Spaces' })).toBeHidden();
+    await page.getByRole('link', { name: 'My Credentials' }).click();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'My Credentials' })).toBeHidden();
     await expect(menu).toHaveAttribute('aria-expanded', 'false');
     expect(await icon()).toBe(folded);
     expect(await fits()).toBe(true);
@@ -519,14 +513,13 @@ test.describe('on a phone', () => {
         return { left, right, top, bottom };
       });
       await logIn(page);
-      await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
       await credentialCard(page, 'LCW Experience Badge')
         .getByRole('button', { name: 'Open' }).click();
       await expect(page.getByText('Credential Source')).toBeVisible();
       expect(await fits()).toBe(true);
       const heading = page.getByRole('heading', { name: 'LCW Experience Badge' });
       const title = await rect(heading);
-      for (const name of ['Share', 'Move', 'Delete', 'Back to list']) {
+      for (const name of ['Share', 'Delete', 'Back to list']) {
         const button = await rect(page.getByRole('button', { name, exact: true }));
         expect(button.right).toBeLessThanOrEqual(375);
         // Below the title, not squeezed beside it, with its label on one line
@@ -550,45 +543,19 @@ test.describe('on a phone', () => {
     });
   });
 
-  // The breadcrumb takes its own line and the collection's action goes under
-  // it, instead of the two squeezing each other off the screen
-  test('a collection page fits, with Add Credential under the breadcrumb', async ({ page }) => {
+  // The heading takes its own line and the list's action goes under it,
+  // instead of the two squeezing each other off the screen
+  test('the list page fits, with Add Credential under the heading', async ({ page }) => {
     await logIn(page);
-    await page.getByRole('button', { name: /UniversityOfToronto/ }).click();
     const add = page.getByRole('button', { name: 'Add Credential' });
     await expect(add).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    const crumbs = await page.getByRole('navigation', { name: 'Breadcrumb' }).boundingBox();
+    const heading = await page.getByRole('heading', { name: 'My Credentials' }).boundingBox();
     const button = await add.boundingBox();
-    expect(button!.y).toBeGreaterThanOrEqual(crumbs!.y + crumbs!.height);
+    expect(button!.y).toBeGreaterThanOrEqual(heading!.y + heading!.height);
     expect(button!.x + button!.width).toBeLessThanOrEqual(375);
-
-    // A collection name with no spaces, wider than the screen, fits too: on a
-    // line of its own, broken inside itself, without breaking the short names
-    // (renamed in the page only; nothing is stored). One line is 20px tall.
-    await page.getByRole('navigation', { name: 'Breadcrumb' }).locator('span').last()
-      .evaluate((name) => { name.textContent = 'CertificatesAndBadgesFromTheUniversityOfTorontoSchoolOfContinuingStudies2026'; });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    expect((await page.getByRole('button', { name: 'Spaces' }).boundingBox())?.height).toBeLessThan(30);
-
-    // A long name with spaces wraps between its words, never inside one: a
-    // word split across two lines measures as two boxes. (At 375px with the
-    // macOS system font, breaking anywhere splits "Toronto" in this name.)
-    const split = await page.getByRole('navigation', { name: 'Breadcrumb' }).locator('span').last()
-      .evaluate((name) => {
-        const words = 'Certificates and Badges from the University of Toronto School of Continuing Studies';
-        name.textContent = words;
-        const text = name.firstChild as Text;
-        const range = document.createRange();
-        let at = 0;
-        return words.split(' ').filter((word) => {
-          range.setStart(text, at);
-          range.setEnd(text, at + word.length);
-          at += word.length + 1;
-          return range.getClientRects().length > 1;
-        });
-      });
-    expect(split).toEqual([]);
+    // The tag chips wrap onto further lines rather than widen the page
+    await expect(page.getByRole('button', { name: /University of Toronto/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });

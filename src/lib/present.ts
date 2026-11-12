@@ -4,9 +4,10 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient } from './was'
 import { getSession, accountMethodOf, holderSigner, type HolderSigner } from './identity'
+import { PRIVATE_CREDENTIALS_COLLECTION } from '@interop/wallet-core/space'
 import { credentialFrom } from './linkedin'
 import { buildPresentation } from './vpRequest'
-import { isAccountCollection } from './accountCollections'
+import { listCredentialIds, readCredential, DIDS_COLLECTION } from './credentials'
 
 const documentLoader = securityLoader().build()
 
@@ -20,7 +21,7 @@ async function findStoredKey(
   session: { space: import('@interop/pws-client').Space },
   holderDid: string
 ): Promise<unknown | null> {
-  const dids = session.space.collection('dids')
+  const dids = session.space.collection(DIDS_COLLECTION)
   const list = await dids.list().catch(() => null)
   for (const item of list?.items ?? []) {
     const stored = await dids.resource(item.id).get().catch(() => null)
@@ -43,36 +44,25 @@ export interface WalletCredential {
   credential: Record<string, unknown>
 }
 
-// Loads every credential in the space: all collections except Trash and dids,
-// each resource unwrapped from its envelope. Unreadable or non-credential
-// resources are skipped.
+// Loads every credential of the account (the private-credentials
+// collection, each resource unwrapped from its envelope). Unreadable or
+// non-credential resources are skipped.
 export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   const session = await getSessionWASClient()
   if (!session) {
     throw new Error('UNAUTHORIZED')
   }
   const space = session.space
-  const list = await space.collections()
-  const collections = (list?.items ?? []).filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
-
   const credentials: WalletCredential[] = []
-  for (const collection of collections) {
-    const resources = await space.collection(collection.id).list().catch(() => null)
-    for (const item of resources?.items ?? []) {
-      try {
-        const data = await space.collection(collection.id).resource(item.id).get()
-        const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data
-        const credential = credentialFrom(parsed)
-        if (credential) {
-          credentials.push({
-            collectionId: collection.id,
-            resourceId: item.id,
-            credential: credential as Record<string, unknown>,
-          })
-        }
-      } catch {
-        // not JSON, or unreadable: not a shareable credential
+  for (const cid of await listCredentialIds(space)) {
+    try {
+      const body = await readCredential(space, cid)
+      const credential = body ? credentialFrom(body) : null
+      if (credential) {
+        credentials.push({ collectionId: PRIVATE_CREDENTIALS_COLLECTION, resourceId: cid, credential: credential as Record<string, unknown> })
       }
+    } catch {
+      // not JSON, or unreadable: not a shareable credential
     }
   }
   return credentials

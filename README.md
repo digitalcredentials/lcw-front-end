@@ -95,63 +95,68 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   wallet offers to issue a **welcome credential** (the test issuer's LCW
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
-- **My Spaces** (`src/pages/SpaceBrowserPage.tsx`, `src/lib/spaces.ts`): the
-  account's spaces as cards (the WAS server's `GET /spaces/`), with names
-  and descriptions read from each space's Space Metadata object
-  (`/space/{s}/meta`). The user does not create spaces: the account has its
-  one account space, the model FreeWallet shares, and the only other
-  spaces are batch spaces, which the batch issuer creates when a batch is
-  saved (`createSpace` in `src/lib/spaces.ts`, through the server's
-  `POST /spaces/` with the coupon under the session's client key, then
-  handed to the account DID, which the server allows only to a key the
-  account document lists) and deletes with the batch. Renaming and describing a space replaces its
-  metadata object under `If-Match`. A space whose type array carries
-  `BatchSpace` is a batch space: its card asks whether to open the batch
-  view or the standard space view. Creating, renaming and deleting spaces
-  sign as the account, so they need a session opened with a passkey; a
-  password session lists the account space alone and says so when asked
-  for more.
-- **Space browser**: a space's collections and resources through
-  [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client),
-  signing every request with the account's signing key. Collections and credentials are
-  cards; a collection's display name and description come from its `/meta`
-  sub-resource (`collectionDisplay` in `src/lib/edv.ts`, with the description
-  document as the fallback for collections that predate `/meta`). **New
-  Collection** creates an encrypted collection through the server's
-  `POST /space/{id}/` route. Opening a credential shows a formatted summary
-  with its source and a live verification (every plugin filling the
-  `credentialDetail` slot; today the
+- **Credentials, in FreeWallet's layout** (`src/lib/credentials.ts`): every
+  credential is one encrypted resource in the account Space's
+  `private-credentials` collection, under the id the encrypting codec
+  derives from its envelope (its cid), so a credential stored by either
+  wallet is seen by both. A shared credential has a plaintext copy under
+  the same cid in `public-credentials`, a collection readable by anyone;
+  claims, shares, unshares and deletes each append an entry to
+  `wallet-activity`. The holder's **tags** on a credential are the keys of
+  its own metadata's `custom.tags` map (the PWS resource metadata object,
+  encrypted with the credential), so they travel with it and no other
+  wallet overwrites them; FreeWallet has no tags of its own and leaves the
+  map alone. This wallet's own records sit beside the credentials,
+  encrypted, in collections FreeWallet leaves alone: `Trash` (a deleted
+  credential's body and tags until it is restored, as a new resource, or
+  discarded) and `dids` (the holder keys of credentials claimed with a
+  did:key).
+- **My Credentials** (`src/pages/WalletPage.tsx`): the wallet opens on
+  every credential of the account as a card, newest first, with a filter
+  bar of the tags in use (each with its count), **Untagged**, and
+  **Trash** while it holds anything; selecting tags narrows the list to the
+  credentials carrying all of them. Opening a credential shows a formatted
+  summary, its tags (each removable, and a field to add one, offering the
+  tags already in use), and its source beside a live verification (every
+  plugin filling the `credentialDetail` slot; today the
   [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
-  card) side by side, plus
-  **Share**, **Move** (between collections), and **Delete** (a copy into the
-  space's `Trash` collection, from which **Restore** moves it back out; the
-  server's delete is permanent, so the wallet does the copy itself).
-  Every state that waits on the network shows a `LoadingLabel` with a spinner
-  and a message rather than a placeholder.
-- **End-to-end encryption** (`src/lib/edv.ts`): collections the wallet
-  creates — credential collections, `dids`, `Trash` — carry the pws-client's
-  `encryption: { scheme: 'edv' }` descriptor. The session's Ed25519 key is
-  converted to an X25519 key-agreement key, the collection's first key epoch
-  is wrapped to it (`ensureFirstEpoch`), and the pws-client encrypts on write
-  and decrypts on read: resources are JWE envelopes (XChaCha20-Poly1305
-  content, per-recipient ECDH-ES+A256KW), `/meta` customs are encrypted the
-  same way, and encrypted collections mint opaque resource ids (`add()`)
-  rather than taking a name. Deleting out of an encrypted collection
-  re-encrypts the body into `Trash` under `Trash`'s own epoch before the
-  permanent delete. Only the account's user key can decrypt, and whichever
-  credential opened the session unwrapped it. The client is
-  `@interop/pws-client` 0.106 (the renamed was-client), which speaks PWS v0.5 and reads the server's
+  card), plus **Share** and **Delete** (to `Trash`, from which **Restore**
+  brings it back with its tags; the server's delete is permanent, so the
+  wallet keeps the copy itself). **Add Credential** tags a new credential
+  with the category its type suggests (`src/lib/collectionName.ts`). The
+  page reads the account Space only: batch spaces belong to the Credential
+  Issuer page, which creates one when a batch is saved (`createSpace` in
+  `src/lib/spaces.ts`, through the server's `POST /spaces/` with the coupon
+  under the session's client key, then handed to the account DID, which
+  the server allows only to a key the account document lists) and deletes
+  it with the batch. Creating and deleting spaces sign as the account, so
+  they need a session opened with a passkey. Every state that waits on the
+  network shows a `LoadingLabel` with a spinner and a message rather than
+  a placeholder.
+- **End-to-end encryption** (`src/lib/edv.ts`): wallet-core provisions the
+  account Space's collections at registration, `private-credentials` and
+  `wallet-activity` among them, encrypted under governed history logs with
+  the user key as the recipient. The collections this wallet adds (`Trash`,
+  `dids`) carry the pws-client's `encryption: { scheme: 'edv' }` descriptor
+  with a first key epoch wrapped to the user key (`ensureFirstEpoch`).
+  Either way the pws-client encrypts on write and decrypts on read:
+  resources are JWE envelopes (XChaCha20-Poly1305 content, per-recipient
+  ECDH-ES+A256KW), `/meta` customs (the tags) are encrypted the same way,
+  and a resource added without an id gets one derived from its envelope
+  (`idDerivation: 'content'`, FreeWallet's convention) rather than a name.
+  Only the account's user key can decrypt, and whichever credential opened
+  the session unwrapped it. The client is `@interop/pws-client` 0.106 (the
+  renamed was-client), which speaks PWS v0.5 and reads the server's
   service description before its first request.
 - **Sharing** (`src/components/ShareCredentialModal.tsx`): before any share,
   the credential is verified with
   [`@digitalcredentials/verifier-core`](https://github.com/digitalcredentials/verifier-core)
   and problems are shown as warnings (sharing is never blocked). Because an
   encrypted credential's stored form is ciphertext, **Create Public Link**
-  writes a plaintext copy of it into the space's `public` collection (a
-  plaintext collection; the copy is named `<collection>--<id>`) and marks only
-  that copy world-readable (`setPublic()`), then shows the copy's URL and a
-  [VerifierPlus](https://verifierplus.org) link. **Unshare** clears the
-  policy and deletes the copy (and its `Trash` remnant). **QR code** renders
+  writes a plaintext copy of it into `public-credentials`, under the
+  credential's own cid, so sharing again brings the same link back, then
+  shows the copy's URL and a [VerifierPlus](https://verifierplus.org) link.
+  **Unshare** deletes the copy; so does deleting the credential. **QR code** renders
   either link; a private credential is public only while the QR shows. **Add to LinkedIn**
   (`src/lib/linkedin.ts`) opens LinkedIn's add-to-profile form prefilled from
   the credential. The device share sheet appears where the Web Share API
@@ -178,9 +183,11 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   reads the archive with `@interop/space-archive` and decrypts each
   encrypted collection's envelopes with the user key and the collection's
   key-epoch descriptor from the archive (`createEdvDocCipher`), so no
-  document is fetched one by one. The `id`, `account`, `dids` and `public`
-  collections are left out (the account's own records and keys, and the
-  public copies of shared credentials); `Trash` is included. The documents
+  document is fetched one by one. The account's own collections (`id`,
+  `key-map`, `unlock-methods`, `connections`, `inbox`, `app-keys`,
+  `account`), the holder keys (`dids`) and the public copies
+  (`public-credentials`) are left out; `private-credentials` and `Trash`
+  are included. The documents
   in the file are not encrypted, which the dialog says before the download.
 - **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
   `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
@@ -197,10 +204,9 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   stored in the space's encrypted `dids` collection. The session's key signs
   the DIDAuth presentation for an account DID, and later any credential of
   the account can present what was bound to it; a `did:key` credential is
-  presented with its stored key. The issued credential is saved to a
-  collection the user picks from every credential space of the account
-  (grouped by space; `Trash`, `dids` and `public` excluded), or to a new
-  collection created on the spot in the chosen space. An incoming
+  presented with its stored key. The issued credential is saved in the
+  account's `private-credentials` with the tags the user types, pre-filled
+  with the category its type suggests. An incoming
   **verifiable presentation request** from a verifier site shows what is being
   asked for, lets the user pick credentials, verifies them first (warn-only),
   and answers with a signed presentation. The companion issuer lives in
@@ -313,9 +319,9 @@ mediator.
 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 ```
 
-Opt-in smoke tests against a deployed instance: login and the space
-collections, opening and verifying a credential, the batch issuer screen,
-sharing to LinkedIn, the My Spaces and title navigation resets, the
+Opt-in smoke tests against a deployed instance: login and the credentials
+list with its tags, opening and verifying a credential, the batch issuer screen,
+sharing to LinkedIn, the My Credentials and title navigation resets, the
 welcome-credential dialog, creating, saving and deleting a batch (a
 scratch batch space, under a passkey session), the sign-in credentials
 page, a passkey added at sign-in that keeps the browser signed in until it
@@ -329,9 +335,10 @@ The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
 passphrase in the spec file) is registered by `npm run register:demo`
 (`DEMO_EMAIL=... REGISTRATION_CODE=...`), which runs the wallet's own
 registration from the shell; its confirmation email still has to be clicked.
-Its Main Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`): an
-encrypted `UniversityOfToronto` collection holding the LCW Experience Badge
-fixture, created the way the wallet creates collections. Both scripts run the
+Its account Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`):
+the LCW Experience Badge fixture in `private-credentials`, tagged
+"University of Toronto", stored the way the wallet stores credentials
+(`src/lib/credentials.ts`). Both scripts run the
 identity layer under `tsx`, and both are idempotent. `npm run test:identity`
 (`WAS_URL=... COUPON=...`, or `WAS_URL=... PROVISIONING=open` against a
 server that creates Spaces by id) exercises the identity layer against a

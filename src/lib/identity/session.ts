@@ -89,16 +89,31 @@ const decodeUpdateKeys = (keys: { updateSeed: string; stagedSeed: string; pendin
   ...(keys.pendingStagedSeed && { pendingStagedSeed: fromBase64url(keys.pendingStagedSeed) }),
 })
 
-function storage(): Storage | null {
+// Outside a browser (the scripts under tsx) the session is kept in memory
+// instead, so the libraries that read the current session work there too.
+let inMemory: string | null = null
+
+function storage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage
+    }
   } catch {
-    return null
+    // falls through to memory
+  }
+  return {
+    getItem: () => inMemory,
+    setItem: (_key, value) => {
+      inMemory = value
+    },
+    removeItem: () => {
+      inMemory = null
+    },
   }
 }
 
 export function getSession(): Session | null {
-  const raw = storage()?.getItem(SESSION_KEY)
+  const raw = storage().getItem(SESSION_KEY)
   if (!raw) {
     return null
   }
@@ -138,11 +153,11 @@ export function setSession(session: Session): void {
           standingClientSeed: toBase64url(session.standingClientSeed),
         }
       : { ...session, userKey, clientSeed: toBase64url(session.clientSeed), webvhUpdateKeys: encodeUpdateKeys(session.webvhUpdateKeys) }
-  storage()?.setItem(SESSION_KEY, JSON.stringify(stored))
+  storage().setItem(SESSION_KEY, JSON.stringify(stored))
 }
 
 export function clearSession(): void {
-  storage()?.removeItem(SESSION_KEY)
+  storage().removeItem(SESSION_KEY)
 }
 
 // The session's account Space URL, in the form the rest of the wallet uses.
@@ -189,9 +204,14 @@ export const sessionReachesOtherSpaces = (session: Session) => session.kind === 
 
 // The encryption provider for a pws-client: the user key is the recipient
 // of every encrypted collection, whichever credential opened the session.
+// The session's encryption for pws-client handles: every encrypted
+// collection decrypts with the user key, and a resource added without an
+// id gets one derived from its envelope's content, FreeWallet's convention
+// for the synced collections (two replicas adding the same document agree
+// on its id).
 export function sessionEncryption(session: Session) {
   const { keyAgreementKey, keyResolver } = userKeyVaultKeys({ userKey: session.userKey })
-  return createEdvEncryption({ resolveKeys: async () => ({ keyAgreementKey, keyResolver }) })
+  return createEdvEncryption({ resolveKeys: async () => ({ keyAgreementKey, keyResolver }), idDerivation: 'content' })
 }
 
 export function sessionKeyAgreementKey(session: Session) {

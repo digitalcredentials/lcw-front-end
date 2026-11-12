@@ -20,6 +20,7 @@ export type WalletAction =
   | 'upload'
   | 'create-collection'
   | 'save-description'
+  | 'save-tags'
   | 'create-space'
   | 'claim'
   | 'save-claim'
@@ -39,7 +40,7 @@ const FAILED: Record<WalletAction, string> = {
   'export-data': "We couldn't put your download together.",
   'load-spaces': "We couldn't load your spaces.",
   'load-collections': "We couldn't load your collections.",
-  'load-credentials': "We couldn't load this collection.",
+  'load-credentials': "We couldn't load your credentials.",
   open: "We couldn't open this credential.",
   delete: "We couldn't delete this credential.",
   restore: "We couldn't restore this credential.",
@@ -47,6 +48,7 @@ const FAILED: Record<WalletAction, string> = {
   upload: "We couldn't add this credential.",
   'create-collection': "We couldn't create the collection.",
   'save-description': "We couldn't save the description.",
+  'save-tags': "We couldn't save the tags.",
   'create-space': "We couldn't create the space.",
   claim: "We couldn't collect your credential.",
   'save-claim': "We couldn't save your credential.",
