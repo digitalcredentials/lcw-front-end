@@ -368,9 +368,13 @@ export async function changePassphrase({ session, passphrase }: { session: Sessi
   const transient = requireTransient(session)
   const credential = await passphraseCredential(passphrase)
   const found = await fetchStandingRecord({ credential, serverUrl: session.serverUrl })
-  if (found) {
-    // A passphrase this account already has (set earlier, and kept as a
-    // credential until removing methods exists) is listed again from its
+  // A record that points at this account but whose method the registry no
+  // longer lists belongs to a retired credential whose unlock Space was
+  // left behind (this server deletes a Space for its controller alone):
+  // the passphrase is added afresh over it, as if the Space were gone
+  const listed = found && found.pointer.did === session.did ? ((await readRegistry(session))?.methods ?? []).some((method) => method.unlockSpaceId === credential.unlock.spaceId) : false
+  if (found && listed) {
+    // A passphrase this account already has is listed again from its
     // record; one that belongs to another account is refused
     if (found.pointer.did !== session.did || !found.ladderSeed) {
       throw new AccountExistsError()
@@ -395,6 +399,9 @@ export async function changePassphrase({ session, passphrase }: { session: Sessi
       })
     )
     return
+  }
+  if (found && found.pointer.did !== session.did) {
+    throw new AccountExistsError()
   }
   const established = await addStandingCredential({ session: transient, credential, lowEntropy: true, email: session.email })
   await updateRegistry(session, (existing) =>
