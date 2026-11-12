@@ -1,6 +1,7 @@
 import { KEYRING_KDF } from '@interop/wallet-core/keyring'
 import { formatRecoveryCode, recordedDelegationFields } from '@interop/wallet-core/recovery'
-import { ladderRung } from '@interop/wallet-core/webvh'
+import { ladderRung, standingZcapStale, verifyAccountLog } from '@interop/wallet-core/webvh'
+import { visitPins } from './pins'
 import { deriveUnlockCredential, passphraseCredential, type UnlockCredential } from './credential'
 import { delegateUnlockManagement, fetchStandingRecord, type StandingRecord } from './records'
 import { openTransientSession, TransientLoginUnavailableError } from './transient'
@@ -368,15 +369,18 @@ export async function changePassphrase({ session, passphrase }: { session: Sessi
   const transient = requireTransient(session)
   const credential = await passphraseCredential(passphrase)
   const found = await fetchStandingRecord({ credential, serverUrl: session.serverUrl })
-  // A record that points at this account but whose method the registry no
-  // longer lists belongs to a retired credential whose unlock Space was
-  // left behind (this server deletes a Space for its controller alone):
-  // the passphrase is added afresh over it, as if the Space were gone
-  const listed = found && found.pointer.did === session.did ? ((await readRegistry(session))?.methods ?? []).some((method) => method.unlockSpaceId === credential.unlock.spaceId) : false
-  if (found && listed) {
-    // A passphrase this account already has is listed again from its
-    // record; one that belongs to another account is refused
-    if (found.pointer.did !== session.did || !found.ladderSeed) {
+  if (found && found.pointer.did !== session.did) {
+    throw new AccountExistsError()
+  }
+  // A record whose bridge delegation the account document no longer backs
+  // belongs to a retired credential whose unlock Space was left behind
+  // (this server deletes a Space for its controller alone): the passphrase
+  // is added afresh over it, as if the Space were gone
+  const standing =
+    found !== null && found.ladderSeed !== undefined && !standingZcapStale({ zcap: found.delegation, doc: (await verifyAccountLog({ did: session.did, pinStore: visitPins })).doc })
+  if (found && standing) {
+    // A passphrase this account already has is listed again from its record
+    if (!found.ladderSeed) {
       throw new AccountExistsError()
     }
     const { standing, unlock } = credential
@@ -399,9 +403,6 @@ export async function changePassphrase({ session, passphrase }: { session: Sessi
       })
     )
     return
-  }
-  if (found && found.pointer.did !== session.did) {
-    throw new AccountExistsError()
   }
   const established = await addStandingCredential({ session: transient, credential, lowEntropy: true, email: session.email })
   await updateRegistry(session, (existing) =>
