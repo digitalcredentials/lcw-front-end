@@ -115,7 +115,11 @@ export default function CredentialsPage() {
     if (!current) {
       return;
     }
-    if (!window.confirm(`Remove ${method.label}?\n\nIt will no longer open this account, and a browser it kept signed in will need to sign in another way.`)) {
+    if (
+      !window.confirm(
+        `Remove ${method.label}?\n\nIt will no longer open this account on a new browser. A browser it already keeps signed in stays connected until you disconnect it under Connected wallets.`
+      )
+    ) {
       return;
     }
     setBusy(true);

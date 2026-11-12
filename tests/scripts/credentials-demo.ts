@@ -71,14 +71,15 @@ check('the passkey credential is removed and its Space deleted', removed.complet
 check('the session adopted the rotated user key', removed.session.userKey.id !== password.userKey.id)
 const after = await listSignInMethods({ session: removed.session })
 check('the registry no longer lists the passkey', !after.some((m) => m.unlockSpaceId === passkeyMethod!.unlockSpaceId), after.map((m) => m.kind).join(', '))
-const refused = await loginWithPasskeySecret({ prfOutput: prf, config, store, email }).then(
+const freshBrowser = await loginWithPasskeySecret({ prfOutput: prf, config, store: memoryClientKeyStore(), email }).then(
   () => 'signed in',
   (err: { status?: number; message?: string }) => err.status ?? err.message
 )
-check('the removed passkey no longer signs in', refused === 401, refused)
+check('the removed passkey no longer signs in on a fresh browser', freshBrowser !== 'signed in', freshBrowser)
 
-// The client the passkey enrolled is still listed; the password session
-// disconnects it
+// The client the passkey enrolled is still listed, and the passkey still
+// opens the browser holding its record, until the password session
+// disconnects the client
 const { keyAgent } = await agentsFromSeed({ seed: (again as { clientSeed: Uint8Array }).clientSeed })
 const ownKey = clientSigningKeyMultibase({ keyAgent })
 const wallets = await listConnectedWallets(removed.session)
@@ -87,6 +88,11 @@ check('the client the passkey enrolled is listed under the wallet name', own?.na
 if (own) {
   const outcome = await disconnectWallet({ session: removed.session, wallet: own })
   check('the client is disconnected', outcome.completion === 'complete' && outcome.rotated, `${outcome.completion}, rotated ${outcome.rotated}`)
+  const remembered = await loginWithPasskeySecret({ prfOutput: prf, config, store, email }).then(
+    () => 'signed in',
+    (err: { status?: number; message?: string }) => err.status ?? err.message
+  )
+  check('the removed passkey no longer opens the browser that held its record', remembered !== 'signed in', remembered)
 }
 
 process.exit(failures ? 1 : 0)
