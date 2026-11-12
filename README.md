@@ -79,7 +79,8 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   (`POST /forgot`); the recovery page takes the code and a new password,
   opens the account through the code (a transient session), adds the new
   password as a further credential, and replaces the used code with a
-  fresh one at the back end. **Sign-in credentials**
+  fresh one at the back end. Setting the password back to one the account
+  already has lists that one again instead of adding a credential. **Sign-in credentials**
   (`src/pages/CredentialsPage.tsx`, `unlockMethods.ts`, under
   **Settings**): the registry's methods (the password, each passkey, the
   recovery code), with **Add a passkey** and, on a remembered browser,

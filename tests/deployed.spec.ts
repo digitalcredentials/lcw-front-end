@@ -374,17 +374,16 @@ test.describe('with a passkey', () => {
   });
 
   test('the passkey keeps this browser signed in until it is forgotten', async () => {
-    // A second tab has no session of its own; the remembered browser
+    // A tab with no session of its own (the session lives in sessionStorage,
+    // cleared here as a new tab starts without one): the remembered browser
     // offers the passkey instead of the login form, and its tap opens the
-    // account (the virtual authenticator answers without a prompt)
-    const second = await context.newPage();
-    await second.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
-    await virtualAuthenticator(second);
-    await second.goto(`${DEPLOYED_URL}/#/files`);
-    await second.getByRole('button', { name: 'Continue with passkey' }).click();
-    await expect(second.locator('[data-space-type]').first()).toBeVisible();
-    await expect(second.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
-    await second.close();
+    // account. The same tab is reused because a virtual authenticator is
+    // bound to its tab, and only this one holds the passkey.
+    await page.evaluate(() => sessionStorage.clear());
+    await page.goto(`${DEPLOYED_URL}/#/files`);
+    await page.getByRole('button', { name: 'Continue with passkey' }).click();
+    await expect(page.locator('[data-space-type]').first()).toBeVisible();
+    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
 
     // Forgetting the browser drops its record: a fresh tab asks to sign in
     await page.getByRole('button', { name: 'Settings' }).click();

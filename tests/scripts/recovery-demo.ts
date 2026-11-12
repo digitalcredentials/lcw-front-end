@@ -38,8 +38,15 @@ await changePassphrase({ session: requireTransient(recovered), passphrase: inter
 const reopened = await loginWithPassphrase({ email, passphrase: interim, config })
 check('the new passphrase signs in', reopened.did === session.did)
 // ... and back to the demo passphrase, which stays a credential of the account
-check('the previous passphrase still signs in (its credential is not removed)', (await loginWithPassphrase({ email, passphrase, config })).did === session.did)
+const original = await loginWithPassphrase({ email, passphrase, config })
+check('the previous passphrase still signs in (its credential is not removed)', original.did === session.did)
 const replacement = await ensureRecoveryCode({ session: reopened, config, force: true })
 check('a replacement code is issued', replacement.issued && replacement.code !== issued.code)
 check('the back end holds a recovery code', await hasStoredRecoveryCode({ session: reopened, config }))
+// ... and the passphrase is set back to the demo one: a passphrase the
+// account already has is listed again rather than refused (the interim one
+// keeps opening the account until removing methods exists)
+await changePassphrase({ session: requireTransient(reopened), passphrase })
+const listedAfter = (await listSignInMethods({ session: original })).find((m) => m.kind === 'passphrase')
+check('the demo passphrase is the listed passphrase again', listedAfter?.current === true)
 process.exit(failures ? 1 : 0)
