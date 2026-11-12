@@ -1,9 +1,10 @@
 import { PwsClient } from '@interop/pws-client'
 import type { ZcapClient } from '@interop/ezcap'
 import { KEYRING_KDF } from '@interop/wallet-core/keyring'
-import { formatRecoveryCode } from '@interop/wallet-core/recovery'
+import { formatRecoveryCode, recordedDelegationFields } from '@interop/wallet-core/recovery'
+import { ladderRung } from '@interop/wallet-core/webvh'
 import { deriveUnlockCredential, passphraseCredential, type UnlockCredential } from './credential'
-import { fetchStandingRecord, type StandingRecord } from './records'
+import { delegateUnlockManagement, fetchStandingRecord, type StandingRecord } from './records'
 import { openTransientSession, TransientLoginUnavailableError } from './transient'
 import { openRememberedSession } from './remembered'
 import { addStandingCredential } from './standing'
@@ -154,7 +155,8 @@ export async function readRegistry(session: Session): Promise<UnlockMethodsRecor
   return (await readUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }) }))?.record ?? null
 }
 
-async function updateRegistry(session: Session, mutate: (existing: UnlockMethodsRecord | null) => UnlockMethodsRecord): Promise<UnlockMethodsRecord> {
+// Rewrites the account's sign-in methods registry under compare-and-swap.
+export async function updateRegistry(session: Session, mutate: (existing: UnlockMethodsRecord | null) => UnlockMethodsRecord): Promise<UnlockMethodsRecord> {
   const { pws, capability } = await registryClient(session)
   return updateUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }), mutate })
 }
@@ -268,8 +270,34 @@ export async function addPasskeyCredential({
 export async function changePassphrase({ session, passphrase }: { session: Session; passphrase: string }): Promise<void> {
   const transient = requireTransient(session)
   const credential = await passphraseCredential(passphrase)
-  if (await fetchStandingRecord({ credential, serverUrl: session.serverUrl })) {
-    throw new AccountExistsError()
+  const found = await fetchStandingRecord({ credential, serverUrl: session.serverUrl })
+  if (found) {
+    // A passphrase this account already has (set earlier, and kept as a
+    // credential until removing methods exists) is listed again from its
+    // record; one that belongs to another account is refused
+    if (found.pointer.did !== session.did || !found.ladderSeed) {
+      throw new AccountExistsError()
+    }
+    const { standing, unlock } = credential
+    const rung0 = await ladderRung({ ladderSeed: found.ladderSeed, index: 0 })
+    const manageCapability = await delegateUnlockManagement({ credential, serverUrl: session.serverUrl, to: session.did })
+    await updateRegistry(session, (existing) =>
+      upsertPassphraseMethod({
+        record: existing ?? emptyRegistry(),
+        unlockSpaceId: unlock.spaceId,
+        manageCapability,
+        standing: {
+          rosterKid: standing.recipientKid,
+          keyAgreementKeyMultibase: standing.keyAgreementKeyMultibase,
+          updateKeyMultibase: rung0.keyMultibase,
+          ...recordedDelegationFields({ delegation: found.delegation, ...(found.delegatedClients && { delegatedClients: found.delegatedClients }) }),
+          unlockClientDid: standing.clientDid,
+          unlockKeyAgreementKeyId: unlock.keyAgreementKey.id,
+          unlockKeyAgreementKeyMultibase: unlock.keyAgreementKey.publicKeyMultibase,
+        },
+      })
+    )
+    return
   }
   const established = await addStandingCredential({ session: transient, credential, lowEntropy: true, email: session.email })
   await updateRegistry(session, (existing) =>
