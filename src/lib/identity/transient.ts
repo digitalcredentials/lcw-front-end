@@ -1,4 +1,4 @@
-import { PwsClient } from '@interop/pws-client'
+import { PwsClient, type CollectionEncryption } from '@interop/pws-client'
 import { agentsFromSeed } from '@interop/pws-client/identity'
 import {
   ClientAnnexGenerationUnavailableError,
@@ -16,7 +16,7 @@ import {
   type ClientAnnexWriteStore,
 } from '@interop/wallet-core/clientAnnex'
 import { accountControllerResolver, clientSigningKeyMultibase, delegatedWebvhLogStore, didKeyZcapClient, verifyAccountLog, webvhZcapClient, isWebvhDid, type PublishedWebvhLog, type VerifiedAccountLog } from '@interop/wallet-core/webvh'
-import { readUserKeyRoster, userKeyRosterDescriptorStore, userKeyRosterLogSigner } from '@interop/wallet-core/keys'
+import { readUserKeyRoster, unwrapUserKeyGenerations, userKeyRosterDescriptorStore, userKeyRosterLogSigner, type UserKey } from '@interop/wallet-core/keys'
 import { ID_COLLECTION, plaintextCollection } from '@interop/wallet-core/space'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import type { UnlockCredential } from './credential'
@@ -75,6 +75,11 @@ function refuseMissingGeneration(store: ClientAnnexWriteStore): ClientAnnexWrite
 export interface TransientEntry {
   session: Omit<TransientSession, 'email' | 'coupon'>
   verified: VerifiedAccountLog
+  // The user-key roster's descriptor as read, and every generation of the
+  // user key it wraps to the credential, oldest first (empty when they
+  // could not be unwrapped)
+  rosterDescriptor: CollectionEncryption
+  userKeyGenerations: UserKey[]
 }
 
 // Every visit appends one entry to the pointed generation's log, and each
@@ -323,8 +328,11 @@ export async function openTransientSession({
   if (!roster) {
     throw new TransientLoginUnavailableError({ reason: 'no-roster' })
   }
+  const userKeyGenerations = await unwrapUserKeyGenerations({ descriptor: roster.descriptor, clientKeyAgreementKey: standing.agents.keyAgreementKey }).catch(() => [] as UserKey[])
 
   return {
+    rosterDescriptor: roster.descriptor,
+    userKeyGenerations,
     session: {
       kind: 'transient',
       did: accountDid,

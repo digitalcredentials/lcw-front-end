@@ -1,5 +1,3 @@
-import { PwsClient } from '@interop/pws-client'
-import type { ZcapClient } from '@interop/ezcap'
 import { KEYRING_KDF } from '@interop/wallet-core/keyring'
 import { formatRecoveryCode, recordedDelegationFields } from '@interop/wallet-core/recovery'
 import { ladderRung } from '@interop/wallet-core/webvh'
@@ -10,11 +8,15 @@ import { openRememberedSession } from './remembered'
 import { addStandingCredential } from './standing'
 import { signUp, AccountExistsError } from './signup'
 import { issueRecoveryCode, recoverWithCode } from './recovery'
-import { readUnlockMethods, updateUnlockMethods, upsertMethod, upsertPassphraseMethod, emptyRegistry, type UnlockMethod, type UnlockMethodsRecord } from './unlockMethods'
+import { upsertMethod, upsertPassphraseMethod, emptyRegistry, type UnlockMethod } from './unlockMethods'
+import type { CollectionEncryption } from '@interop/pws-client'
+import type { UserKey } from '@interop/wallet-core/keys'
+import { healRegistry, readRegistry, updateRegistry } from './registry'
+import { sweepCollectionsToUserKey } from './authority'
+import { nameOwnClient } from './clients'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
 import { defaultClientKeyStore, deleteAllClientKeyRecords, hasAnyClientKeyRecord, type ClientKeyStore } from './clientKeyRecord'
-import { sessionAgents, type Session, type TransientSession } from './session'
-import { serviceDescriptionFor } from './service'
+import { sessionAgents, type RememberedSession, type Session, type TransientSession } from './session'
 import { fromBase64url, toBase64url } from './bytes'
 
 // The identity layer's entry points: registration, sign-in with a
@@ -83,9 +85,46 @@ async function enterTransiently({
   email: string
   config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
 }): Promise<TransientSession> {
-  const { session } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
+  const { session, userKeyGenerations, rosterDescriptor } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
   const login = await backEndLogin({ session, email, config })
-  return { ...session, email: login.email ?? email, coupon: login.token }
+  const opened: TransientSession = { ...session, email: login.email ?? email, coupon: login.token }
+  await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
+  return opened
+}
+
+// What a sign-in settles after a user-key rotation another session ran:
+// the registry, re-sealed when the rotation left it under the earlier key,
+// and every encrypted collection, brought onto the current key when the
+// rotation's fan-out was interrupted. Best effort: the session opens
+// either way, and the pages report what they cannot open.
+async function settleAfterRotation({ session, generations, rosterDescriptor }: { session: Session; generations: UserKey[]; rosterDescriptor: CollectionEncryption | null }): Promise<void> {
+  try {
+    await healRegistry({ session, generations })
+  } catch (err) {
+    console.warn('The sign-in methods registry could not be opened:', err)
+  }
+  if (!rosterDescriptor) {
+    return
+  }
+  try {
+    const swept = await sweepCollectionsToUserKey({ session, rosterDescriptor, generations })
+    if (swept) {
+      console.info('Wallet: collections brought onto the current user key at sign-in:', swept.outcomes, swept.failed)
+    }
+  } catch (err) {
+    console.warn('The collections could not be brought onto the current user key:', err)
+  }
+}
+
+// This browser's client, named in the account's connections directory
+// after it enrolled. Best effort: the client is enrolled either way, and
+// the wallets list shows it unnamed until it is.
+async function settleOwnClientName(session: RememberedSession): Promise<void> {
+  try {
+    await nameOwnClient(session)
+  } catch (err) {
+    console.warn("This browser's client could not be named in the connections directory:", err)
+  }
 }
 
 // Signs in with a passphrase: a transient session for this tab.
@@ -127,9 +166,14 @@ export async function loginWithPasskeySecret({
   if (!email) {
     throw new Error('The passkey carries no account email.')
   }
-  const { session } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
+  const { session, enrolled, userKeyGenerations, rosterDescriptor } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
   const login = await backEndLogin({ session, email, config })
-  return { ...session, email: login.email ?? email, coupon: login.token }
+  const opened: RememberedSession = { ...session, email: login.email ?? email, coupon: login.token }
+  await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
+  if (enrolled) {
+    await settleOwnClientName(opened)
+  }
+  return opened
 }
 
 // Signs in with a recovery code: a transient session on the code's
@@ -143,23 +187,7 @@ export async function loginWithRecoveryCode({ email, code, config }: { email: st
   return { ...recovered.session, email: login.email ?? email, coupon: login.token }
 }
 
-// The account's unlock-methods registry, read as the session.
-async function registryClient(session: Session): Promise<{ pws: PwsClient; capability?: import('@interop/data-integrity-core/zcap').IZcap; zcapClient: ZcapClient }> {
-  const { signer, capabilityFor, zcapClient } = await sessionAgents(session)
-  const pws = PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
-  return { pws, capability: capabilityFor(session.spaceId), zcapClient }
-}
-
-export async function readRegistry(session: Session): Promise<UnlockMethodsRecord | null> {
-  const { pws, capability } = await registryClient(session)
-  return (await readUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }) }))?.record ?? null
-}
-
-// Rewrites the account's sign-in methods registry under compare-and-swap.
-export async function updateRegistry(session: Session, mutate: (existing: UnlockMethodsRecord | null) => UnlockMethodsRecord): Promise<UnlockMethodsRecord> {
-  const { pws, capability } = await registryClient(session)
-  return updateUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, ...(capability && { capability }), mutate })
-}
+export { readRegistry, updateRegistry }
 
 export type SignInMethodKind = 'passphrase' | 'passkey' | 'recovery-code' | 'backup-credential'
 
@@ -261,7 +289,11 @@ export async function addPasskeyCredential({
     throw new Error('The passkey credential was not found after it was added.')
   }
   const remembered = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
-  return { ...remembered.session, email: session.email, coupon: session.coupon }
+  const opened: RememberedSession = { ...remembered.session, email: session.email, coupon: session.coupon }
+  if (remembered.enrolled) {
+    await settleOwnClientName(opened)
+  }
+  return opened
 }
 
 // Sets a new passphrase from a transient session: a new standing
@@ -372,3 +404,5 @@ export type { AccountDidMethod, HolderSigner } from './holder'
 export { AccountExistsError, TransientLoginUnavailableError }
 export { memoryClientKeyStore } from './clientKeyRecord'
 export type { ClientKeyStore } from './clientKeyRecord'
+export { CLIENT_NAME, approveConnectCode, disconnectWallet, inspectConnectCode, isConnectCode, listConnectedWallets, refusalMessage, renameConnectedWallet } from './clients'
+export type { ConnectedWallet, DisconnectOutcome } from './clients'

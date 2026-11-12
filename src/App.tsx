@@ -5,6 +5,7 @@ import ForgotPage from './pages/ForgotPage'
 import WalletPage from './pages/WalletPage'
 import PluginPage from './pages/PluginPage'
 import CredentialsPage from './pages/CredentialsPage'
+import WalletsPage from './pages/WalletsPage'
 import RequireAuth from './components/RequireAuth'
 import { pluginPages } from './plugins'
 import './App.css'
@@ -29,6 +30,14 @@ function App() {
           element={
             <RequireAuth>
               <CredentialsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/wallets"
+          element={
+            <RequireAuth>
+              <WalletsPage />
             </RequireAuth>
           }
         />

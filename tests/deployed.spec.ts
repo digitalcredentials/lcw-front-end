@@ -368,7 +368,24 @@ test.describe('with a passkey', () => {
     await expect(page.getByText(name)).toBeHidden();
   });
 
+  test('lists this browser under Connected wallets', async () => {
+    // The passkey sign-in enrolled this browser as a client of the account:
+    // the list names it and marks it as the current one, which cannot
+    // disconnect itself
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Connected wallets' }).click();
+    const own = page.locator('[data-wallet-current="true"]');
+    await expect(own).toBeVisible({ timeout: 30_000 });
+    await expect(own).toContainText('Learner Credential Wallet');
+    await expect(own).toContainText('This browser');
+    await expect(own.getByRole('button', { name: 'Disconnect' })).toHaveCount(0);
+  });
+
   test('the passkey keeps this browser signed in until it is forgotten', async () => {
+    // The disconnections at the end re-key the account once per listed
+    // client, at some twenty seconds each, and the first run after a
+    // deploy also clears the clients earlier runs left behind
+    test.setTimeout(900_000);
     // A tab with no session of its own (the session lives in sessionStorage,
     // cleared here as a new tab starts without one, then a fresh document
     // loaded, as a new tab would): the remembered browser offers the passkey
@@ -390,6 +407,23 @@ test.describe('with a passkey', () => {
     const third = await context.newPage();
     await third.goto(`${DEPLOYED_URL}/#/files`);
     await expect(third.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+
+    // The forgotten browser's client is still listed in the account document.
+    // A password sign-in (a transient session) disconnects it, and any
+    // client an earlier run left behind, so the demo account carries none
+    // over: each disconnection re-keys the account.
+    await logIn(third);
+    await third.getByRole('button', { name: 'Settings' }).click();
+    await third.getByRole('link', { name: 'Connected wallets' }).click();
+    const rows = third.locator('[data-wallet-key]');
+    await expect(third.getByRole('list', { name: 'Connected wallets' })).toBeVisible({ timeout: 30_000 });
+    for (let left = await rows.count(); left > 0; left = await rows.count()) {
+      third.once('dialog', (dialog) => void dialog.accept());
+      await rows.first().getByRole('button', { name: 'Disconnect' }).click();
+      await expect(third.getByRole('status')).toContainText('is disconnected', { timeout: 60_000 });
+      await expect(rows).toHaveCount(left - 1, { timeout: 30_000 });
+    }
+    await expect(third.getByText('No wallet is connected to this account')).toBeVisible();
     await third.close();
   });
 });

@@ -1,7 +1,8 @@
+import type { CollectionEncryption } from '@interop/pws-client'
 import { agentsFromSeed } from '@interop/pws-client/identity'
 import { selfEnrollClientCore } from '@interop/wallet-core/clientAnnex'
 import { accountControllerResolver, delegatedWebvhLogStore, verifyAccountLog, webvhZcapClient, isWebvhDid, type VerifiedAccountLog } from '@interop/wallet-core/webvh'
-import { userKeyRosterDescriptorStore, userKeyRosterLogSigner, type ClientKeyRecord } from '@interop/wallet-core/keys'
+import { unwrapUserKeyGenerations, userKeyRosterDescriptorStore, userKeyRosterLogSigner, type ClientKeyRecord, type UserKey } from '@interop/wallet-core/keys'
 import { checkUserKeyRosterAtLogin } from '@interop/wallet-core/clients'
 import { ID_COLLECTION } from '@interop/wallet-core/space'
 import type { UnlockCredential } from './credential'
@@ -30,6 +31,11 @@ export interface RememberedEntry {
   session: Omit<RememberedSession, 'email' | 'coupon'>
   verified: VerifiedAccountLog
   enrolled: boolean
+  // The user-key roster's descriptor as read (null when the account serves
+  // none), and every generation of the user key it wraps to this client,
+  // oldest first (empty when the roster could not be unwrapped)
+  rosterDescriptor: CollectionEncryption | null
+  userKeyGenerations: UserKey[]
 }
 
 export async function openRememberedSession({
@@ -126,10 +132,28 @@ export async function openRememberedSession({
   if (!record.webvhUpdateKeys) {
     throw new Error('The client-key record carries no update keys.')
   }
+  const userKeyGenerations = roster ? await unwrapUserKeyGenerations({ descriptor: roster.descriptor, clientKeyAgreementKey: agents.keyAgreementKey }).catch(() => [] as UserKey[]) : []
   return {
-    session: { kind: 'remembered', did, serverUrl: baseServerUrl, spaceId, userKey, unlockSpaceId: unlock.spaceId, clientSeed: record.clientSeed, webvhUpdateKeys: record.webvhUpdateKeys },
+    session: {
+      kind: 'remembered',
+      did,
+      serverUrl: baseServerUrl,
+      spaceId,
+      userKey,
+      unlockSpaceId: unlock.spaceId,
+      clientSeed: record.clientSeed,
+      webvhUpdateKeys: record.webvhUpdateKeys,
+      // The passkey credential's own ladder authority, when its record
+      // carries the standing layout
+      ...(found.ladderSeed &&
+        found.delegatedClients && {
+          standing: { ladderSeed: found.ladderSeed, clientSeed: standing.clientSeed, bridgeDelegation: found.delegation, siblingDelegation: found.delegatedClients },
+        }),
+    },
     verified,
     enrolled,
+    rosterDescriptor: roster?.descriptor ?? null,
+    userKeyGenerations,
   }
 }
 
