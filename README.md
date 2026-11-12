@@ -56,7 +56,12 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   passkey sign-in on a browser enrolls that browser's client key in the
   account document (`remembered.ts`). On a browser holding a record, the
   signed-in pages offer **Continue with passkey** before the login form
-  (`RequireAuth`). Either session's keys live in this tab's
+  (`RequireAuth`). Every password visit appends an entry to the annex
+  generation's log, each carrying the generation's whole document, so a
+  visit that finds the log at 24 entries first mints a fresh generation
+  (restating the credentials the old one admitted) and points the account
+  at it, keeping the log under the 1 MB the resolvers accept. Either
+  session's keys live in this tab's
   `sessionStorage`: gone when the tab closes, and the CHAPI popup, a window
   of its own, signs the user in itself. **Passkeys** (`passkey.ts`,
   `standing.ts`): after a password sign-in on a browser that supports them,
