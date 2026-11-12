@@ -14,6 +14,7 @@ import type { UserKey } from '@interop/wallet-core/keys'
 import { healRegistry, readRegistry, updateRegistry } from './registry'
 import { sweepCollectionsToUserKey } from './authority'
 import { nameOwnClient } from './clients'
+import { MethodNotRemovableError, retireMethod, type RetirementOutcome } from './retire'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
 import { defaultClientKeyStore, deleteAllClientKeyRecords, hasAnyClientKeyRecord, type ClientKeyStore } from './clientKeyRecord'
 import { sessionAgents, type RememberedSession, type Session, type TransientSession } from './session'
@@ -198,6 +199,10 @@ export interface SignInMethod {
   unlockSpaceId: string
   // The method that opened this session
   current: boolean
+  // Whether `removeSignInMethod` takes it: a passkey or backup file that
+  // did not open this session (the password is replaced, never removed; a
+  // recovery code is replaced through `replaceRecoveryCode`)
+  removable: boolean
 }
 
 function methodLabel(method: UnlockMethod): string {
@@ -215,13 +220,73 @@ function methodLabel(method: UnlockMethod): string {
 
 export async function listSignInMethods({ session }: { session: Session }): Promise<SignInMethod[]> {
   const registry = await readRegistry(session)
-  return (registry?.methods ?? []).map((method) => ({
-    kind: method.type,
-    label: methodLabel(method),
-    createdAt: method.createdAt,
-    unlockSpaceId: method.unlockSpaceId,
-    current: method.unlockSpaceId === session.unlockSpaceId,
-  }))
+  return (registry?.methods ?? []).map((method) => {
+    const current = method.unlockSpaceId === session.unlockSpaceId
+    return {
+      kind: method.type,
+      label: methodLabel(method),
+      createdAt: method.createdAt,
+      unlockSpaceId: method.unlockSpaceId,
+      current,
+      removable: !current && (method.type === 'passkey' || method.type === 'backup-credential'),
+    }
+  })
+}
+
+// Removes a passkey (or backup file) from the account: its credential is
+// retired (the user key is rotated, which this session adopts), its unlock
+// Space deleted, and its registry entry dropped. The method that opened
+// this session is refused, as is the password (replace it instead).
+export async function removeSignInMethod({ session, unlockSpaceId }: { session: Session; unlockSpaceId: string }): Promise<RetirementOutcome> {
+  const registry = await readRegistry(session)
+  const method = registry?.methods.find((candidate) => candidate.unlockSpaceId === unlockSpaceId)
+  if (!method) {
+    throw new Error('This sign-in method is no longer listed.')
+  }
+  if (method.type === 'passphrase') {
+    throw new MethodNotRemovableError('inventory', 'The password is replaced through account recovery, never removed on its own.')
+  }
+  if (method.type === 'recovery-code') {
+    throw new MethodNotRemovableError('inventory', 'A recovery code is replaced, not removed: issue a new one.')
+  }
+  return retireMethod({ session, method })
+}
+
+// Replaces the account's recovery code: every listed code is retired (the
+// one this session signed in with excepted; recovery itself retires that
+// one) and a fresh code is issued and handed to the back end.
+export async function replaceRecoveryCode({ session, config }: { session: Session; config: Pick<IdentityConfig, 'apiBase'> }): Promise<{ session: Session; code?: string }> {
+  let current = session
+  const registry = await readRegistry(session)
+  for (const method of registry?.methods ?? []) {
+    if (method.type === 'recovery-code' && method.unlockSpaceId !== current.unlockSpaceId) {
+      current = (await retireMethod({ session: current, method })).session
+    }
+  }
+  const { code } = await ensureRecoveryCode({ session: current, config, force: true })
+  return { session: current, ...(code && { code }) }
+}
+
+// Replaces the password: the new one is added as a standing credential (or
+// listed again when the account already has it), a session is opened on
+// it, and the previous password's credential is retired from there, since
+// a session cannot retire the credential it signed in with. Resolves the
+// session on the new password. Best effort on the retirement: a previous
+// password left in place still opens the account, and the failure is
+// logged.
+export async function replacePassphrase({ session, passphrase, config }: { session: Session; passphrase: string; config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<Session> {
+  const registry = await readRegistry(session)
+  const previous = registry?.methods.find((method) => method.type === 'passphrase')
+  await changePassphrase({ session, passphrase })
+  let next = await loginWithPassphrase({ email: session.email, passphrase, config })
+  if (previous && previous.unlockSpaceId !== next.unlockSpaceId) {
+    try {
+      next = (await retireMethod({ session: next, method: previous })).session
+    } catch (err) {
+      console.error('The previous password could not be retired; it still opens the account:', err)
+    }
+  }
+  return next
 }
 
 export function requireTransient(session: Session): TransientSession {
@@ -377,10 +442,21 @@ export async function requestRecoveryEmail({ email, config }: { email: string; c
 }
 
 // Recovers the account with the emailed code: signs in on the code, sets
-// the new passphrase, and replaces the code with a fresh one.
+// the new passphrase (retiring the previous one), retires the used code,
+// and issues a fresh code to the back end. Resolves the session on the
+// new passphrase.
 export async function recoverAccount({ email, code, passphrase, config }: { email: string; code: string; passphrase: string; config: IdentityConfig }): Promise<Session> {
-  const session = await loginWithRecoveryCode({ email, code, config })
-  await changePassphrase({ session, passphrase })
+  const codeSession = await loginWithRecoveryCode({ email, code, config })
+  const registry = await readRegistry(codeSession)
+  const usedCode = registry?.methods.find((method) => method.type === 'recovery-code' && method.unlockSpaceId === codeSession.unlockSpaceId)
+  let session = await replacePassphrase({ session: codeSession, passphrase, config })
+  if (usedCode) {
+    try {
+      session = (await retireMethod({ session, method: usedCode })).session
+    } catch (err) {
+      console.error('The used recovery code could not be retired; it still opens the account:', err)
+    }
+  }
   await ensureRecoveryCode({ session, config, force: true })
   return session
 }
@@ -406,3 +482,5 @@ export { memoryClientKeyStore } from './clientKeyRecord'
 export type { ClientKeyStore } from './clientKeyRecord'
 export { CLIENT_NAME, approveConnectCode, disconnectWallet, inspectConnectCode, isConnectCode, listConnectedWallets, refusalMessage, renameConnectedWallet } from './clients'
 export type { ConnectedWallet, DisconnectOutcome } from './clients'
+export { MethodNotRemovableError }
+export type { RetirementOutcome }

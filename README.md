@@ -115,9 +115,23 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   entries with its credential's ladder, a passkey session with the enrolled
   client's keys. A remembered browser cannot disconnect itself (Forget this
   browser is its path), and a password session lists no row as its own.
-  Both record a `wallet-activity` entry. Removing a sign-in method is not
-  offered yet, so a password replaced through recovery stays valid until
-  it is. Requests sign as
+  Both record a `wallet-activity` entry. **Removing a sign-in method**
+  (`retire.ts`): a passkey's **Remove** under Sign-in credentials, and
+  **Replace recovery code**, run wallet-core's unlock-credential
+  retirement: one account-log entry strikes the credential's keys and its
+  ladder from the account document, the user key is rotated and every
+  encrypted collection re-keyed as for a disconnection, then the wallet
+  deletes the credential's unlock Space through a DELETE-only child of the
+  management capability the credential delegated to the account when it
+  was added (a password session signs and invokes it as its ladder VM,
+  which the server's client-annex clause admits for exactly that shape),
+  drops the registry entry, and forgets any client key record this browser
+  kept under it. The method that opened the session cannot remove itself
+  (no entry can strike the key that signed it), and the password is only
+  ever replaced: account recovery (`recoverAccount`, `replacePassphrase`)
+  sets the new password, opens a session on it, retires the previous
+  password's credential and the used code from there, and issues a fresh
+  code. Requests sign as
   `<did:webvh>#<multibase>`; only the creation of a Space uses a key's
   `did:key` form, which the server requires, before the Space is promoted.
   On the first open after registering, the
@@ -377,15 +391,20 @@ credential added from it, the remembered logins, recovery codes from both
 session kinds, then connected wallets from both (a joiner's connect code
 approved, the joiner completing its enrollment, the list, a rename, the
 disconnection with its user-key rotation, and the joiner refused after
-it), and the passphrase again on the rotated key. The account it creates
-is left behind. `npm run test:recovery` (`DEMO_EMAIL=...`) runs account recovery
-against the deployed back end on the demo account: it issues a code,
-recovers with it under a new passphrase, checks that the demo passphrase
-still signs in, and leaves a replacement code stored. Each run adds a
-passphrase credential to the account. `npm run test:credentials`
-(`DEMO_EMAIL=...`) lists the demo account's sign-in methods, adds a
-stand-in passkey credential, signs in with it as a remembered client and
-lists the methods again; the passkey stays listed. Each run adds one.
+it), the removal of the recovery codes and the passkey credential from a
+passphrase session (the acting credential refusing to retire itself), the
+last client disconnected, and the passphrase again on the rotated key. The
+account it creates is left behind. `npm run test:recovery`
+(`DEMO_EMAIL=...`) runs account recovery against the deployed back end on
+the demo account: it issues a code, recovers with it under an interim
+passphrase (which retires the demo passphrase's credential and the used
+code and stores a replacement), checks that neither signs in any more,
+and sets the demo passphrase back (which retires the interim one). Each
+run rotates the user key three times and leaves the account as it was.
+`npm run test:credentials` (`DEMO_EMAIL=...`) lists the demo account's
+sign-in methods, adds a stand-in passkey credential, signs in with it as
+a remembered client, lists the methods again, then removes the passkey
+from a password session and disconnects the client it enrolled.
 `npm run test:holder` (`DEMO_EMAIL=...`) claims a badge from the deployed
 test issuer as the demo account's `did:web` projection, checking the
 projection the identity domain serves, the issuer's `acceptedMethods`, and

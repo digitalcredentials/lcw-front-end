@@ -6,6 +6,8 @@ import {
   setSession,
   listSignInMethods,
   addPasskey,
+  removeSignInMethod,
+  replaceRecoveryCode,
   forgetThisBrowser,
   browserRemembered,
   passkeySupported,
@@ -18,7 +20,8 @@ import { RP_NAME } from './LoginPage';
 
 // Settings → Sign-in credentials: the account's sign-in methods as its
 // unlock-methods registry lists them (the same list FreeWallet shows for
-// the account), adding a passkey, and forgetting this browser.
+// the account), adding a passkey, removing one, replacing the recovery
+// code, and forgetting this browser.
 
 const KIND_LABEL: Record<SignInMethod['kind'], string> = {
   passphrase: 'Password',
@@ -105,7 +108,74 @@ export default function CredentialsPage() {
     }
   }
 
+  // Removing a passkey retires its credential and re-keys the account; the
+  // session continues on the new key
+  async function handleRemove(method: SignInMethod) {
+    const current = getSession();
+    if (!current) {
+      return;
+    }
+    if (!window.confirm(`Remove ${method.label}?\n\nIt will no longer open this account, and a browser it kept signed in will need to sign in another way.`)) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const outcome = await removeSignInMethod({ session: current, unlockSpaceId: method.unlockSpaceId });
+      setSession(outcome.session);
+      setNotice(
+        outcome.completion === 'complete'
+          ? `${method.label} is removed.`
+          : `${method.label} is removed. One of the account's collections could not be re-keyed yet; the next removal, disconnection or sign-in finishes it.`
+      );
+      await load();
+    } catch (err) {
+      setError(describe(err, 'The sign-in method could not be removed. Please try again.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // A fresh recovery code: the listed ones are retired and the new one is
+  // stored at the back end, where "Forgot your password?" sends it from
+  async function handleReplaceRecoveryCode() {
+    const current = getSession();
+    if (!current) {
+      return;
+    }
+    if (!window.confirm('Replace the recovery code?\n\nThe current code stops opening this account, and a new one is stored for "Forgot your password?".')) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const outcome = await replaceRecoveryCode({ session: current, config: identityConfig() });
+      setSession(outcome.session);
+      setNotice('A new recovery code is stored. It reaches you by email from "Forgot your password?".');
+      await load();
+    } catch (err) {
+      setError(describe(err, 'The recovery code could not be replaced. Please try again.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const transient = session?.kind === 'transient';
+
+  function statusOf(method: SignInMethod): { text: string; title: string } {
+    if (method.current) {
+      return { text: 'In use', title: 'You are signed in with this credential, so it cannot remove itself.' };
+    }
+    if (method.kind === 'recovery-code') {
+      return { text: 'Managed', title: 'Replaced through "Replace recovery code".' };
+    }
+    if (method.kind === 'passphrase') {
+      return { text: 'Listed', title: 'Replaced through account recovery, never removed on its own.' };
+    }
+    return { text: 'Listed', title: 'This credential cannot be removed from here.' };
+  }
 
   return (
     <AppShell>
@@ -113,6 +183,8 @@ export default function CredentialsPage() {
       <p className="text-sm text-gray-500 mb-6">
         The ways this account can be opened, as your account&#39;s own list records them. A password
         signs in for one tab; a passkey keeps a browser signed in and lets it manage your spaces.
+        Removing a passkey or replacing the recovery code re-keys the account; the one you signed in
+        with cannot remove itself.
       </p>
 
       {notice && (
@@ -157,9 +229,20 @@ export default function CredentialsPage() {
                   {method.kind === 'passkey' && 'Opens the account with the device it was created on, and keeps that browser signed in.'}
                 </p>
               </div>
-              <span className="shrink-0 text-xs text-gray-400" title={method.current ? 'You are signed in with this credential.' : 'Removing a credential is not available yet in this wallet.'}>
-                {method.current ? 'In use' : method.kind === 'recovery-code' ? 'Managed' : 'Listed'}
-              </span>
+              {method.removable ? (
+                <button
+                  type="button"
+                  onClick={() => void handleRemove(method)}
+                  disabled={busy}
+                  className="shrink-0 border border-red-200 hover:bg-red-50 disabled:opacity-60 text-red-600 font-medium text-sm rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  {busy ? 'Working…' : 'Remove'}
+                </button>
+              ) : (
+                <span className="shrink-0 text-xs text-gray-400" title={statusOf(method).title}>
+                  {statusOf(method).text}
+                </span>
+              )}
             </li>
           ))}
           {methods.length === 0 && !loadError && (
@@ -187,6 +270,17 @@ export default function CredentialsPage() {
             className="border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
           >
             Forget this browser
+          </button>
+        )}
+        {methods !== null && (
+          <button
+            type="button"
+            onClick={() => void handleReplaceRecoveryCode()}
+            disabled={busy}
+            title="Retire the listed recovery codes and store a new one for Forgot your password?"
+            className="border border-gray-300 hover:bg-gray-50 disabled:opacity-60 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
+          >
+            Replace recovery code
           </button>
         )}
       </div>
