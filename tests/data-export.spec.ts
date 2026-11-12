@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
 // The HTTP client first: its CJS/ESM mix must load before jsonld (the scripts do the same)
 import '@interop/http-client';
-import { packSpaceArchive, collectBytes, fileNameFor, collectionMetadataFileName, spaceMetadataFileName } from '@interop/space-archive';
+import { packSpaceArchive, collectBytes, fileNameFor, collectionLogFileName, collectionMetadataFileName, spaceMetadataFileName } from '@interop/space-archive';
 import { packTar } from '../src/lib/tar';
 import { X25519KeyAgreementKey2020 } from '@interop/x25519-key-agreement-key';
-import { createEdvDocCipher, initRecipients, ownerRecipient, mintEpoch, epochKeyIdFor } from '@interop/pws-client/edv';
-import { readArchivedSpace, packDataExport, exportedCollections, safeName, extensionFor, EXCLUDED_COLLECTIONS } from '../src/lib/dataExport';
+import { createEdvDocCipher, initRecipients, ownerRecipient, mintEpoch, epochKeyIdFor, toEpochConfigurationState } from '@interop/pws-client/edv';
+import { readArchivedSpace, packDataExport, exportedCollections, governedEncryption, safeName, extensionFor, EXCLUDED_COLLECTIONS } from '../src/lib/dataExport';
 
 // Node-side unit assertions over the data export's pure parts: the tar
 // writer, the reading of a Space archive (what the PWS server's Export Space
@@ -107,6 +107,19 @@ async function fixtureArchive(spaceId: string): Promise<Uint8Array> {
         ],
       },
       {
+        // A governed collection: no `encryption` in its metadata; the
+        // descriptor is the head state of the history log beside it
+        name: 'Vault',
+        files: [
+          { name: collectionMetadataFileName('Vault'), bytes: json({ id: 'Vault', type: ['Collection'] }) },
+          {
+            name: collectionLogFileName('Vault'),
+            bytes: json({ body: `${JSON.stringify({ versionId: '1-a', state: { type: 'PwsEpochConfiguration', scheme: 'edv' } })}\n`, generation: 'g1' }),
+          },
+          { name: fileNameFor({ resourceId: 'z6governed', contentType: 'application/json' }), bytes: json({ jwe: {} }) },
+        ],
+      },
+      {
         name: 'id',
         files: [{ name: fileNameFor({ resourceId: 'did.jsonl', contentType: 'application/jsonl' }), bytes: utf8.encode('{}\n') }],
       },
@@ -120,7 +133,7 @@ test('readArchivedSpace reads a Space archive, leaving the excluded collections 
   const space = await readArchivedSpace(await fixtureArchive(spaceId));
   expect(space.id).toBe(spaceId);
   expect(space.meta?.name).toBe('Main Space');
-  expect([...space.collections.keys()].sort()).toEqual(['Badges', 'Secret']);
+  expect([...space.collections.keys()].sort()).toEqual(['Badges', 'Secret', 'Vault']);
   expect(EXCLUDED_COLLECTIONS).toContain('id');
   const badges = space.collections.get('Badges')!;
   expect(badges.meta?.encryption).toBeUndefined();
@@ -131,6 +144,12 @@ test('readArchivedSpace reads a Space archive, leaving the excluded collections 
   const secret = space.collections.get('Secret')!;
   expect(secret.meta?.encryption).toMatchObject({ scheme: 'edv' });
   expect([...secret.resources.keys()]).toEqual(['z6sealed']);
+  expect(secret.log).toBeUndefined();
+  const vault = space.collections.get('Vault')!;
+  expect(vault.meta?.encryption).toBeUndefined();
+  expect(JSON.parse(text(vault.log!)).generation).toBe('g1');
+  expect(governedEncryption(vault.log!)).toEqual({ type: 'PwsEpochConfiguration', scheme: 'edv' });
+  expect([...vault.resources.keys()]).toEqual(['z6governed']);
 });
 
 test('packDataExport lays the documents out by space and collection, with a manifest first', () => {
@@ -177,36 +196,39 @@ test('packDataExport lays the documents out by space and collection, with a mani
   expect(manifest.exportedAt).toBe('2026-11-09T12:00:00.000Z');
 });
 
+// The user key, built as wallet-core's `userKeyVaultKeys` builds it
+// (wallet-core itself cannot load under the Playwright runner)
+async function userKeys() {
+  const { epochId, secret } = await mintEpoch();
+  const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) });
+  // pws-client's singleKeyResolver (its identity module cannot load here)
+  const keyResolver = async ({ id }: { id?: string }) => {
+    if (id !== keyAgreementKey.id) {
+      throw new Error(`Unknown key id "${id}".`);
+    }
+    return { id: keyAgreementKey.id, type: keyAgreementKey.type, publicKeyMultibase: keyAgreementKey.publicKeyMultibase };
+  };
+  return { keyAgreementKey, keyResolver };
+}
+
+// An encryption descriptor with one key epoch wrapped to `keys`, built over
+// an in-memory descriptor host (the collection's `encryption` member) that
+// serves the ETag a recipient change is pinned to
+async function descriptorFor(keys: Awaited<ReturnType<typeof userKeys>>) {
+  let stored: { descriptor: unknown; etag: string } = { descriptor: { scheme: 'edv' }, etag: '"0"' };
+  const store = {
+    read: async () => stored as never,
+    replace: async (descriptor: unknown) => {
+      stored = { descriptor, etag: '"1"' };
+    },
+  };
+  return (await initRecipients({ store, recipients: [ownerRecipient({ keyAgreementKey: keys.keyAgreementKey })] })) as never;
+}
+
 // An encrypted collection as the wallet writes one: a descriptor with one key
-// epoch wrapped to the user key, and envelopes sealed under it. The export
+// epoch wrapped to the user key, and envelopes encrypted under it. The export
 // opens them with the user key alone, from the archive, no server involved.
-// The user key is built as wallet-core's `userKeyVaultKeys` builds it
-// (wallet-core itself cannot load under the Playwright runner).
 test('exportedCollections decrypts an encrypted collection with the user key and reports what it cannot open', async () => {
-  async function userKeys() {
-    const { epochId, secret } = await mintEpoch();
-    const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) });
-    // pws-client's singleKeyResolver (its identity module cannot load here)
-    const keyResolver = async ({ id }: { id?: string }) => {
-      if (id !== keyAgreementKey.id) {
-        throw new Error(`Unknown key id "${id}".`);
-      }
-      return { id: keyAgreementKey.id, type: keyAgreementKey.type, publicKeyMultibase: keyAgreementKey.publicKeyMultibase };
-    };
-    return { keyAgreementKey, keyResolver };
-  }
-  // An in-memory descriptor host (the collection's `encryption` member),
-  // serving the ETag a recipient change is pinned to
-  async function descriptorFor(keys: Awaited<ReturnType<typeof userKeys>>) {
-    let stored: { descriptor: unknown; etag: string } = { descriptor: { scheme: 'edv' }, etag: '"0"' };
-    const store = {
-      read: async () => stored as never,
-      replace: async (descriptor: unknown) => {
-        stored = { descriptor, etag: '"1"' };
-      },
-    };
-    return (await initRecipients({ store, recipients: [ownerRecipient({ keyAgreementKey: keys.keyAgreementKey })] })) as never;
-  }
   const keys = await userKeys();
   const encryption = await descriptorFor(keys);
   const cipher = await createEdvDocCipher({ ...keys, collectionId: 'Badges', encryption });
@@ -241,4 +263,42 @@ test('exportedCollections decrypts an encrypted collection with the user key and
   expect(badge.extension).toBe('json');
   expect(JSON.parse(text(badge.bytes))).toEqual({ type: ['VerifiableCredential'], name: 'Badge one' });
   expect(problems).toEqual([`Main Space/Badges/${foreign.id} could not be decrypted and was left out.`]);
+});
+
+// A governed collection as wallet-core provisions one (private-credentials,
+// wallet-activity): its metadata serves no `encryption`; the descriptor is
+// the head state of the signed history log the server archives beside it.
+test('exportedCollections opens a governed collection with the descriptor its history log heads', async () => {
+  const keys = await userKeys();
+  const encryption = await descriptorFor(keys);
+  const cipher = await createEdvDocCipher({ ...keys, collectionId: 'private-credentials', encryption });
+  const sealed = await cipher.encrypt({ data: { type: ['VerifiableCredential'], name: 'Badge one' } });
+  // Two entries, each carrying a whole state: a genesis under a descriptor
+  // wrapped to another key, then the head under ours. Only the head opens
+  // the envelope.
+  const stranger = await userKeys();
+  const entry = (versionId: string, state: unknown) =>
+    JSON.stringify({ versionId, versionTime: '2026-11-12T00:00:00Z', parameters: {}, state, proof: [] });
+  const body = `${entry('1-a', toEpochConfigurationState(await descriptorFor(stranger)))}\n${entry('2-b', toEpochConfigurationState(encryption))}\n`;
+  const log = utf8.encode(JSON.stringify({ body, generation: 'g1', updatedAt: '2026-11-12T00:00:00.000Z', updatedAtCounter: 0, originId: 'o' }));
+  const resource = (id: string, value: unknown) => ({ id, bytes: utf8.encode(JSON.stringify(value)), contentType: 'application/json', extension: 'json' });
+  const problems: string[] = [];
+  const collections = await exportedCollections({
+    space: {
+      id: 'dcc-pws-1',
+      meta: null,
+      collections: new Map([
+        ['private-credentials', { id: 'private-credentials', meta: { id: 'private-credentials' }, log, resources: new Map([[sealed.id, resource(sealed.id, sealed.envelope)]]), chunks: new Map() }],
+        // A governed collection whose archived log is not one
+        ['wallet-activity', { id: 'wallet-activity', meta: { id: 'wallet-activity' }, log: utf8.encode('{"body":"not a log"}'), resources: new Map([['e1', resource('e1', { jwe: {} })]]), chunks: new Map() }],
+      ]),
+    },
+    keys,
+    label: 'Main Space',
+    problems,
+  });
+  expect(collections.map((c) => `${c.id}:${c.encrypted}:${c.documents.length}`)).toEqual(['private-credentials:true:1', 'wallet-activity:true:0']);
+  expect(collections[0].documents[0].id).toBe(sealed.id);
+  expect(JSON.parse(text(collections[0].documents[0].bytes))).toEqual({ type: ['VerifiableCredential'], name: 'Badge one' });
+  expect(problems).toEqual(['Main Space/wallet-activity is encrypted, but its history log could not be read, so its documents were left out.']);
 });
