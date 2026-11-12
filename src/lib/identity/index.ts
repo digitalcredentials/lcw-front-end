@@ -277,11 +277,24 @@ export async function changePassphrase({ session, passphrase }: { session: Sessi
   )
 }
 
+// Whether the back end holds a recovery code for the account: a read it
+// answers only to the account (or its client annex), so the session signs
+// it. An unreadable answer counts as none held.
+export async function hasStoredRecoveryCode({ session, config }: { session: Session; config: Pick<IdentityConfig, 'apiBase'> }): Promise<boolean> {
+  try {
+    const { zcapClient } = await sessionAgents(session)
+    const response = await zcapClient.request({ url: `${config.apiBase}/recovery?email=${encodeURIComponent(session.email)}`, method: 'GET', action: 'read' })
+    return (response.data as { stored?: boolean } | undefined)?.stored === true
+  } catch {
+    return false
+  }
+}
+
 // Issues a recovery code and hands it to the back end, which emails it to
-// the account's address on request (the wallet never shows it).
+// the account's address on request (the wallet never shows it). An account
+// the back end already holds a code for gets none, unless forced.
 export async function ensureRecoveryCode({ session, config, force = false }: { session: Session; config: Pick<IdentityConfig, 'apiBase'>; force?: boolean }): Promise<{ issued: boolean; code?: string }> {
-  const stored = await fetch(`${config.apiBase}/recovery?email=${encodeURIComponent(session.email)}`).then((res) => (res.ok ? (res.json() as Promise<{ stored?: boolean }>) : { stored: false })).catch(() => ({ stored: false }))
-  if (stored.stored && !force) {
+  if (!force && (await hasStoredRecoveryCode({ session, config }))) {
     return { issued: false }
   }
   const { code, entry } = await issueRecoveryCode({ session })

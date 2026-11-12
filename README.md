@@ -101,8 +101,9 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   one account space, the model FreeWallet shares, and the only other
   spaces are batch spaces, which the batch issuer creates when a batch is
   saved (`createSpace` in `src/lib/spaces.ts`, through the server's
-  `POST /spaces/` with the coupon, then handed to the account DID) and
-  deletes with the batch. Renaming and describing a space replaces its
+  `POST /spaces/` with the coupon under the session's client key, then
+  handed to the account DID, which the server allows only to a key the
+  account document lists) and deletes with the batch. Renaming and describing a space replaces its
   metadata object under `If-Match`. A space whose type array carries
   `BatchSpace` is a batch space: its card asks whether to open the batch
   view or the standard space view. Creating, renaming and deleting spaces

@@ -6,7 +6,7 @@
 //
 //   DEMO_EMAIL=jc.chartrand@gmail.com npx tsx tests/scripts/recovery-demo.ts
 import '@interop/http-client'
-import { changePassphrase, ensureRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, requireTransient } from '../../src/lib/identity'
+import { changePassphrase, ensureRecoveryCode, hasStoredRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, requireTransient } from '../../src/lib/identity'
 
 const email = process.env.DEMO_EMAIL
 if (!email) {
@@ -41,6 +41,5 @@ check('the new passphrase signs in', reopened.did === session.did)
 check('the previous passphrase still signs in (its credential is not removed)', (await loginWithPassphrase({ email, passphrase, config })).did === session.did)
 const replacement = await ensureRecoveryCode({ session: reopened, config, force: true })
 check('a replacement code is issued', replacement.issued && replacement.code !== issued.code)
-const status = await fetch(`${config.apiBase}/recovery?email=${encodeURIComponent(email)}`).then((res) => res.json() as Promise<{ stored?: boolean }>)
-check('the back end holds a recovery code', status.stored === true)
+check('the back end holds a recovery code', await hasStoredRecoveryCode({ session: reopened, config }))
 process.exit(failures ? 1 : 0)
