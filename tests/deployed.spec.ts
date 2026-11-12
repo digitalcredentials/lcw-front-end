@@ -408,12 +408,23 @@ test.describe('with a passkey', () => {
     await third.goto(`${DEPLOYED_URL}/#/files`);
     await expect(third.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
 
-    // The forgotten browser's client is still listed in the account document.
-    // A password sign-in (a transient session) disconnects it, and any
-    // client an earlier run left behind, so the demo account carries none
-    // over: each disconnection re-keys the account.
+    // The passkey this run added is still a credential of the account, and
+    // the forgotten browser's client is still listed in the account document.
+    // A password sign-in (a transient session) removes the passkey (and any
+    // an earlier run left behind), then disconnects the client (and any
+    // earlier one), so the demo account carries none over: each removal and
+    // disconnection re-keys the account.
     await logIn(third);
     await third.getByRole('button', { name: 'Settings' }).click();
+    await third.getByRole('link', { name: 'Sign-in credentials' }).click();
+    const passkeys = third.locator('[data-credential-kind="passkey"]');
+    await expect(third.getByRole('list', { name: 'Sign-in credentials' })).toBeVisible({ timeout: 30_000 });
+    for (let left = await passkeys.count(); left > 0; left = await passkeys.count()) {
+      third.once('dialog', (dialog) => void dialog.accept());
+      await passkeys.first().getByRole('button', { name: 'Remove' }).click();
+      await expect(third.getByRole('status')).toContainText('is removed', { timeout: 90_000 });
+      await expect(passkeys).toHaveCount(left - 1, { timeout: 30_000 });
+    }
     await third.getByRole('link', { name: 'Connected wallets' }).click();
     const rows = third.locator('[data-wallet-key]');
     await expect(third.getByRole('list', { name: 'Connected wallets' })).toBeVisible({ timeout: 30_000 });

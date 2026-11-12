@@ -1,12 +1,13 @@
 // Exercises account recovery against the deployed back end and PWS server on
 // the demo account: issues a recovery code (a standing credential of the
-// account, handed to the back end), recovers with that code (setting the
-// passphrase to a new value, then back), and checks that a replacement code
-// is stored.
+// account, handed to the back end), recovers with that code under an interim
+// passphrase (which retires the demo passphrase's credential and the used
+// code, and stores a replacement code), then sets the demo passphrase back
+// (which retires the interim one). Each retirement rotates the user key.
 //
 //   DEMO_EMAIL=jc.chartrand@gmail.com npx tsx tests/scripts/recovery-demo.ts
 import '@interop/http-client'
-import { changePassphrase, ensureRecoveryCode, hasStoredRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, requireTransient } from '../../src/lib/identity'
+import { ensureRecoveryCode, hasStoredRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, recoverAccount, replacePassphrase } from '../../src/lib/identity'
 
 const email = process.env.DEMO_EMAIL
 if (!email) {
@@ -23,6 +24,8 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail !== undefined ? ` (${String(detail)})` : ''}`)
   if (!ok) failures++
 }
+// How a sign-in attempt ends: its HTTP status, or its message
+const attempt = (run: () => Promise<unknown>) => run().then(() => 'signed in', (err: { status?: number; message?: string }) => err.status ?? err.message ?? String(err))
 
 const session = await loginWithPassphrase({ email, passphrase, config })
 const issued = await ensureRecoveryCode({ session, config, force: true })
@@ -30,23 +33,28 @@ check('a recovery code is issued and handed to the back end', issued.issued && t
 const listed = await listSignInMethods({ session })
 check('the registry lists a recovery code', listed.some((m) => m.kind === 'recovery-code'), listed.map((m) => m.kind).join(', '))
 
-// Recovery: the code opens a transient session; a new passphrase is set
-const recovered = await loginWithRecoveryCode({ email, code: issued.code!, config })
-check('the code signs in', recovered.did === session.did && recovered.kind === 'transient')
+// Recovery: the code opens the account, an interim passphrase replaces the
+// demo one, the used code is retired and a replacement stored
 const interim = `${passphrase}-recovered-${Date.now()}`
-await changePassphrase({ session: requireTransient(recovered), passphrase: interim })
+const recovered = await recoverAccount({ email, code: issued.code!, passphrase: interim, config })
+check('recovery signs in on the new passphrase', recovered.did === session.did && recovered.kind === 'transient' && recovered.unlockSpaceId !== session.unlockSpaceId)
+check('recovery rotated the user key', recovered.userKey.id !== session.userKey.id)
 const reopened = await loginWithPassphrase({ email, passphrase: interim, config })
 check('the new passphrase signs in', reopened.did === session.did)
-// ... and back to the demo passphrase, which stays a credential of the account
-const original = await loginWithPassphrase({ email, passphrase, config })
-check('the previous passphrase still signs in (its credential is not removed)', original.did === session.did)
-const replacement = await ensureRecoveryCode({ session: reopened, config, force: true })
-check('a replacement code is issued', replacement.issued && replacement.code !== issued.code)
-check('the back end holds a recovery code', await hasStoredRecoveryCode({ session: reopened, config }))
-// ... and the passphrase is set back to the demo one: a passphrase the
-// account already has is listed again rather than refused (the interim one
-// keeps opening the account until removing methods exists)
-await changePassphrase({ session: requireTransient(reopened), passphrase })
-const listedAfter = (await listSignInMethods({ session: original })).find((m) => m.kind === 'passphrase')
-check('the demo passphrase is the listed passphrase again', listedAfter?.current === true)
+const previous = await attempt(() => loginWithPassphrase({ email, passphrase, config }))
+check('the previous passphrase no longer signs in', previous === 401, previous)
+const spent = await attempt(() => loginWithRecoveryCode({ email, code: issued.code!, config }))
+check('the used recovery code no longer signs in', spent === 401, spent)
+check('the back end holds a replacement code', await hasStoredRecoveryCode({ session: reopened, config }))
+const afterRecovery = await listSignInMethods({ session: reopened })
+check('the registry lists one passphrase and one recovery code', afterRecovery.map((m) => m.kind).sort().join(',') === 'passphrase,recovery-code', afterRecovery.map((m) => m.kind).join(', '))
+
+// ... and the passphrase is set back to the demo one, which retires the
+// interim credential
+const restored = await replacePassphrase({ session: reopened, passphrase, config })
+check('the demo passphrase signs in again', restored.did === session.did && restored.kind === 'transient')
+const interimAfter = await attempt(() => loginWithPassphrase({ email, passphrase: interim, config }))
+check('the interim passphrase no longer signs in', interimAfter === 401, interimAfter)
+const listedAfter = await listSignInMethods({ session: restored })
+check('the demo passphrase is the listed passphrase again', listedAfter.find((m) => m.kind === 'passphrase')?.current === true)
 process.exit(failures ? 1 : 0)

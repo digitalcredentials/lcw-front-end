@@ -29,6 +29,7 @@ import { getSession, sessionAgents, setSession, type TransientSession, type Reme
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
 import { pointerOf } from '../../src/lib/identity/records'
 import { CLIENT_NAME, approveConnectCode, disconnectWallet, listConnectedWallets, nameOwnClient, renameConnectedWallet } from '../../src/lib/identity/clients'
+import { MethodNotRemovableError, retireMethod } from '../../src/lib/identity/retire'
 import { completeEnrollmentCore, mintEnrollmentRequest } from '@interop/wallet-core/enrollment'
 import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 
@@ -217,9 +218,61 @@ if (!current) {
 }
 check('the remembered session adopted the rotated user key', current.userKey.id !== rememberedNow.userKey.id)
 
+// --- removing sign-in methods: the recovery codes and the passkey retired
+// from a passphrase session (the ladder arm), the session adopting each
+// rotation; a credential cannot retire itself ---
+const retiring = await time('passphrase login before the retirements', () => openTransientSession({ credential, found, serverUrl: WAS }))
+let acting: TransientSession = { ...retiring.session, email, coupon }
+setSession(acting)
+check('the passphrase session adopted the rotated user key at sign-in', acting.userKey.id === current.userKey.id)
+const before = await registryOf(acting)
+const listed = (await readUnlockMethods({ pws: before.pws, spaceId: session.spaceId, userKey: acting.userKey, capability: before.capability }))?.record.methods ?? []
+const selfRefusal = await retireMethod({ session: acting, method: listed.find((m) => m.type === 'passphrase')! }).then(
+  () => 'retired',
+  (err: unknown) => (err instanceof MethodNotRemovableError ? err.reason : String(err))
+)
+check('the acting passphrase refuses to retire itself', selfRefusal === 'acting', selfRefusal)
+// The unlock Space's deletion goes through a DELETE-only child of the
+// credential's management capability. This server's Delete Space is still
+// root-only, so it answers 404 ("not-found") and the empty Space stays
+// behind; the retirement itself stands either way.
+const spaceOutcomes = new Set<string>()
+for (const method of listed.filter((m) => m.type === 'recovery-code')) {
+  const outcome = await time(`retire a recovery code (${method.label})`, () => retireMethod({ session: acting, method }))
+  check(`the recovery code "${method.label}" is retired`, outcome.completion === 'complete', `${outcome.completion}, unlock Space ${outcome.unlockSpace}`)
+  spaceOutcomes.add(outcome.unlockSpace)
+  acting = outcome.session as TransientSession
+}
+// A retired code finds no record once its Space is deleted, and is refused
+// as no longer standing while the Space remains
+const spent = await recoverWithCode({ code: issued.code, serverUrl: WAS }).then(
+  (result) => (result === null ? 'no record' : 'opened'),
+  (err: { name?: string }) => err.name ?? String(err)
+)
+check('a retired recovery code no longer opens the account', spent === 'no record' || spent === 'TransientLoginUnavailableError', spent)
+const passkeyEntry = listed.find((m) => m.type === 'passkey')!
+const passkeyOutcome = await time('retire the passkey credential', () => retireMethod({ session: acting, method: passkeyEntry }))
+check('the passkey credential is retired', passkeyOutcome.completion === 'complete', `${passkeyOutcome.completion}, unlock Space ${passkeyOutcome.unlockSpace}`)
+spaceOutcomes.add(passkeyOutcome.unlockSpace)
+acting = passkeyOutcome.session as TransientSession
+const freshBrowser = await openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store: memoryClientKeyStore() }).then(
+  () => 'opened',
+  (err: { name?: string; message?: string }) => err.name ?? err.message ?? String(err)
+)
+check('the retired passkey no longer opens a fresh browser', freshBrowser !== 'opened', freshBrowser)
+console.log(`     unlock Spaces of the retired credentials: ${[...spaceOutcomes].join(', ')}`)
+const afterRetirements = await registryOf(acting)
+const registryAfter = await readUnlockMethods({ pws: afterRetirements.pws, spaceId: session.spaceId, userKey: acting.userKey, capability: afterRetirements.capability })
+check('the registry lists the passphrase alone', registryAfter?.record.methods.map((m) => m.type).join(',') === 'passphrase', registryAfter?.record.methods.map((m) => m.type))
+wallets = await listConnectedWallets(acting)
+check('the passkey-enrolled browser is still a client until it is disconnected', wallets.length === 1, wallets.map((w) => w.displayName))
+const lastOutcome = await time('disconnect the passkey-enrolled browser', () => disconnectWallet({ session: acting, wallet: wallets[0] }))
+check('the last client is disconnected from the passphrase session', lastOutcome.completion === 'complete', lastOutcome)
+acting = getSession() as TransientSession
+
 // --- the passphrase still works after all of it ---
 const later = await time('passphrase login after the changes', () => openTransientSession({ credential, found, serverUrl: WAS }))
-check('the passphrase still opens the account, on the rotated user key', later.session.userKey.id === current.userKey.id)
+check('the passphrase still opens the account, on the rotated user key', later.session.userKey.id === acting.userKey.id)
 const last = await registryOf({ ...later.session, email, coupon })
 const registryLast = await readUnlockMethods({ pws: last.pws, spaceId: session.spaceId, userKey: later.session.userKey, capability: last.capability })
 check('the registry opens under the rotated key at the next sign-in', registryLast !== null)
