@@ -2,12 +2,17 @@ import { PwsClient } from '@interop/pws-client'
 import { agentsFromSeed } from '@interop/pws-client/identity'
 import {
   ClientAnnexGenerationUnavailableError,
+  attributePointerEntryRung,
   clientAnnexDidParts,
   delegatedClientsDelegationSpaceId,
   delegatedClientsPointer,
   embeddedGenerationDelegation,
   enrollTransientClient,
   ensureCredentialClientAnnexGeneration,
+  ladderSignedGenerationDelegationMinter,
+  mintPointedClientAnnexGeneration,
+  movePointerAsLadder,
+  standingRungHashesOf,
   type ClientAnnexWriteStore,
 } from '@interop/wallet-core/clientAnnex'
 import { accountControllerResolver, clientSigningKeyMultibase, delegatedWebvhLogStore, didKeyZcapClient, verifyAccountLog, webvhZcapClient, isWebvhDid, type PublishedWebvhLog, type VerifiedAccountLog } from '@interop/wallet-core/webvh'
@@ -70,6 +75,63 @@ function refuseMissingGeneration(store: ClientAnnexWriteStore): ClientAnnexWrite
 export interface TransientEntry {
   session: Omit<TransientSession, 'email' | 'coupon'>
   verified: VerifiedAccountLog
+}
+
+// Every visit appends one entry to the pointed generation's log, and each
+// entry carries the generation's whole document, so the log grows with the
+// square of the visits since the generation was minted. The resolvers that
+// read it (this server's, the back end's) cap a log at 1 MB, which a
+// generation reaches after a few dozen visits. wallet-core replaces a
+// generation on a 90-day cadence at remembered logins, which a password-
+// only account never reaches, so a visit that finds the pointed generation
+// at this many entries mints a fresh one first, restating the standing
+// credentials the old one admitted, and points the account at it.
+const GENERATION_RENEWAL_ENTRIES = 24
+
+// Mints a fresh generation from this credential's ladder seed, through the
+// record's sibling delegation, and moves the account's pointer to it with
+// a bridge-signed entry: the same block the readiness ensure runs when a
+// credential is not admitted, run here because the generation is long.
+async function renewGeneration({
+  baseServerUrl,
+  spaceId,
+  annexSpaceId,
+  accountDid,
+  accountLog,
+  ladderSeed,
+  standingZcap,
+  sibling,
+  bridge,
+  superseded,
+  serviceDescription,
+}: {
+  baseServerUrl: string
+  spaceId: string
+  annexSpaceId: string
+  accountDid: string
+  accountLog: VerifiedAccountLog['log']
+  ladderSeed: Uint8Array
+  standingZcap: UnlockCredential['standing']['agents']['zcapClient']
+  sibling: IZcap
+  bridge: IZcap
+  superseded: PublishedWebvhLog
+  serviceDescription: Awaited<ReturnType<typeof serviceDescriptionFor>>
+}): Promise<{ clientAnnexDid: string; generationDelegation: IZcap }> {
+  const idStore = delegatedWebvhLogStore({ baseServerUrl, spaceId, collectionId: ID_COLLECTION.id, delegation: bridge, zcapClient: standingZcap, pinStore: visitPins, serviceDescription })
+  await attributePointerEntryRung({ ladderSeed, log: accountLog })
+  const generation = await mintPointedClientAnnexGeneration({
+    pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
+    baseServerUrl,
+    spaceId: annexSpaceId,
+    controller: accountDid,
+    ladderSeed,
+    capability: sibling,
+    standingRungHashes: await standingRungHashesOf(superseded),
+    mintGenerationDelegation: ladderSignedGenerationDelegationMinter({ accountDid, ladderSeed, baseServerUrl, spaceId }),
+    point: (clientAnnexDid: string) => movePointerAsLadder({ idStore, ladderSeed, clientAnnexDid, accountDid }),
+    pinStore: visitPins,
+  })
+  return { clientAnnexDid: generation.clientAnnexDid, generationDelegation: generation.generationDelegation }
 }
 
 // Enters the account a standing record points at, for this visit.
@@ -150,6 +212,25 @@ export async function openTransientSession({
     generationLog = outcome.generationLog
     if (outcome.generationMinted || outcome.spaceMinted) {
       // The pointer moved: the enrollment must read the fresh log
+      verified = await verifyAccountLog({ did: accountDid, pinStore: visitPins })
+    } else if (generationLog && generationLog.log.length >= GENERATION_RENEWAL_ENTRIES) {
+      // The pointed generation has grown long: a fresh one takes its place
+      // before this visit enrolls (see GENERATION_RENEWAL_ENTRIES)
+      const renewed = await renewGeneration({
+        baseServerUrl,
+        spaceId,
+        annexSpaceId,
+        accountDid,
+        accountLog: verified.log,
+        ladderSeed,
+        standingZcap,
+        sibling,
+        bridge,
+        superseded: generationLog,
+        serviceDescription,
+      })
+      healed = renewed.generationDelegation
+      generationLog = undefined
       verified = await verifyAccountLog({ did: accountDid, pinStore: visitPins })
     }
   } catch (err) {
