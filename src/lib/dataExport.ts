@@ -26,7 +26,10 @@ import { packTar, type TarFile } from './tar'
 // itself (the did:webvh log, the catalogue, the user-key roster); `dids`
 // holds each credential's holder key, a private key; `public` holds the
 // plaintext copies of shared credentials, which the originals cover.
-export const EXCLUDED_COLLECTIONS: readonly string[] = [...ACCOUNT_COLLECTIONS, 'dids', 'public-credentials']
+// Left out of the export: the account's own collections, the holder keys,
+// the public copies of shared credentials (public-credentials, and the
+// `public` collection the wallet kept them in before its FreeWallet layout)
+export const EXCLUDED_COLLECTIONS: readonly string[] = [...ACCOUNT_COLLECTIONS, 'dids', 'public-credentials', 'public']
 
 export interface ArchivedResource {
   id: string

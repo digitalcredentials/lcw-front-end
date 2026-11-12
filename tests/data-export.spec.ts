@@ -172,7 +172,7 @@ test('packDataExport lays the documents out by space and collection, with a mani
     { folder: 'Badges', id: 'Badges', encrypted: true, documents: 1 },
     { folder: 'Trash', id: 'Trash', encrypted: true, documents: 0 },
   ]);
-  expect(manifest.excludedCollections).toEqual(['id', 'key-map', 'unlock-methods', 'connections', 'inbox', 'app-keys', 'account', 'dids', 'public-credentials']);
+  expect(manifest.excludedCollections).toEqual(['id', 'key-map', 'unlock-methods', 'connections', 'inbox', 'app-keys', 'account', 'dids', 'public-credentials', 'public']);
   expect(manifest.problems).toHaveLength(1);
   expect(manifest.exportedAt).toBe('2026-11-09T12:00:00.000Z');
 });
