@@ -52,17 +52,35 @@ export interface TransientSession extends SessionBase {
   siblingDelegation: IZcap
 }
 
+// A standing credential's authority over the account's logs: its ladder
+// seed, its standing client seed (the did:key its delegations are made to),
+// its bridge delegation on the account log and its sibling delegation into
+// the client-annex Space
+export interface StandingAuthority {
+  ladderSeed: Uint8Array
+  clientSeed: Uint8Array
+  bridgeDelegation: IZcap
+  siblingDelegation: IZcap
+}
+
 export interface RememberedSession extends SessionBase {
   kind: 'remembered'
   clientSeed: Uint8Array
   // The enrolled client's did:webvh update keys, which sign the account-log
   // entries the session makes (adding a credential, a recovery code)
   webvhUpdateKeys: ClientWebvhUpdateKeys
+  // The passkey credential the session was opened with, as a ladder
+  // authority: what renews the client-annex generation delegation when
+  // another key loses its authority (a wallet disconnected, a sign-in
+  // method removed)
+  standing?: StandingAuthority
 }
 
 export type Session = TransientSession | RememberedSession
 
 const SESSION_KEY = 'lcw_session'
+
+type StoredStanding = { ladderSeed: string; clientSeed: string; bridgeDelegation: IZcap; siblingDelegation: IZcap }
 
 type Stored = Omit<SessionBase, 'userKey'> & { userKey: { id: string; secret: string } } & (
   | {
@@ -75,8 +93,11 @@ type Stored = Omit<SessionBase, 'userKey'> & { userKey: { id: string; secret: st
       bridgeDelegation: IZcap
       siblingDelegation: IZcap
     }
-  | { kind: 'remembered'; clientSeed: string; webvhUpdateKeys: { updateSeed: string; stagedSeed: string; pendingStagedSeed?: string } }
+  | { kind: 'remembered'; clientSeed: string; webvhUpdateKeys: { updateSeed: string; stagedSeed: string; pendingStagedSeed?: string }; standing?: StoredStanding }
 )
+
+const encodeStanding = (standing: StandingAuthority): StoredStanding => ({ ...standing, ladderSeed: toBase64url(standing.ladderSeed), clientSeed: toBase64url(standing.clientSeed) })
+const decodeStanding = (standing: StoredStanding): StandingAuthority => ({ ...standing, ladderSeed: fromBase64url(standing.ladderSeed), clientSeed: fromBase64url(standing.clientSeed) })
 
 const encodeUpdateKeys = (keys: ClientWebvhUpdateKeys) => ({
   updateSeed: toBase64url(keys.updateSeed),
@@ -133,7 +154,13 @@ export function getSession(): Session | null {
       } as TransientSession
     }
     if (stored.kind === 'remembered') {
-      return { ...base, kind: 'remembered', clientSeed: fromBase64url(stored.clientSeed), webvhUpdateKeys: decodeUpdateKeys(stored.webvhUpdateKeys) } as RememberedSession
+      return {
+        ...base,
+        kind: 'remembered',
+        clientSeed: fromBase64url(stored.clientSeed),
+        webvhUpdateKeys: decodeUpdateKeys(stored.webvhUpdateKeys),
+        ...(stored.standing && { standing: decodeStanding(stored.standing) }),
+      } as RememberedSession
     }
     return null
   } catch {
@@ -143,16 +170,25 @@ export function getSession(): Session | null {
 
 export function setSession(session: Session): void {
   const userKey = { id: session.userKey.id, secret: toBase64url(session.userKey.secret) }
-  const stored: Stored =
-    session.kind === 'transient'
-      ? {
-          ...session,
-          userKey,
-          visitSeed: toBase64url(session.visitSeed),
-          ladderSeed: toBase64url(session.ladderSeed),
-          standingClientSeed: toBase64url(session.standingClientSeed),
-        }
-      : { ...session, userKey, clientSeed: toBase64url(session.clientSeed), webvhUpdateKeys: encodeUpdateKeys(session.webvhUpdateKeys) }
+  let stored: Stored
+  if (session.kind === 'transient') {
+    stored = {
+      ...session,
+      userKey,
+      visitSeed: toBase64url(session.visitSeed),
+      ladderSeed: toBase64url(session.ladderSeed),
+      standingClientSeed: toBase64url(session.standingClientSeed),
+    }
+  } else {
+    const { standing, ...rest } = session
+    stored = {
+      ...rest,
+      userKey,
+      clientSeed: toBase64url(session.clientSeed),
+      webvhUpdateKeys: encodeUpdateKeys(session.webvhUpdateKeys),
+      ...(standing && { standing: encodeStanding(standing) }),
+    }
+  }
   storage().setItem(SESSION_KEY, JSON.stringify(stored))
 }
 

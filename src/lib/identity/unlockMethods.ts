@@ -166,17 +166,21 @@ export async function readUnlockMethods({
 }
 
 // Rewrites the registry through `mutate`, with compare-and-swap against
-// the version read (retried when another writer got there first).
+// the version read (retried when another writer got there first). The
+// record is read under `userKey` and written under `writeUserKey` when one
+// is given (a re-seal under a rotated user key), else under the same key.
 export async function updateUnlockMethods({
   pws,
   spaceId,
   userKey,
+  writeUserKey,
   capability,
   mutate,
 }: {
   pws: PwsClient
   spaceId: string
   userKey: UserKey
+  writeUserKey?: UserKey
   capability?: IZcap
   mutate: (existing: UnlockMethodsRecord | null) => UnlockMethodsRecord
 }): Promise<UnlockMethodsRecord> {
@@ -184,7 +188,7 @@ export async function updateUnlockMethods({
   for (let attempt = 0; attempt < 3; attempt++) {
     const existing = await readUnlockMethods({ pws, spaceId, userKey, capability })
     const next = mutate(existing?.record ?? null)
-    const sealed = await wrapRegistry({ record: next, userKey })
+    const sealed = await wrapRegistry({ record: next, userKey: writeUserKey ?? userKey })
     try {
       await resource.put(bytesOf(sealed), { contentType: 'application/json', ...(existing ? (existing.etag ? { ifMatch: existing.etag } : {}) : { ifNoneMatch: true }) })
       return next

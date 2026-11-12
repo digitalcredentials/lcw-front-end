@@ -261,6 +261,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               >
                 Sign-in credentials
               </Link>
+              <Link
+                to="/settings/wallets"
+                className={itemClass(pathname === '/settings/wallets')}
+                title="The wallets connected to this account, and connecting another one"
+              >
+                Connected wallets
+              </Link>
               <button
                 onClick={() => setExportOpen(true)}
                 title="Save every document in your spaces to one unencrypted file"

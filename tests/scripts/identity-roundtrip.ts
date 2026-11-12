@@ -25,8 +25,11 @@ import { openRememberedSession } from '../../src/lib/identity/remembered'
 import { memoryClientKeyStore } from '../../src/lib/identity/clientKeyRecord'
 import { issueRecoveryCode, recoverWithCode } from '../../src/lib/identity/recovery'
 import { readUnlockMethods, updateUnlockMethods, upsertMethod } from '../../src/lib/identity/unlockMethods'
-import { sessionAgents, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
+import { getSession, sessionAgents, setSession, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
+import { pointerOf } from '../../src/lib/identity/records'
+import { CLIENT_NAME, approveConnectCode, disconnectWallet, listConnectedWallets, nameOwnClient, renameConnectedWallet } from '../../src/lib/identity/clients'
+import { completeEnrollmentCore, mintEnrollmentRequest } from '@interop/wallet-core/enrollment'
 import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 
 const WAS = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
@@ -121,6 +124,7 @@ check('the remembered session reads the same user key', remembered.session.userK
 const again = await time('remembered login (record present)', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
 check('a second remembered login reuses the record', !again.enrolled && toBase64url(again.session.clientSeed) === toBase64url(remembered.session.clientSeed))
 const rememberedSession: RememberedSession = { ...again.session, email, coupon }
+await time('name this browser in the connections directory', () => nameOwnClient(rememberedSession))
 const second = await registryOf(rememberedSession)
 const registry2 = await readUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, capability: second.capability })
 check('the registry lists both methods', registry2?.record.methods.map((m) => m.type).sort().join(',') === 'passkey,passphrase', registry2?.record.methods.map((m) => m.type))
@@ -141,9 +145,84 @@ if (recovered) {
   check('the second code opens the account', recoveredAgain?.session.did === session.did)
 }
 
+// --- connected wallets: a joiner (another wallet, minting its own keys and
+// showing a connect code) approved from the transient session, listed,
+// renamed, and disconnected (the ladder arm) ---
+const pointer = pointerOf({ serverUrl: WAS, spaceId: session.spaceId, did: session.did })
+const serviceDescription = await serviceDescriptionFor(WAS)
+const complete = (joiner: Awaited<ReturnType<typeof mintEnrollmentRequest>>) =>
+  completeEnrollmentCore({ clientSeed: joiner.clientSeed, webvhUpdateKeys: joiner.webvhUpdateKeys, pointer, serviceDescription })
+const joiner = await mintEnrollmentRequest()
+// A fresh transient session: the recovery logins above each minted a new
+// annex generation (a code's rung is not committed in advance), so the
+// first session's generation delegation no longer names the pointed one
+const freshEntry = await time('passphrase login before the approvals', () => openTransientSession({ credential, found, serverUrl: WAS }))
+const session2: TransientSession = { ...freshEntry.session, email, coupon }
+// The clients module adopts a rotated user key into the stored session
+setSession(session2)
+const approved = await time('approve a connect code (ladder arm)', () => approveConnectCode({ session: session2, code: joiner.code, name: 'Wallet 2', label: 'Phone' }))
+check('the approval names the joiner', approved.clientDid === joiner.clientDid)
+const joined = await time('the joiner completes its enrollment', () => complete(joiner))
+check('the joiner reads the user key', joined.userKey.id === session.userKey.id)
+let wallets = await time('list the connected wallets (transient)', () => listConnectedWallets(session2))
+check('the list shows this browser and the joiner', wallets.length === 2, wallets.map((w) => `${w.displayName}:${w.canDisconnect}`))
+check('this browser is listed under the wallet name', wallets.some((w) => w.name === CLIENT_NAME), wallets.map((w) => w.name))
+const joinerRow = wallets.find((w) => w.did === joiner.clientDid)
+check('the joiner is listed under its label', joinerRow?.label === 'Phone' && joinerRow.name === 'Wallet 2', joinerRow && { name: joinerRow.name, label: joinerRow.label })
+check('a transient session marks no row as its own', wallets.every((w) => !w.isCurrent))
+if (!joinerRow) {
+  throw new Error('the joiner is not listed')
+}
+await renameConnectedWallet({ session: session2, signingKeyMultibase: joinerRow.signingKeyMultibase, label: 'Old phone' })
+wallets = await listConnectedWallets(session2)
+check('the joiner is renamed', wallets.find((w) => w.did === joiner.clientDid)?.label === 'Old phone')
+const outcome = await time('disconnect the joiner (ladder arm)', () => disconnectWallet({ session: session2, wallet: wallets.find((w) => w.did === joiner.clientDid)! }))
+check('the disconnection completed and rotated the user key', outcome.completion === 'complete' && outcome.rotated, outcome)
+const rotated = getSession()
+check('the session adopted the rotated user key', rotated !== null && rotated.userKey.id !== session.userKey.id)
+if (!rotated) {
+  throw new Error('no session after the rotation')
+}
+wallets = await listConnectedWallets(rotated)
+check('the joiner is no longer listed', !wallets.some((w) => w.did === joiner.clientDid), wallets.map((w) => w.displayName))
+const refused = await complete(joiner).then(
+  () => 'completed',
+  (err: { name?: string }) => err.name
+)
+check('the disconnected joiner is refused', refused === 'EnrollmentPendingError', refused)
+const third = await registryOf(rotated)
+const registry3 = await readUnlockMethods({ pws: third.pws, spaceId: session.spaceId, userKey: rotated.userKey, capability: third.capability })
+check('the registry is re-sealed under the rotated key', registry3 !== null && registry3.record.methods.some((m) => m.type === 'recovery-code'), registry3?.record.methods.map((m) => m.type))
+
+// --- the remembered browser adopts the rotation, then approves and
+// disconnects a joiner itself (the enrolled arm) ---
+const afterRotation = await time('remembered login after the rotation', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
+check('the remembered browser adopts the rotated user key', afterRotation.session.userKey.id === rotated.userKey.id)
+const rememberedNow: RememberedSession = { ...afterRotation.session, email, coupon }
+setSession(rememberedNow)
+const joiner2 = await mintEnrollmentRequest()
+await time('approve a connect code (enrolled arm)', () => approveConnectCode({ session: rememberedNow, code: joiner2.code, name: 'Wallet 3' }))
+const joined2 = await time('the second joiner completes', () => complete(joiner2))
+check('the second joiner reads the current user key', joined2.userKey.id === rememberedNow.userKey.id)
+wallets = await time('list the connected wallets (remembered)', () => listConnectedWallets(rememberedNow))
+const own = wallets.find((w) => w.isCurrent)
+check('this browser is marked as the current wallet', own?.name === CLIENT_NAME, own && { name: own.name, label: own.label })
+check('a browser cannot disconnect itself', own?.canDisconnect === false && own.refusal === 'self', own?.refusal)
+check('the second joiner is listed under its name', wallets.find((w) => w.did === joiner2.clientDid)?.name === 'Wallet 3')
+const outcome2 = await time('disconnect the second joiner (enrolled arm)', () => disconnectWallet({ session: rememberedNow, wallet: wallets.find((w) => w.did === joiner2.clientDid)! }))
+check('the second disconnection completed and rotated the user key', outcome2.completion === 'complete' && outcome2.rotated, outcome2)
+const current = getSession()
+if (!current) {
+  throw new Error('no session after the second rotation')
+}
+check('the remembered session adopted the rotated user key', current.userKey.id !== rememberedNow.userKey.id)
+
 // --- the passphrase still works after all of it ---
 const later = await time('passphrase login after the changes', () => openTransientSession({ credential, found, serverUrl: WAS }))
-check('the passphrase still opens the account', later.session.userKey.id === session.userKey.id)
+check('the passphrase still opens the account, on the rotated user key', later.session.userKey.id === current.userKey.id)
+const last = await registryOf({ ...later.session, email, coupon })
+const registryLast = await readUnlockMethods({ pws: last.pws, spaceId: session.spaceId, userKey: later.session.userKey, capability: last.capability })
+check('the registry opens under the rotated key at the next sign-in', registryLast !== null)
 const wrong = await fetchStandingRecord({ credential: await passphraseCredential(`${passphrase}-wrong`), serverUrl: WAS })
 check('a wrong passphrase finds no record', wrong === null)
 

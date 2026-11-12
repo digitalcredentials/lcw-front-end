@@ -91,9 +91,33 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   recovery code), with **Add a passkey** and, on a remembered browser,
   **Forget this browser**, which drops the browser's client key record
   (the client stays listed in the account document until it is
-  disconnected). Removing a sign-in method, disconnecting a client and
-  rotating the user key are not offered yet on this model, so a password
-  replaced through recovery stays valid until they are. Requests sign as
+  disconnected). **Connected wallets** (`src/pages/WalletsPage.tsx`,
+  `clients.ts`, `authority.ts`, under **Settings**): the clients the
+  account document lists (each browser a passkey remembers, and any other
+  wallet-core wallet, FreeWallet included), named from the account's
+  `connections` directory (an encrypted collection whose entries are keyed
+  by its blinding key; this wallet names its own clients "Learner
+  Credential Wallet"). A wallet is connected by pasting the connect code it
+  shows and approving it (wallet-core's enrollment: the user key is
+  escrowed to the new client and its keys published in the account
+  document; the other wallet then finishes on its side), renamed in the
+  directory, and disconnected through wallet-core's revocation cascade: its
+  keys leave the document, the user key is rotated, every encrypted
+  collection takes an epoch under the new key, the sign-in methods registry
+  is re-sealed under it and this tab's session adopts it (`adoptUserKey`),
+  and the client's directory entry is retired. A sign-in that finds the
+  registry sealed under an earlier key, or a collection still keyed to one
+  (a disconnection interrupted part way), repairs them before the pages
+  load (`healRegistry`, `sweepCollectionsToUserKey`: wallet-core's cascade
+  is convergent, so a collection already current costs one read).
+  Connecting and disconnecting
+  run from either session kind: a password session signs the account-log
+  entries with its credential's ladder, a passkey session with the enrolled
+  client's keys. A remembered browser cannot disconnect itself (Forget this
+  browser is its path), and a password session lists no row as its own.
+  Both record a `wallet-activity` entry. Removing a sign-in method is not
+  offered yet, so a password replaced through recovery stays valid until
+  it is. Requests sign as
   `<did:webvh>#<multibase>`; only the creation of a Space uses a key's
   `did:key` form, which the server requires, before the Space is promoted.
   On the first open after registering, the
@@ -350,8 +374,11 @@ identity layer under `tsx`, and both are idempotent. `npm run test:identity`
 server that creates Spaces by id) exercises the identity layer against a
 PWS server without the back end: signup, the transient login, a passkey
 credential added from it, the remembered logins, recovery codes from both
-session kinds, and the passphrase again. The account it creates is left
-behind. `npm run test:recovery` (`DEMO_EMAIL=...`) runs account recovery
+session kinds, then connected wallets from both (a joiner's connect code
+approved, the joiner completing its enrollment, the list, a rename, the
+disconnection with its user-key rotation, and the joiner refused after
+it), and the passphrase again on the rotated key. The account it creates
+is left behind. `npm run test:recovery` (`DEMO_EMAIL=...`) runs account recovery
 against the deployed back end on the demo account: it issues a code,
 recovers with it under a new passphrase, checks that the demo passphrase
 still signs in, and leaves a replacement code stored. Each run adds a
