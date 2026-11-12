@@ -375,12 +375,14 @@ test.describe('with a passkey', () => {
 
   test('the passkey keeps this browser signed in until it is forgotten', async () => {
     // A tab with no session of its own (the session lives in sessionStorage,
-    // cleared here as a new tab starts without one): the remembered browser
-    // offers the passkey instead of the login form, and its tap opens the
-    // account. The same tab is reused because a virtual authenticator is
-    // bound to its tab, and only this one holds the passkey.
+    // cleared here as a new tab starts without one, then a fresh document
+    // loaded, as a new tab would): the remembered browser offers the passkey
+    // instead of the login form, and its tap opens the account. The same tab
+    // is reused because a virtual authenticator is bound to its tab, and only
+    // this one holds the passkey.
     await page.evaluate(() => sessionStorage.clear());
     await page.goto(`${DEPLOYED_URL}/#/files`);
+    await page.reload();
     await page.getByRole('button', { name: 'Continue with passkey' }).click();
     await expect(page.locator('[data-space-type]').first()).toBeVisible();
     await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
