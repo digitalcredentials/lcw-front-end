@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import type { ResourceSummary, CollectionSummary, ResourceData } from '@interop/pws-client';
+import type { ResourceData } from '@interop/pws-client';
 import { getToken, clearToken, getSpaceUrl } from '../lib/auth';
 import { getSessionWASClient, getSessionWASClientFor } from '../lib/was';
 import { listSpaces, updateSpaceMeta, type SpaceInfo } from '../lib/spaces';
@@ -13,6 +13,28 @@ import UploadCredentialModal from '../components/UploadCredentialModal';
 import ShareCredentialModal from '../components/ShareCredentialModal';
 import { createPublicCopy, findPublicCopy, removePublicCopy } from '../lib/publicCopy';
 import { isAccountCollection } from '../lib/accountCollections';
+import {
+  addCredential,
+  createGroup,
+  createPublicCopy as publishCredentialCopy,
+  deleteCredential as trashCredential,
+  discardTrashItem,
+  findPublicCopy as hasCredentialCopy,
+  listCredentialIds,
+  listGroups,
+  listTrash,
+  moveCredential as regroupCredential,
+  publicCopyUrl as credentialCopyUrl,
+  readCredential,
+  readGroup,
+  removePublicCopy as withdrawCredentialCopy,
+  restoreCredential as restoreFromTrash,
+  updateGroup,
+  TRASH_COLLECTION,
+  type CredentialBody,
+  type Group,
+  type TrashItem,
+} from '../lib/credentials';
 import JSONInput from '../components/JSONInput';
 import { plugins, useWalletHost } from '../plugins';
 import {
@@ -35,6 +57,41 @@ interface RowSummary {
   issuerLogo: string | null;
   issued: string | null;
   expires: string | null;
+}
+
+// What the browser shows as a folder and as a row in it. In the account
+// Space (src/lib/credentials.ts) a folder is a group of credentials, the
+// Trash, or the credentials in no group, and a row is a credential (by its
+// cid) or a Trash record; in a batch Space a folder is one of its
+// collections and a row one of its resources.
+interface Folder {
+  id: string;
+  name?: string;
+}
+interface Row {
+  id: string;
+  name?: string;
+}
+
+// The folder of the account's credentials that no group lists (one
+// FreeWallet stored, say); not a group, so nothing moves into it
+const UNGROUPED_FOLDER = '__ungrouped__';
+// Folders that are not groups or collections of the user's own
+const SYSTEM_FOLDERS = [TRASH_COLLECTION, 'dids', 'public', UNGROUPED_FOLDER];
+
+function summaryOf(body: unknown): RowSummary | null {
+  const credential = credentialFrom(body);
+  if (!credential) {
+    return null;
+  }
+  return {
+    title: credentialName(credential),
+    logo: credentialImage(credential),
+    issuer: issuerName(credential),
+    issuerLogo: issuerImage(credential),
+    issued: credentialIssuance(credential)?.toLocaleDateString() ?? null,
+    expires: credentialExpiration(credential)?.toLocaleDateString() ?? null,
+  };
 }
 
 const FILE_ICON = (
@@ -78,9 +135,15 @@ export default function FileBrowserPage() {
     () => (activeSpace ? getSessionWASClientFor(activeSpace.url) : getSessionWASClient()),
     [activeSpace]
   );
-  const [collections, setCollections] = useState<CollectionSummary[]>([]);
-  const [selected, setSelected] = useState<CollectionSummary | null>(null);
-  const [resources, setResources] = useState<ResourceSummary[]>([]);
+  const [collections, setCollections] = useState<Folder[]>([]);
+  const [selected, setSelected] = useState<Folder | null>(null);
+  const [resources, setResources] = useState<Row[]>([]);
+  // The account Space's groups and Trash records, behind its folders
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [trashItems, setTrashItems] = useState<Record<string, TrashItem>>({});
+  // The account Space keeps its credentials in FreeWallet's layout; a batch
+  // space is browsed as the collections it holds
+  const accountMode = activeSpace?.type === 'credential';
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -92,7 +155,7 @@ export default function FileBrowserPage() {
   // (formatted contents, source and verification side by side); 'source' is
   // the read-only source-only view used in the Trash and dids collections
   const [viewing, setViewing] = useState<{
-    resource: ResourceSummary;
+    resource: Row;
     vc: string;
     mode: 'detail' | 'source';
   } | null>(null);
@@ -102,13 +165,13 @@ export default function FileBrowserPage() {
   // card shows a loading label); null means it arrived but is not a
   // credential (the card falls back to the file name).
   const [summaries, setSummaries] = useState<Record<string, RowSummary | null>>({});
-  const [deleteTarget, setDeleteTarget] = useState<ResourceSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [shareTarget, setShareTarget] = useState<ResourceSummary | null>(null);
-  const [restoreTarget, setRestoreTarget] = useState<ResourceSummary | null>(null);
+  const [shareTarget, setShareTarget] = useState<Row | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<Row | null>(null);
   const [restoreCollectionId, setRestoreCollectionId] = useState('');
   const [restoring, setRestoring] = useState(false);
-  const [moveTarget, setMoveTarget] = useState<ResourceSummary | null>(null);
+  const [moveTarget, setMoveTarget] = useState<Row | null>(null);
   const [moveCollectionId, setMoveCollectionId] = useState('');
   const [moving, setMoving] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
@@ -168,14 +231,35 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
+      if (activeSpace?.type === 'credential') {
+        // The account Space: its groups, the credentials in no group, and
+        // the Trash when it holds anything
+        const space = s.space;
+        const [groupList, trash, cids] = await Promise.all([listGroups(space), listTrash(space), listCredentialIds(space)]);
+        setGroups(groupList);
+        setTrashItems(Object.fromEntries(trash.map((t) => [t.id, t])));
+        const grouped = new Set(groupList.flatMap((g) => g.members));
+        const ungrouped = cids.filter((cid) => !grouped.has(cid));
+        setCollections([
+          ...groupList.map((g) => ({ id: g.id, name: g.name })),
+          ...(ungrouped.length ? [{ id: UNGROUPED_FOLDER, name: 'Other credentials' }] : []),
+          ...(trash.length ? [{ id: TRASH_COLLECTION, name: 'Trash' }] : []),
+        ]);
+        setCollectionDetails((current) => ({
+          ...current,
+          ...Object.fromEntries(groupList.map((g) => [g.id, { name: g.name, ...(g.description && { description: g.description }) }])),
+        }));
+        return;
+      }
+
       const collectionList = await s.client.space(s.spaceId).collections();
       // A listing may carry tombstones of deleted collections (a changes-feed
       // feature this server does not have); only live ones are collections.
       // The account's own collections (the identity log, the catalogue and
       // the roster) are not the user's to browse (src/lib/accountCollections).
-      const items = (collectionList?.items ?? []).filter(
-        (item): item is CollectionSummary => !('deleted' in item && item.deleted) && !isAccountCollection(item.id)
-      );
+      const items: Folder[] = (collectionList?.items ?? [])
+        .filter((item) => !('deleted' in item && item.deleted) && !isAccountCollection(item.id))
+        .map((item) => ({ id: item.id, ...('name' in item && typeof item.name === 'string' && { name: item.name }) }));
       setCollections(items);
 
       // Fetch each collection's display fields in the background for the
@@ -201,9 +285,9 @@ export default function FileBrowserPage() {
     } finally {
       setLoading(false);
     }
-  }, [navigate, handleError, session]);
+  }, [navigate, handleError, session, activeSpace]);
 
-  const loadResources = useCallback(async (collection: CollectionSummary) => {
+  const loadResources = useCallback(async (collection: Folder) => {
     const token = getToken();
     if (!token) {
       navigate('/login', { replace: true });
@@ -220,8 +304,36 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      const resourceList = await s.client.space(s.spaceId).collection(collection.id).list();
-      const items = resourceList?.items ?? [];
+      // The rows, and how each row's body is read for its card
+      let items: Row[];
+      let bodyOf: (id: string) => Promise<unknown>;
+      if (activeSpace?.type === 'credential') {
+        const space = s.space;
+        if (collection.id === TRASH_COLLECTION) {
+          const trash = await listTrash(space);
+          setTrashItems(Object.fromEntries(trash.map((t) => [t.id, t])));
+          items = trash.map((t) => ({ id: t.id }));
+          const bodies = new Map(trash.map((t) => [t.id, t.body]));
+          bodyOf = async (id) => bodies.get(id);
+        } else {
+          if (collection.id === UNGROUPED_FOLDER) {
+            const [groupList, cids] = await Promise.all([listGroups(space), listCredentialIds(space)]);
+            const grouped = new Set(groupList.flatMap((g) => g.members));
+            items = cids.filter((cid) => !grouped.has(cid)).map((id) => ({ id }));
+          } else {
+            const group = await readGroup(space, collection.id);
+            items = (group?.members ?? []).map((id) => ({ id }));
+          }
+          bodyOf = (id) => readCredential(space, id);
+        }
+      } else {
+        const resourceList = await s.client.space(s.spaceId).collection(collection.id).list();
+        items = (resourceList?.items ?? []).map((item) => ({ id: item.id, ...('name' in item && typeof item.name === 'string' && { name: item.name }) }));
+        bodyOf = async (id) => {
+          const data = await s.client.space(s.spaceId).collection(collection.id).resource(id).get();
+          return data instanceof Blob ? JSON.parse(await data.text()) : data;
+        };
+      }
       setResources(items);
 
       // Fetch the bodies in the background to show credential details in the
@@ -229,40 +341,38 @@ export default function FileBrowserPage() {
       // collection so a stale fetch after switching collections is harmless.
       for (const item of items) {
         const key = `${collection.id}/${item.id}`;
-        void (async (): Promise<RowSummary | null> => {
-          try {
-            const data = await s.client.space(s.spaceId).collection(collection.id).resource(item.id).get();
-            const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data;
-            const credential = credentialFrom(parsed);
-            if (!credential) {
-              return null;
-            }
-            return {
-              title: credentialName(credential),
-              logo: credentialImage(credential),
-              issuer: issuerName(credential),
-              issuerLogo: issuerImage(credential),
-              issued: credentialIssuance(credential)?.toLocaleDateString() ?? null,
-              expires: credentialExpiration(credential)?.toLocaleDateString() ?? null,
-            };
-          } catch {
-            return null;
-          }
-        })().then((summary) => {
-          setSummaries((current) => ({ ...current, [key]: summary }));
-        });
+        void bodyOf(item.id)
+          .then((body) => summaryOf(body))
+          .catch(() => null)
+          .then((summary) => {
+            setSummaries((current) => ({ ...current, [key]: summary }));
+          });
       }
     } catch (err) {
       handleError('load-credentials', err);
     } finally {
       setLoading(false);
     }
-  }, [navigate, handleError, session]);
+  }, [navigate, handleError, session, activeSpace]);
+
+  // A row's stored body: a credential's (by cid), a Trash record's, or a
+  // batch space resource's. Null when the storage has nothing under it.
+  const bodyOfRow = useCallback(async (s: { space: import('@interop/pws-client').Space; client: import('@interop/pws-client').PwsClient; spaceId: string }, folder: Folder, id: string): Promise<CredentialBody | null> => {
+    if (activeSpace?.type === 'credential') {
+      if (folder.id === TRASH_COLLECTION) {
+        return trashItems[id]?.body ?? null;
+      }
+      return readCredential(s.space, id);
+    }
+    const data = await s.client.space(s.spaceId).collection(folder.id).resource(id).get();
+    const parsed = data instanceof Blob ? JSON.parse(await data.text()) : data;
+    return parsed && typeof parsed === 'object' ? (parsed as CredentialBody) : null;
+  }, [activeSpace, trashItems]);
 
   // Retrieves a resource through the WAS client (a signed request) and shows
   // it: in the credential detail view (contents, source and verification), or
   // in the read-only source-only viewer (Trash and dids).
-  const openResource = useCallback(async (resource: ResourceSummary, mode: 'detail' | 'source') => {
+  const openResource = useCallback(async (resource: Row, mode: 'detail' | 'source') => {
     if (!selected) {
       return;
     }
@@ -276,13 +386,13 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      const data = await s.client.space(s.spaceId).collection(selected.id).resource(resource.id).get();
+      const body = await bodyOfRow(s, selected, resource.id);
       // The WAS client answers a missing resource (a 404) with null rather
       // than an error, so null reads as missing here and in restore and move
-      if (data === null) {
+      if (body === null) {
         throw new CredentialMissingError('The storage returned nothing for this credential.');
       }
-      const vc = data instanceof Blob ? await data.text() : JSON.stringify(data);
+      const vc = JSON.stringify(body);
       setViewing({ resource, vc, mode });
       if (mode === 'detail') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -292,12 +402,12 @@ export default function FileBrowserPage() {
     } finally {
       setLoading(false);
     }
-  }, [navigate, handleError, session, selected]);
+  }, [navigate, handleError, session, selected, bodyOfRow]);
 
   // Moves the credential into the space's Trash collection (a copy under
   // Trash's own key epoch, then a permanent delete of the original), then
   // refreshes the list. Inside Trash the delete is final.
-  const deleteCredential = useCallback(async (resource: ResourceSummary) => {
+  const deleteCredential = useCallback(async (resource: Row) => {
     if (!selected) {
       return;
     }
@@ -309,6 +419,20 @@ export default function FileBrowserPage() {
       if (!s) {
         clearToken();
         navigate('/login', { replace: true });
+        return;
+      }
+      if (activeSpace?.type === 'credential') {
+        if (selected.id === TRASH_COLLECTION) {
+          const item = trashItems[resource.id];
+          if (item) {
+            await discardTrashItem(s.space, item);
+          }
+        } else {
+          await trashCredential({ space: s.space, cid: resource.id, groupId: selected.id === UNGROUPED_FOLDER ? null : selected.id });
+        }
+        setDeleteTarget(null);
+        setViewing((v) => (v?.resource.id === resource.id ? null : v));
+        await loadResources(selected);
         return;
       }
       const space = s.client.space(s.spaceId);
@@ -331,11 +455,11 @@ export default function FileBrowserPage() {
     } finally {
       setDeleting(false);
     }
-  }, [navigate, handleError, session, selected, loadResources]);
+  }, [navigate, handleError, session, selected, loadResources, activeSpace, trashItems]);
 
   // Moves a credential out of Trash into the chosen collection: copy the
   // stored body over, then delete the Trash copy.
-  const restoreCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
+  const restoreCredential = useCallback(async (resource: Row, targetCollectionId: string) => {
     if (!selected || !targetCollectionId) {
       return;
     }
@@ -347,6 +471,17 @@ export default function FileBrowserPage() {
       if (!s) {
         clearToken();
         navigate('/login', { replace: true });
+        return;
+      }
+      if (activeSpace?.type === 'credential') {
+        const item = trashItems[resource.id];
+        if (!item) {
+          throw new CredentialMissingError('The storage returned nothing for this credential in Trash.');
+        }
+        await restoreFromTrash({ space: s.space, item, groupId: targetCollectionId });
+        setRestoreTarget(null);
+        setViewing((v) => (v?.resource.id === resource.id ? null : v));
+        await loadResources(selected);
         return;
       }
       const space = s.client.space(s.spaceId);
@@ -370,11 +505,11 @@ export default function FileBrowserPage() {
     } finally {
       setRestoring(false);
     }
-  }, [navigate, handleError, session, selected, loadResources]);
+  }, [navigate, handleError, session, selected, loadResources, activeSpace, trashItems]);
 
   // Moves a credential into another collection: copy the stored body over,
   // then delete the original.
-  const moveCredential = useCallback(async (resource: ResourceSummary, targetCollectionId: string) => {
+  const moveCredential = useCallback(async (resource: Row, targetCollectionId: string) => {
     if (!selected || !targetCollectionId) {
       return;
     }
@@ -386,6 +521,13 @@ export default function FileBrowserPage() {
       if (!s) {
         clearToken();
         navigate('/login', { replace: true });
+        return;
+      }
+      if (activeSpace?.type === 'credential') {
+        await regroupCredential({ space: s.space, cid: resource.id, fromGroupId: selected.id === UNGROUPED_FOLDER ? null : selected.id, toGroupId: targetCollectionId });
+        setMoveTarget(null);
+        setViewing((v) => (v?.resource.id === resource.id ? null : v));
+        await loadResources(selected);
         return;
       }
       const space = s.client.space(s.spaceId);
@@ -409,7 +551,7 @@ export default function FileBrowserPage() {
     } finally {
       setMoving(false);
     }
-  }, [navigate, handleError, session, selected, loadResources]);
+  }, [navigate, handleError, session, selected, loadResources, activeSpace]);
 
   // The source shown pretty-printed in the read-only viewer
   const viewingSource = useMemo(() => {
@@ -486,11 +628,19 @@ export default function FileBrowserPage() {
         navigate('/login', { replace: true });
         return;
       }
-      await writeResource({
-        collection: s.client.space(s.spaceId).collection(selected.id),
-        name,
-        body: credential as ResourceData,
-      });
+      if (activeSpace?.type === 'credential') {
+        if (!credential || typeof credential !== 'object') {
+          setUploadError({ text: `We couldn't read ${name}. Check that it's a credential file.` });
+          return;
+        }
+        await addCredential({ space: s.space, body: credential as CredentialBody, groupId: selected.id === UNGROUPED_FOLDER ? null : selected.id });
+      } else {
+        await writeResource({
+          collection: s.client.space(s.spaceId).collection(selected.id),
+          name,
+          body: credential as ResourceData,
+        });
+      }
       setUploadOpen(false);
       await loadResources(selected);
     } catch (err) {
@@ -503,7 +653,7 @@ export default function FileBrowserPage() {
     } finally {
       setUploading(false);
     }
-  }, [navigate, handleError, session, selected, loadResources]);
+  }, [navigate, handleError, session, selected, loadResources, activeSpace]);
 
   // Creates a collection named by the user via a PUT of its description (the
   // WAS create-by-id path). The id is the name with whitespace dashed, since
@@ -528,13 +678,19 @@ export default function FileBrowserPage() {
       // display fields (name, description) live in the encrypted /meta
       // custom — nothing readable lands in the plaintext Description.
       const description = newCollectionDescription.trim();
-      const collectionId = name.replace(/\s+/g, '-');
-      await ensureEncryptedCollection({
-        space: s.client.space(s.spaceId),
-        id: collectionId,
-        name,
-        ...(description && { description }),
-      });
+      let collectionId: string;
+      if (activeSpace?.type === 'credential') {
+        // In the account Space a folder is a group record, not a collection
+        collectionId = (await createGroup({ space: s.space, name, ...(description && { description }) })).id;
+      } else {
+        collectionId = name.replace(/\s+/g, '-');
+        await ensureEncryptedCollection({
+          space: s.client.space(s.spaceId),
+          id: collectionId,
+          name,
+          ...(description && { description }),
+        });
+      }
       setCollectionDetails((current) => ({
         ...current,
         [collectionId]: { name, ...(description && { description }) },
@@ -551,7 +707,7 @@ export default function FileBrowserPage() {
     } finally {
       setCreatingCollection(false);
     }
-  }, [navigate, handleError, session, newCollectionName, newCollectionDescription, loadCollections]);
+  }, [navigate, handleError, session, newCollectionName, newCollectionDescription, loadCollections, activeSpace]);
 
   // Writes the open collection's description: read the current description
   // document, merge the new text in, and PUT the whole document back (the WAS
@@ -574,14 +730,23 @@ export default function FileBrowserPage() {
       }
       const description = descriptionDraft.trim();
       if (descriptionTarget === 'collection' && selected) {
-        // One write path for every collection: /meta's custom, encrypted
-        // transparently when the collection is. setMeta is a full
-        // replacement, so the name rides along.
-        const col = s.client.space(s.spaceId).collection(selected.id);
         const name = collectionDetails[selected.id]?.name ?? selected.name ?? selected.id;
-        await col.setMeta({
-          custom: { name, ...(description && { tags: { description } }) },
-        });
+        if (activeSpace?.type === 'credential') {
+          // The group's record carries its description
+          const group = groups.find((g) => g.id === selected.id) ?? (await readGroup(s.space, selected.id));
+          if (group) {
+            const { description: _previous, ...rest } = group;
+            await updateGroup(s.space, { ...rest, ...(description && { description }) });
+          }
+        } else {
+          // One write path for every collection: /meta's custom, encrypted
+          // transparently when the collection is. setMeta is a full
+          // replacement, so the name rides along.
+          const col = s.client.space(s.spaceId).collection(selected.id);
+          await col.setMeta({
+            custom: { name, ...(description && { tags: { description } }) },
+          });
+        }
         setCollectionDetails((current) => {
           const entry = { ...current[selected.id] };
           if (description) {
@@ -612,7 +777,7 @@ export default function FileBrowserPage() {
     } finally {
       setSavingDescription(false);
     }
-  }, [navigate, handleError, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails]);
+  }, [navigate, handleError, session, selected, activeSpace, descriptionTarget, descriptionDraft, nameDraft, spaceDetails, collectionDetails, groups]);
 
   // The spaces list: the account's registered spaces, with each space's
   // description fetched in the background from its Space Metadata object
@@ -691,7 +856,7 @@ export default function FileBrowserPage() {
     setError(null);
   }
 
-  function openCollection(collection: CollectionSummary) {
+  function openCollection(collection: Folder) {
     setSelected(collection);
     setResources([]);
     setViewing(null);
@@ -832,7 +997,7 @@ export default function FileBrowserPage() {
             <span className="text-base text-gray-600">
               {collectionDetails[selected.id]?.description ?? ''}
             </span>
-            {!['Trash', 'dids'].includes(selected.id) && (
+            {!SYSTEM_FOLDERS.includes(selected.id) && (
               <button
                 onClick={() => {
                   setDescriptionDraft(collectionDetails[selected.id]?.description ?? '');
@@ -1020,7 +1185,7 @@ export default function FileBrowserPage() {
                           onClick={() => {
                             setMoveTarget(item);
                             setMoveCollectionId(
-                              collections.find((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
+                              collections.find((c) => ![selected.id, ...SYSTEM_FOLDERS].includes(c.id))?.id ?? ''
                             );
                           }}
                           className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
@@ -1042,7 +1207,7 @@ export default function FileBrowserPage() {
                         onClick={() => {
                           setRestoreTarget(item);
                           setRestoreCollectionId(
-                            collections.find((c) => !['Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
+                            collections.find((c) => !SYSTEM_FOLDERS.includes(c.id))?.id ?? ''
                           );
                         }}
                         className="border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-medium rounded-md px-2.5 py-1.5 transition-colors"
@@ -1088,7 +1253,7 @@ export default function FileBrowserPage() {
                 onClick={() => {
                   setMoveTarget(viewing.resource);
                   setMoveCollectionId(
-                    collections.find((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))?.id ?? ''
+                    collections.find((c) => ![selected.id, ...SYSTEM_FOLDERS].includes(c.id))?.id ?? ''
                   );
                 }}
                 className="border border-gray-300 hover:bg-gray-100 text-gray-700 font-medium text-sm rounded-lg px-4 py-2 transition-colors"
@@ -1492,7 +1657,7 @@ export default function FileBrowserPage() {
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
             >
               {collections
-                .filter((c) => !['Trash', 'dids', 'public'].includes(c.id))
+                .filter((c) => !SYSTEM_FOLDERS.includes(c.id))
                 .map((c) => (
                   <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
                 ))}
@@ -1529,7 +1694,7 @@ export default function FileBrowserPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-lg font-semibold text-gray-800 mb-2">Move Credential</h2>
-            {collections.some((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id)) ? (
+            {collections.some((c) => ![selected.id, ...SYSTEM_FOLDERS].includes(c.id)) ? (
               <>
                 <p className="text-sm text-gray-600 mb-3">
                   Move <span className="font-medium text-gray-800">
@@ -1546,7 +1711,7 @@ export default function FileBrowserPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-5"
                 >
                   {collections
-                    .filter((c) => ![selected.id, 'Trash', 'dids', 'public'].includes(c.id))
+                    .filter((c) => ![selected.id, ...SYSTEM_FOLDERS].includes(c.id))
                     .map((c) => (
                       <option key={c.id} value={c.id}>{c.name ?? c.id}</option>
                     ))}
@@ -1598,6 +1763,9 @@ export default function FileBrowserPage() {
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
+            if (accountMode) {
+              return (await hasCredentialCopy(s.space, shareTarget.id)) ? credentialCopyUrl(s.space, shareTarget.id) : null;
+            }
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
             const publicId = await findPublicCopy(pub, selected.id, shareTarget.id);
             return publicId ? publicCopyUrl(publicId) : null;
@@ -1610,6 +1778,13 @@ export default function FileBrowserPage() {
             // The decrypted (or plaintext) body, copied into the public
             // collection; only that copy becomes world-readable, so the
             // source collection and its members stay private
+            if (accountMode) {
+              const body = await readCredential(s.space, shareTarget.id);
+              if (!body) {
+                throw new CredentialMissingError('The storage returned nothing for this credential.');
+              }
+              return publishCredentialCopy(s.space, shareTarget.id, body);
+            }
             const data = await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).get();
             const body = data instanceof Blob ? JSON.parse(await data.text()) : data;
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
@@ -1621,6 +1796,10 @@ export default function FileBrowserPage() {
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
+            if (accountMode) {
+              await withdrawCredentialCopy(s.space, shareTarget.id);
+              return;
+            }
             const pub = s.client.space(s.spaceId).collection('public', { encryption: 'plaintext' });
             await removePublicCopy(pub, selected.id, shareTarget.id);
           }}
@@ -1631,6 +1810,9 @@ export default function FileBrowserPage() {
             }
             // The stored body (a presentation envelope or a bare credential),
             // for the fields LinkedIn's add-to-profile form is filled from
+            if (accountMode) {
+              return readCredential(s.space, shareTarget.id);
+            }
             const data = await s.client.space(s.spaceId).collection(selected.id).resource(shareTarget.id).get();
             if (data instanceof Blob) {
               try {

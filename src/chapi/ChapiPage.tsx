@@ -10,8 +10,7 @@ import { loginWithPassphrase, loginWithPasskey, passkeySupported, setSession } f
 import { identityConfig } from '../lib/identity/config';
 import PasswordInput from '../components/PasswordInput';
 import LoadingLabel from '../components/LoadingLabel';
-import { ensureEncryptedCollection } from '../lib/edv';
-import { isAccountCollection } from '../lib/accountCollections';
+import { createGroup, listGroups } from '../lib/credentials';
 import { parsePresentationRequest, matchesAnyExample, type ParsedPresentationRequest } from '../lib/vpRequest';
 import { loadWalletCredentials, presentationFor, type WalletCredential } from '../lib/present';
 import { credentialName, issuerName } from '../lib/linkedin';
@@ -210,6 +209,7 @@ export default function ChapiPage() {
     try {
       // Batch spaces are working storage for the issuer, and dids/Trash/
       // public are the wallet's own, so neither is offered
+      // The account Space, whose folders are its groups (src/lib/credentials)
       const spaceInfos = (await listSpaces()).filter((info) => info.type === 'credential');
       spaces = (await Promise.all(
         spaceInfos.map(async (info): Promise<SpaceCollections | null> => {
@@ -217,16 +217,14 @@ export default function ChapiPage() {
           if (!s) {
             return null;
           }
-          const [list, desc] = await Promise.all([
-            s.client.space(s.spaceId).collections(),
+          const [groups, desc] = await Promise.all([
+            listGroups(s.space),
             s.client.space(s.spaceId).describe().catch(() => null),
           ]);
           return {
             spaceUrl: info.url,
             spaceName: (desc as { name?: string } | null)?.name ?? s.spaceId,
-            collections: (list?.items ?? [])
-              .filter((c) => !['Trash', 'dids', 'public'].includes(c.id) && !isAccountCollection(c.id))
-              .map((c) => ({ id: c.id, name: 'name' in c ? c.name : c.id })),
+            collections: groups.map((g) => ({ id: g.id, name: g.name })),
           };
         })
       )).filter((sp): sp is SpaceCollections => sp !== null);
@@ -284,9 +282,8 @@ export default function ChapiPage() {
       if (choice !== NEW_COLLECTION) {
         collectionName = space?.collections.find((c) => c.id === choice)?.name ?? choice;
       } else {
-        // Create the collection first, end-to-end encrypted like every new
-        // credential collection; the id is the name with whitespace dashed
-        // (it becomes a path segment).
+        // Create the group first (a record in the account Space's encrypted
+        // lcw-groups collection)
         const name = newCollectionName.trim();
         if (!name) {
           return;
@@ -297,20 +294,12 @@ export default function ChapiPage() {
           setPhase({ step: 'not-signed-in' });
           return;
         }
-        targetId = collectionIdFor(name);
         step = 'claim-collection';
-        await ensureEncryptedCollection({
-          space: session.client.space(session.spaceId),
-          id: targetId,
-          name,
-        });
+        targetId = (await createGroup({ space: session.space, name })).id;
         step = 'save-claim';
       }
-      // One name for both the stored file and the message: the display name,
-      // with whitespace and slashes dashed (it becomes a path segment)
       const displayName = credentialName(claimRef.current.credential);
-      const resourceName = `${displayName.replace(/[\s/]+/g, '-')}-${Date.now()}.json`;
-      await saveCredential(targetId, resourceName, claimRef.current.envelope, spaceUrl);
+      await saveCredential({ groupId: targetId, envelope: claimRef.current.envelope });
       rememberLastCollection(getEmail(), `${spaceUrl}|${targetId}`);
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
@@ -608,7 +597,7 @@ export default function ChapiPage() {
                               {credentialName(credential)}
                             </span>
                             <span className="block text-xs text-gray-500">
-                              {issuerName(credential) ?? 'Unnamed issuer'} · {collectionId}
+                              {issuerName(credential) ?? 'Unnamed issuer'}
                             </span>
                           </span>
                         </label>

@@ -422,11 +422,12 @@ test('downloads every document unencrypted as one tar', async ({ page }) => {
     expect(manifest.format).toBe('lcw-data-export/1');
     expect(manifest.account).toBe(DEMO_EMAIL);
     expect(manifest.problems).toEqual([]);
-    // No account collection reaches the file
-    expect(names.filter((n) => /\/(id|account|dids|public)\//.test(n))).toEqual([]);
-    // The demo credential, decrypted, under its space and collection folders
+    // No account collection, holder key or public copy reaches the file
+    expect(names.filter((n) => /\/(id|account|dids|public|public-credentials|key-map|unlock-methods|connections|inbox|app-keys)\//.test(n))).toEqual([]);
+    // The demo credential, decrypted, under its space folder and the
+    // private-credentials collection
     const badge = entries.find(
-      (e) => /\/UniversityOfToronto\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
+      (e) => /\/private-credentials\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
     );
     expect(badge, names.join('\n')).toBeTruthy();
     // The demo seed stores the credential inside a presentation; either way
