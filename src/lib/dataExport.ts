@@ -1,6 +1,6 @@
 import type { IKeyAgreementKey, IKeyResolver } from '@interop/data-integrity-core'
 import type { CollectionEncryption } from '@interop/pws-client'
-import { createEdvDocCipher } from '@interop/pws-client/edv'
+import { EPOCH_CONFIGURATION_STATE_TYPE, createEdvDocCipher } from '@interop/pws-client/edv'
 import {
   readSpaceArchive,
   parseArchivePath,
@@ -42,8 +42,14 @@ export interface ArchivedResource {
 export interface ArchivedCollection {
   id: string
   // The stored Collection Metadata object; `encryption` marks an encrypted
-  // collection whose resources are EDV envelopes
+  // collection whose resources are EDV envelopes. A governed collection's
+  // metadata carries no `encryption`: its descriptor is derived from `log`.
   meta: Record<string, unknown> | null
+  // The governing history log of a governed collection (one the encryption
+  // descriptor of which is the head state of a signed log, as wallet-core
+  // provisions them), as the archive carries it: a JSON object whose `body`
+  // is the log's JSON Lines text
+  log?: Uint8Array
   resources: Map<string, ArchivedResource>
   // A chunked resource's chunk files, by resource id then chunk index
   chunks: Map<string, Map<number, Uint8Array>>
@@ -105,6 +111,8 @@ export async function readArchivedSpace(bytes: Uint8Array): Promise<ArchivedSpac
       const kind = classifyCollectionFile(position.fileName)
       if (kind.kind === 'collectionMetadata') {
         collection(position.collectionId).meta = collectionMetadataFromFile({ bytes: await entry.bytes() })
+      } else if (kind.kind === 'collectionLog') {
+        collection(position.collectionId).log = await entry.bytes()
       } else if (kind.kind === 'representation') {
         collection(position.collectionId).resources.set(kind.resourceId, {
           id: kind.resourceId,
@@ -128,6 +136,40 @@ export interface ExportedDocument {
 }
 
 const utf8 = new TextEncoder()
+
+// The encryption descriptor of a governed collection: the head state of its
+// history log (the last entry's `state`), which is what the server serves as
+// the collection's `encryption` member. The log is read as the server
+// archived it, without verifying its chain: the export runs offline with the
+// reader's own key, and a descriptor that was tampered with opens nothing.
+export function governedEncryption(log: Uint8Array): CollectionEncryption {
+  const record = JSON.parse(new TextDecoder().decode(log)) as { body?: unknown }
+  if (typeof record.body !== 'string') {
+    throw new Error('The archived history log carries no body.')
+  }
+  const lines = record.body.split('\n').filter((line) => line.trim() !== '')
+  if (lines.length === 0) {
+    throw new Error('The archived history log is empty.')
+  }
+  const head = (JSON.parse(lines[lines.length - 1]) as { state?: { type?: unknown } }).state
+  if (!head || typeof head !== 'object') {
+    throw new Error('The history log\'s last entry carries no state.')
+  }
+  if (head.type !== EPOCH_CONFIGURATION_STATE_TYPE) {
+    throw new Error(`The history log's head is a "${String(head.type)}" state, not an encryption descriptor.`)
+  }
+  return head as unknown as CollectionEncryption
+}
+
+// A collection's encryption descriptor: the one its metadata serves, or the
+// one its history log governs. Undefined for a plaintext collection.
+function encryptionOf(collection: ArchivedCollection): CollectionEncryption | undefined {
+  const served = collection.meta?.encryption as CollectionEncryption | undefined
+  if (served) {
+    return served
+  }
+  return collection.log ? governedEncryption(collection.log) : undefined
+}
 
 // Decrypts one encrypted collection's resources with the reader's key (the
 // account's user key, the recipient of every key epoch), using the
@@ -187,7 +229,17 @@ export async function exportedCollections({
 }): Promise<ExportedCollection[]> {
   const collections: ExportedCollection[] = []
   for (const collection of [...space.collections.values()].sort((a, b) => a.id.localeCompare(b.id))) {
-    const encryption = collection.meta?.encryption as CollectionEncryption | undefined
+    let encryption: CollectionEncryption | undefined
+    try {
+      encryption = encryptionOf(collection)
+    } catch (err) {
+      // The collection is encrypted (it has a history log) but its descriptor
+      // cannot be read, so nothing in it can be opened
+      console.error(`Wallet: the export could not read the history log of ${label}/${collection.id}:`, err)
+      problems.push(`${label}/${collection.id} is encrypted, but its history log could not be read, so its documents were left out.`)
+      collections.push({ id: collection.id, encrypted: true, documents: [] })
+      continue
+    }
     if (encryption) {
       const documents = await decryptCollection({ collection, encryption, keys, label, problems })
       collections.push({ id: collection.id, encrypted: true, documents })
