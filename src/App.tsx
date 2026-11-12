@@ -2,7 +2,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import ForgotPage from './pages/ForgotPage'
-import FileBrowserPage from './pages/SpaceBrowserPage'
+import WalletPage from './pages/WalletPage'
 import PluginPage from './pages/PluginPage'
 import CredentialsPage from './pages/CredentialsPage'
 import RequireAuth from './components/RequireAuth'
@@ -20,7 +20,7 @@ function App() {
           path="/files"
           element={
             <RequireAuth>
-              <FileBrowserPage />
+              <WalletPage />
             </RequireAuth>
           }
         />

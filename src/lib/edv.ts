@@ -1,5 +1,5 @@
 import { ensureFirstEpoch, ownerRecipient } from '@interop/pws-client/edv'
-import type { Collection, ResourceData, Space } from '@interop/pws-client'
+import type { Space } from '@interop/pws-client'
 import { getSession, sessionKeyAgreementKey } from './identity/session'
 import { CollectionExistsError } from './errors'
 
@@ -61,70 +61,6 @@ export async function ensureEncryptedCollection({
   }
 }
 
-// A collection's display fields: the /meta custom ({name, tags.description}),
-// plaintext on a plaintext collection, an encrypted envelope on an encrypted
-// one, decoded transparently either way. A collection with no custom (one
-// created by another client, or an implicit one) shows its configuration
-// name, which is a plaintext member of the metadata object.
-export async function collectionDisplay(
-  collection: Collection
-): Promise<{ name?: string; description?: string } | null> {
-  const meta = (await collection.meta().catch(() => null)) as {
-    custom?: { name?: string; tags?: Record<string, string> }
-  } | null
-  if (meta?.custom && (meta.custom.name || meta.custom.tags?.description)) {
-    return {
-      ...(meta.custom.name && { name: meta.custom.name }),
-      ...(meta.custom.tags?.description && { description: meta.custom.tags.description }),
-    }
-  }
-  const desc = (await collection.describe().catch(() => null)) as
-    | { name?: unknown; description?: unknown }
-    | null
-  const legacy = {
-    ...(typeof desc?.name === 'string' && desc.name.trim() && { name: desc.name }),
-    ...(typeof desc?.description === 'string' && desc.description.trim() && { description: desc.description }),
-  }
-  return Object.keys(legacy).length ? legacy : null
-}
-
-// Whether a collection's description declares client-side encryption, memoized
-// per space/collection for the session (only this wallet ever declares it, so
-// the answer cannot change under us except through ensureEncryptedCollection,
-// which updates the memo).
+// The collections this session has declared encrypted, so a repeated
+// ensure costs nothing.
 const encryptedState = new Map<string, boolean>()
-
-export async function isEncryptedCollection(collection: Collection): Promise<boolean> {
-  const key = `${collection.spaceUrl}${collection.id}`
-  const cached = encryptedState.get(key)
-  if (cached !== undefined) {
-    return cached
-  }
-  const described = (await collection.describe().catch(() => null)) as
-    | { encryption?: unknown }
-    | null
-  const encrypted = Boolean(described?.encryption)
-  encryptedState.set(key, encrypted)
-  return encrypted
-}
-
-// Writes a resource with the operation the collection requires: an encrypted
-// collection mints an opaque EDV id via add() (a named put would leak the
-// name onto the URL); a plaintext collection keeps the caller-chosen id.
-// Returns the id the resource landed under.
-export async function writeResource({
-  collection,
-  name,
-  body,
-}: {
-  collection: Collection
-  name: string
-  body: ResourceData
-}): Promise<{ id: string }> {
-  if (await isEncryptedCollection(collection)) {
-    const { id } = await collection.add(body)
-    return { id }
-  }
-  await collection.put(name, body)
-  return { id: name }
-}

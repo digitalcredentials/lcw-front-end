@@ -2,8 +2,9 @@ import { Ed25519VerificationKey } from '@interop/ed25519-verification-key'
 import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
-import { getSessionWASClient, getSessionWASClientFor } from './was'
-import { ensureEncryptedCollection, writeResource } from './edv'
+import { getSessionWASClient } from './was'
+import { ensureEncryptedCollection } from './edv'
+import { addCredential, DIDS_COLLECTION } from './credentials'
 import { IssuerError, PlainError, outsideText } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
 import type { ResourceData } from '@interop/pws-client'
@@ -70,8 +71,8 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     key.controller = holderDid
     key.id = `${holderDid}#${key.fingerprint()}`
     const space = session.space
-    const dids = space.collection('dids')
-    await ensureEncryptedCollection({ space, id: 'dids', name: 'dids' })
+    const dids = space.collection(DIDS_COLLECTION)
+    await ensureEncryptedCollection({ space, id: DIDS_COLLECTION, name: 'dids' })
     const exported = await key.export({ secretKey: true, includeContext: true })
     await dids.add(exported as unknown as ResourceData)
     signer = key.signer()
@@ -117,27 +118,13 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   return { credential, envelope, holderDid }
 }
 
-// Saves the issued credential (in its presentation envelope, the same shape
-// other wallet contents use) into the chosen collection.
-// Saves the claimed credential, returning the id it landed under (the given
-// name in a plaintext collection; a minted EDV id in an encrypted one). The
-// optional spaceUrl targets any of the account's credential spaces; without
-// it the session's default space is used.
-export async function saveCredential(
-  collectionId: string,
-  name: string,
-  envelope: Record<string, unknown>,
-  spaceUrl?: string
-): Promise<{ id: string }> {
-  const session = spaceUrl
-    ? await getSessionWASClientFor(spaceUrl)
-    : await getSessionWASClient()
+// Saves the claimed credential (in its presentation envelope, the shape
+// other wallet contents use) in the account's private-credentials, with
+// the holder's tags. Resolves to its cid.
+export async function saveCredential({ tags, envelope }: { tags: string[]; envelope: Record<string, unknown> }): Promise<{ cid: string }> {
+  const session = await getSessionWASClient()
   if (!session) {
     throw new Error('UNAUTHORIZED')
   }
-  return writeResource({
-    collection: session.space.collection(collectionId),
-    name,
-    body: envelope as unknown as ResourceData,
-  })
+  return addCredential({ space: session.space, body: envelope, tags })
 }

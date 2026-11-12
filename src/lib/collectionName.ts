@@ -1,7 +1,6 @@
-// Which collection a claimed credential is offered: a category read from its
+// The tag a claimed or added credential is offered: a category read from its
 // Open Badges achievement type ("Degrees", "Certificates", …), so a person's
-// collections stay few and like credentials gather together. Also the
-// browser's memory of the collection this account last saved into.
+// tags stay few and like credentials gather together.
 
 // Open Badges 3.0 achievementType terms, lower-cased, to the category offered.
 const CATEGORIES: Record<string, string> = {
@@ -73,7 +72,7 @@ function extensionWords(type: string): string {
     .trim();
 }
 
-export function suggestCollectionName(credential: Record<string, unknown>): string {
+export function suggestTag(credential: Record<string, unknown>): string {
   const type = achievementTypeOf(credential);
   if (!type) {
     return FALLBACK;
@@ -90,33 +89,4 @@ export function suggestCollectionName(credential: Record<string, unknown>): stri
 // so matching a suggestion against existing collections compares ids too.
 export function collectionIdFor(name: string): string {
   return name.trim().replace(/\s+/g, '-');
-}
-
-// The collection this account last saved into in this browser, as the save
-// picker's own value: "<spaceUrl>|<collectionId>". Storage may be blocked (a
-// private window), which only loses the memory.
-function lastCollectionKey(email: string): string {
-  return `lcw_last_collection:${email}`;
-}
-
-export function lastCollection(email: string | null): string | null {
-  if (!email) {
-    return null;
-  }
-  try {
-    return localStorage.getItem(lastCollectionKey(email));
-  } catch {
-    return null;
-  }
-}
-
-export function rememberLastCollection(email: string | null, value: string): void {
-  if (!email) {
-    return;
-  }
-  try {
-    localStorage.setItem(lastCollectionKey(email), value);
-  } catch (err) {
-    console.error('Could not remember the last collection:', err);
-  }
 }

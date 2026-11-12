@@ -10,7 +10,7 @@ import ExportDataModal from './ExportDataModal';
 import { describeError, type Failure } from '../lib/errors';
 
 // The signed-in layout: the product title and navigation run down a left
-// sidebar (My Spaces, one link per registered plugin such as Credential
+// sidebar (My Credentials, one link per registered plugin such as Credential
 // Issuer, Settings — which holds the browser-wallet registration — and Sign
 // Out at the bottom); pages render into the main column. On a phone (below
 // Tailwind's md, 768px) the title runs across the top instead, and the links
@@ -198,7 +198,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
       <aside className="w-full md:w-60 shrink-0 bg-white border-b md:border-b-0 md:border-r border-gray-200 flex flex-col">
         <div className={`flex items-center border-gray-200 md:border-b ${menuOpen ? 'border-b' : ''}`}>
-          {/* The title links home: back to the spaces card view */}
+          {/* The title links home: the credentials list */}
           <Link
             to="/files"
             className="flex-1 min-w-0 flex items-center gap-3 px-4 py-4 hover:bg-gray-50 transition-colors"
@@ -230,7 +230,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
         <nav id="app-nav" className={`${menuOpen ? '' : 'hidden'} md:block flex-1 px-3 py-4 space-y-1`} aria-label="Main">
           <Link to="/files" className={itemClass(pathname === '/files')}>
-            My Spaces
+            My Credentials
           </Link>
           {/* One link per plugin page that wants one (src/plugins/index.ts) */}
           {pluginPages

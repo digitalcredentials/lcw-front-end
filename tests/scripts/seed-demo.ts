@@ -1,7 +1,8 @@
 // Seeds the deployed demo account's Space with what the deployed tests
-// expect: a "UniversityOfToronto" collection (encrypted, the way the wallet
-// creates collections) holding the LCW Experience Badge fixture. Idempotent:
-// a collection or credential already there is left alone.
+// expect: the LCW Experience Badge fixture stored the way the wallet stores
+// credentials (the private-credentials collection, FreeWallet's layout),
+// tagged "University of Toronto" (src/lib/credentials.ts). Idempotent: a
+// credential already there keeps its tags and gains that one if missing.
 //
 // The account itself must exist first (tests/scripts/register-demo.ts, and
 // its confirmation email clicked). The account is opened the way the wallet
@@ -15,16 +16,17 @@
 import '@interop/http-client'
 import { readFileSync } from 'node:fs'
 import { PwsClient } from '@interop/pws-client'
-import { ensureFirstEpoch, ownerRecipient } from '@interop/pws-client/edv'
-import { loginWithPassphrase, sessionAgents, sessionEncryption, sessionKeyAgreementKey } from '../../src/lib/identity'
+import { loginWithPassphrase, sessionAgents, sessionEncryption, setSession } from '../../src/lib/identity'
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
+import { addCredential, loadCredentials, setTags } from '../../src/lib/credentials'
+import { credentialFrom, credentialName } from '../../src/lib/linkedin'
 
 const email = process.env.DEMO_EMAIL
 if (!email) {
   console.error("Set DEMO_EMAIL to the demo account's email.")
   process.exit(2)
 }
-const COLLECTION = 'UniversityOfToronto'
+const TAG = 'University of Toronto'
 const FIXTURE = new URL('../fixtures/PlaywrightUpload.json', import.meta.url)
 
 const session = await loginWithPassphrase({
@@ -35,49 +37,32 @@ const session = await loginWithPassphrase({
     serverUrl: (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, ''),
   },
 })
+setSession(session)
 console.log(`space ${session.serverUrl}/space/${session.spaceId} (${session.did})`)
 
 const { signer, capabilityFor } = await sessionAgents(session)
-const was = PwsClient.fromSigner({
+const pws = PwsClient.fromSigner({
   baseServerUrl: session.serverUrl,
   signer,
   encryption: sessionEncryption(session),
   serviceDescription: await serviceDescriptionFor(session.serverUrl),
 })
 const capability = capabilityFor(session.spaceId)
-const space = was.space(session.spaceId, capability ? { capability } : undefined)
+const space = pws.space(session.spaceId, capability ? { capability } : undefined)
 
-let collection = space.collection(COLLECTION)
-const described = (await collection.describe()) as { encryption?: unknown } | null
-if (described === null) {
-  collection = await space.createCollection({ id: COLLECTION, encryption: { scheme: 'edv' } })
-  console.log(`created collection ${COLLECTION}`)
-} else if (!described.encryption) {
-  console.error(`Collection ${COLLECTION} exists and is not encrypted.`)
-  process.exit(1)
-}
-await ensureFirstEpoch({ collection, recipients: [ownerRecipient({ keyAgreementKey: sessionKeyAgreementKey(session) })] })
-const meta = (await collection.meta()) as { custom?: { name?: string } } | null
-if (!meta?.custom?.name) {
-  await collection.setMeta({ custom: { name: COLLECTION } })
-  console.log('named the collection')
-}
-
-const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'))
-const fixtureName: string = fixture.verifiableCredential?.[0]?.name ?? fixture.name
-const listing = await collection.list()
-let present = false
-for (const item of listing?.items ?? []) {
-  const stored = (await collection.get(item.id).catch(() => null)) as { verifiableCredential?: { name?: string }[]; name?: string } | null
-  if ((stored?.verifiableCredential?.[0]?.name ?? stored?.name) === fixtureName) {
-    present = true
-    break
-  }
-}
-if (present) {
-  console.log(`"${fixtureName}" is already there`)
+const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unknown>
+const fixtureName = credentialName(credentialFrom(fixture)!)
+const stored = (await loadCredentials(space)).find((c) => {
+  const credential = credentialFrom(c.body)
+  return credential !== null && credentialName(credential) === fixtureName
+})
+if (!stored) {
+  const { cid } = await addCredential({ space, body: fixture, tags: [TAG] })
+  console.log(`added "${fixtureName}" as ${cid}, tagged "${TAG}"`)
+} else if (!stored.tags.includes(TAG)) {
+  await setTags(space, stored.cid, [...stored.tags, TAG])
+  console.log(`tagged "${fixtureName}" "${TAG}"`)
 } else {
-  const added = await collection.add(fixture)
-  console.log(`added "${fixtureName}" as ${added.id}`)
+  console.log(`"${fixtureName}" is already there, tagged "${TAG}"`)
 }
 console.log('done')

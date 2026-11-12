@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { suggestCollectionName, collectionIdFor } from '../src/lib/collectionName';
+import { suggestTag as suggestCollectionName, collectionIdFor } from '../src/lib/collectionName';
 
 // Node-side unit assertions over the collection suggestion; no browser
 // involved. The claim page's use of it (the save picker's default) is checked
