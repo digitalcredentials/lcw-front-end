@@ -203,9 +203,12 @@ export async function openTransientSession({
   }
   // The generation's log is a did:webvh log a resolver outside this server
   // (the back end verifying a sign-in signed as the annex) reads over
-  // HTTPS, so it is made world-readable, as the account's `id` is. Best
-  // effort through the sibling delegation; a refusal changes nothing here.
-  void plaintextCollection({
+  // HTTPS, so it is made world-readable, as the account's `id` is, before
+  // the session goes on to sign in: a generation minted a moment ago (a
+  // recovery login's) is otherwise unreadable to the back end when its
+  // sign-in arrives. Best effort through the sibling delegation; a refusal
+  // changes nothing here.
+  await plaintextCollection({
     pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
     spaceId: annexSpaceId,
     collectionId: clientAnnexDidParts({ did: clientAnnexDid }).generationId,
