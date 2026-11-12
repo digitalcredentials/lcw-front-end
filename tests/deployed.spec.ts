@@ -66,8 +66,10 @@ async function logIn(page: Page) {
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  // Login lands on the credentials list
-  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible();
+  // Login lands on the credentials list. Signing in runs the account's
+  // ceremonies against the live server and back end, which take longer
+  // than the default expectation allows right after a deploy.
+  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible({ timeout: 60_000 });
 }
 
 // A virtual authenticator with the PRF extension, so a passkey can be
@@ -100,7 +102,7 @@ async function logInWithPasskey(page: Page) {
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByRole('button', { name: 'Add a passkey' }).click();
-  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible({ timeout: 60_000 });
 }
 
 test('logs in and lists the credentials with their tags', async ({ page }) => {

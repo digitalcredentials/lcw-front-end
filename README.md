@@ -186,7 +186,8 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   document is fetched one by one. The account's own collections (`id`,
   `key-map`, `unlock-methods`, `connections`, `inbox`, `app-keys`,
   `account`), the holder keys (`dids`) and the public copies
-  (`public-credentials`) are left out; `private-credentials` and `Trash`
+  (`public-credentials`, and the earlier layout's `public`) are left out;
+  `private-credentials` and `Trash`
   are included. The documents
   in the file are not encrypted, which the dialog says before the download.
 - **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
