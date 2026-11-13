@@ -411,6 +411,27 @@ encrypted collection's governing log, so the logs grow with the square of
 the rotation count (a dozen rotations put the demo Space past the 4 MB an
 export can carry). `npm run test:credentials` removes them on demand.
 
+```bash
+FREEWALLET_URL=http://localhost:5174 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/freewallet.spec.ts
+```
+
+The account Space shared with FreeWallet, demonstrated against both
+wallets. It needs a FreeWallet dev server pointed at the same PWS server
+(`VITE_WAS_SERVER_URL=https://was.lcw-sandbox.org/ pnpm run dev` in a
+checkout of [interop-alliance/freewallet](https://github.com/interop-alliance/freewallet);
+the remember-this-browser seam its own tests use is a dev-build feature)
+and the deployed wallet. This wallet opens the demo account with a passkey;
+FreeWallet opens the same account with the passphrase alone (the same
+unlock derivation; its login remembers the browser, which self-enrolls as
+a client of the account) and lists the badge; a credential added in
+FreeWallet reaches this wallet's replica and one added here reaches
+FreeWallet's; this wallet disconnects FreeWallet's client under Connected
+wallets, after which FreeWallet's next login is refused; both test
+credentials are removed. Each run adds one passkey client of this wallet
+to the demo account and rotates its user key once (the disconnect), so run
+it on demand, not after every deploy. Skipped unless both URLs are set.
+The helpers both suites share are in `tests/helpers/lcw.ts`.
+
 The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
 passphrase in the spec file) is registered by `npm run register:demo`
 (`DEMO_EMAIL=... REGISTRATION_CODE=...`), which runs the wallet's own
