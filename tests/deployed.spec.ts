@@ -323,9 +323,12 @@ test('lists the sign-in credentials under Settings', async ({ page }) => {
 
 // The flows that need a remembered session (a session signed in with a
 // passkey signs as the account: managing spaces, staying signed in) share
-// one browser context, so each run adds one passkey to the demo account.
-// A passkey is a credential of its own, with an unlock Space of its own,
-// and removing one is not part of this wallet yet.
+// one browser context, so each run leaves one passkey credential and one
+// enrolled client on the demo account. They are not removed here: removing
+// either rotates the account's user key, and every rotation appends an
+// entry carrying the whole descriptor to the roster log and to every
+// encrypted collection's log, which grows them with the square of the
+// rotation count (the credentials script removes them on demand).
 test.describe('with a passkey', () => {
   test.describe.configure({ mode: 'serial' });
   let context: BrowserContext;
@@ -382,10 +385,6 @@ test.describe('with a passkey', () => {
   });
 
   test('the passkey keeps this browser signed in until it is forgotten', async () => {
-    // The disconnections at the end re-key the account once per listed
-    // client, at some twenty seconds each, and the first run after a
-    // deploy also clears the clients earlier runs left behind
-    test.setTimeout(900_000);
     // A tab with no session of its own (the session lives in sessionStorage,
     // cleared here as a new tab starts without one, then a fresh document
     // loaded, as a new tab would): the remembered browser offers the passkey
@@ -407,34 +406,6 @@ test.describe('with a passkey', () => {
     const third = await context.newPage();
     await third.goto(`${DEPLOYED_URL}/#/files`);
     await expect(third.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
-
-    // The passkey this run added is still a credential of the account, and
-    // the forgotten browser's client is still listed in the account document.
-    // A password sign-in (a transient session) removes the passkey (and any
-    // an earlier run left behind), then disconnects the client (and any
-    // earlier one), so the demo account carries none over: each removal and
-    // disconnection re-keys the account.
-    await logIn(third);
-    await third.getByRole('button', { name: 'Settings' }).click();
-    await third.getByRole('link', { name: 'Sign-in credentials' }).click();
-    const passkeys = third.locator('[data-credential-kind="passkey"]');
-    await expect(third.getByRole('list', { name: 'Sign-in credentials' })).toBeVisible({ timeout: 30_000 });
-    for (let left = await passkeys.count(); left > 0; left = await passkeys.count()) {
-      third.once('dialog', (dialog) => void dialog.accept());
-      await passkeys.first().getByRole('button', { name: 'Remove' }).click();
-      await expect(third.getByRole('status')).toContainText('is removed', { timeout: 90_000 });
-      await expect(passkeys).toHaveCount(left - 1, { timeout: 30_000 });
-    }
-    await third.getByRole('link', { name: 'Connected wallets' }).click();
-    const rows = third.locator('[data-wallet-key]');
-    await expect(third.getByRole('list', { name: 'Connected wallets' })).toBeVisible({ timeout: 30_000 });
-    for (let left = await rows.count(); left > 0; left = await rows.count()) {
-      third.once('dialog', (dialog) => void dialog.accept());
-      await rows.first().getByRole('button', { name: 'Disconnect' }).click();
-      await expect(third.getByRole('status')).toContainText('is disconnected', { timeout: 60_000 });
-      await expect(rows).toHaveCount(left - 1, { timeout: 30_000 });
-    }
-    await expect(third.getByText('No wallet is connected to this account')).toBeVisible();
     await third.close();
   });
 });

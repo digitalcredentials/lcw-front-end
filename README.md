@@ -370,10 +370,17 @@ welcome-credential dialog, creating, saving and deleting a batch (a
 scratch batch space, under a passkey session), the sign-in credentials
 page, a passkey added at sign-in that keeps the browser signed in until it
 is forgotten (a virtual authenticator with the PRF extension, through the
-Chrome DevTools Protocol), the phone layout, and the data download (the tar
-is read back and the demo credential found decrypted in it) — with console
-errors and failed requests captured for debugging. Skipped unless
-`DEPLOYED_URL` is set. Run it after every deploy.
+Chrome DevTools Protocol), the Connected wallets page listing that
+browser, the phone layout, and the data download (the tar is read back
+and the demo credential found decrypted in it) — with console errors and
+failed requests captured for debugging. Skipped unless `DEPLOYED_URL` is
+set. Run it after every deploy. Each run leaves one passkey credential and
+one enrolled client on the demo account, on purpose: removing either
+rotates the account's user key, and every rotation appends an entry
+carrying the whole descriptor to the user-key roster log and to every
+encrypted collection's governing log, so the logs grow with the square of
+the rotation count (a dozen rotations put the demo Space past the 4 MB an
+export can carry). `npm run test:credentials` removes them on demand.
 
 The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
 passphrase in the spec file) is registered by `npm run register:demo`
