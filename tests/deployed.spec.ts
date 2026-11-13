@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { DEMO_EMAIL, DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, titled, trashCard } from './helpers/lcw';
+import { DEMO_EMAIL, DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, titled, trashCard, virtualAuthenticator } from './helpers/lcw';
 import { packTar } from '../src/lib/tar';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
@@ -219,8 +219,13 @@ test('offers the welcome credential on first open after registration', async ({ 
   }
 });
 
-test('lists the sign-in credentials under Settings', async ({ page }) => {
+// Each run adds one passkey credential here too (no rotation): the add from
+// Settings is the path that runs after the CHAPI polyfill has loaded, which
+// wraps navigator.credentials in a Proxy the browser refuses WebAuthn
+// creation through unless the wallet reaches past it.
+test('lists the sign-in credentials under Settings, and adds a passkey there', async ({ page }) => {
   const noise = capture(page);
+  await virtualAuthenticator(page);
   await logIn(page);
   try {
     await page.getByRole('button', { name: 'Settings' }).click();
@@ -232,6 +237,12 @@ test('lists the sign-in credentials under Settings', async ({ page }) => {
     await expect(current).toContainText('Password');
     await expect(current).toContainText('This session');
     await expect(current.getByRole('button', { name: 'Remove' })).toHaveCount(0);
+    // A passkey added from here, inside the app: the session continues on
+    // it and the list names it as the session's
+    await page.getByRole('button', { name: 'Add a passkey' }).click();
+    await expect(page.getByRole('status')).toContainText('Passkey added', { timeout: 60_000 });
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(current).toContainText('Passkey');
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

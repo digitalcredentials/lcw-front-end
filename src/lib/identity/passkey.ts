@@ -58,6 +58,21 @@ function mapError(err: unknown): never {
   throw err
 }
 
+// The browser's own CredentialsContainer. Once the CHAPI polyfill has
+// loaded (src/lib/chapi.ts, at the app shell's mount), `navigator.credentials`
+// is a Proxy around it with `get` and `store` replaced; `create` reached
+// through the Proxy is refused by the browser ("Can only call
+// CredentialsContainer.create on instances of CredentialsContainer"). The
+// WebAuthn calls go to the container the Navigator prototype's getter
+// answers, which the Proxy shadows but does not replace; a browser whose
+// `credentials` is an own property of the navigator (WebKit) has no
+// Proxy, and `navigator.credentials` is the container itself.
+function nativeCredentials(): CredentialsContainer {
+  const getter = typeof Navigator !== 'undefined' ? Object.getOwnPropertyDescriptor(Navigator.prototype, 'credentials')?.get : undefined
+  const native = getter ? (getter.call(navigator) as CredentialsContainer | undefined) : undefined
+  return native ?? navigator.credentials
+}
+
 const PRF_OUTPUT_LENGTH = 32
 
 const isByte = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) < 256
@@ -128,7 +143,7 @@ export async function registerPasskey({
 }): Promise<PasskeyRegistration> {
   let credential: PublicKeyCredential
   try {
-    credential = (await navigator.credentials.create({
+    credential = (await nativeCredentials().create({
       publicKey: {
         rp: { name: rpName },
         user: { id: userHandle as BufferSource, name: email, displayName: email },
@@ -168,7 +183,7 @@ export async function assertPasskey({ credentialIds = [] }: { credentialIds?: Ui
 }> {
   let assertion: PublicKeyCredential
   try {
-    assertion = (await navigator.credentials.get({
+    assertion = (await nativeCredentials().get({
       publicKey: {
         challenge: challenge(),
         allowCredentials: credentialIds.map((id) => ({ type: 'public-key' as const, id: id as BufferSource })),
