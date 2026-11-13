@@ -27,3 +27,6 @@ dist-ssr
 # Playwright
 test-results/
 playwright-report/
+
+# The replica script's stand-in passkey and client (tests/scripts/replica-demo.ts)
+tests/.replica-client.json

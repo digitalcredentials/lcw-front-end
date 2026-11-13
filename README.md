@@ -60,7 +60,12 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   generation's log, each carrying the generation's whole document, so a
   visit that finds the log at 24 entries first mints a fresh generation
   (restating the credentials the old one admitted) and points the account
-  at it, keeping the log under the 1 MB the resolvers accept. Either
+  at it, keeping the log under the 1 MB the resolvers accept. The
+  generations left behind are collected at the next remembered login
+  (`annexGc.ts`, wallet-core's GC pass, the one FreeWallet runs too): the
+  annex Space's `gen-` collections the pointer does not name are deleted,
+  each recorded as a GenerationCollect entry in `wallet-activity`. The
+  pass runs after the login, never holds it up, and never fails it. Either
   session's keys live in this tab's
   `sessionStorage`: gone when the tab closes, and the CHAPI popup, a window
   of its own, signs the user in itself. **Passkeys** (`passkey.ts`,
@@ -472,9 +477,13 @@ that the issued credential is bound to the account DID; nothing is stored.
 browser (RxDB's memory storage) on a remembered session opened with a
 stand-in passkey: the first pull lists the demo credential with its tag, a
 credential and its tags added through the replica reach the Space, a
-credential added directly reaches the replica, the Trash flow round-trips
-through it, and the passkey and its client are removed again (two
-rotations per run).
+credential added directly reaches the replica, and the Trash flow
+round-trips through it. The stand-in passkey's secret and the client it
+enrolled are kept in `tests/.replica-client.json` (ignored by git), so
+later runs open the same remembered client and add nothing to the
+account's logs; `npm run test:replica -- --remove` retires the passkey and
+disconnects the client at the end (two user-key rotations) and deletes the
+file. The script also reports the annex generations the login collected.
 
 ## Deploy
 
