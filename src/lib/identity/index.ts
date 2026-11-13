@@ -450,23 +450,19 @@ export async function requestRecoveryEmail({ email, config }: { email: string; c
 }
 
 // Recovers the account with the emailed code: signs in on the code, sets
-// the new passphrase (retiring the previous one), retires the used code,
-// and issues a fresh code to the back end. Resolves the session on the
-// new passphrase.
+// the new passphrase (retiring the previous one), then replaces the
+// recovery code: every listed code is retired, the used one included, and
+// a fresh one is issued to the back end. Resolves the session on the new
+// passphrase.
 export async function recoverAccount({ email, code, passphrase, config }: { email: string; code: string; passphrase: string; config: IdentityConfig }): Promise<Session> {
   const codeSession = await loginWithRecoveryCode({ email, code, config })
-  const registry = await readRegistry(codeSession)
-  const usedCode = registry?.methods.find((method) => method.type === 'recovery-code' && method.unlockSpaceId === codeSession.unlockSpaceId)
-  let session = await replacePassphrase({ session: codeSession, passphrase, config })
-  if (usedCode) {
-    try {
-      session = (await retireMethod({ session, method: usedCode })).session
-    } catch (err) {
-      console.error('The used recovery code could not be retired; it still opens the account:', err)
-    }
+  const session = await replacePassphrase({ session: codeSession, passphrase, config })
+  try {
+    return (await replaceRecoveryCode({ session, config })).session
+  } catch (err) {
+    console.error('The recovery code could not be replaced; the used one still opens the account:', err)
+    return session
   }
-  await ensureRecoveryCode({ session, config, force: true })
-  return session
 }
 
 // Whether this browser holds a remembered client (a passkey can open the

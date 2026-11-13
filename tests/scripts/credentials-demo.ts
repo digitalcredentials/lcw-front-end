@@ -66,11 +66,10 @@ check('the passkey session knows the email and the token', again.email === email
 const password = await loginWithPassphrase({ email, passphrase, config })
 const passkeyMethod = (await listSignInMethods({ session: password })).find((m) => m.kind === 'passkey' && m.label === 'Script passkey')
 check('the passkey is removable from a password session', passkeyMethod?.removable === true)
-// The unlock Space's deletion goes through a DELETE-only child of the
-// passkey's management capability; this server's Delete Space is still
-// root-only, so it answers 404 ("not-found") and the empty Space stays
+// The unlock Space is deleted through a DELETE-only child of the passkey's
+// management capability (the container rule's Space-delete exception)
 const removed = await removeSignInMethod({ session: password, unlockSpaceId: passkeyMethod!.unlockSpaceId })
-check('the passkey credential is removed', removed.completion === 'complete', `${removed.completion}, unlock Space ${removed.unlockSpace}`)
+check('the passkey credential is removed and its unlock Space deleted', removed.completion === 'complete' && removed.unlockSpace === 'deleted', `${removed.completion}, unlock Space ${removed.unlockSpace}`)
 check('the session adopted the rotated user key', removed.session.userKey.id !== password.userKey.id)
 const after = await listSignInMethods({ session: removed.session })
 check('the registry no longer lists the passkey', !after.some((m) => m.unlockSpaceId === passkeyMethod!.unlockSpaceId), after.map((m) => m.kind).join(', '))
@@ -78,7 +77,7 @@ const freshBrowser = await loginWithPasskeySecret({ prfOutput: prf, config, stor
   () => 'signed in',
   (err: { status?: number; message?: string }) => err.status ?? err.message
 )
-check('the removed passkey no longer signs in on a fresh browser', freshBrowser !== 'signed in', freshBrowser)
+check('the removed passkey finds no record on a fresh browser', freshBrowser === 401, freshBrowser)
 
 // The client the passkey enrolled is still listed, and the passkey still
 // opens the browser holding its record, until the password session

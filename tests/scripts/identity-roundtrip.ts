@@ -232,35 +232,24 @@ const selfRefusal = await retireMethod({ session: acting, method: listed.find((m
   (err: unknown) => (err instanceof MethodNotRemovableError ? err.reason : String(err))
 )
 check('the acting passphrase refuses to retire itself', selfRefusal === 'acting', selfRefusal)
-// The unlock Space's deletion goes through a DELETE-only child of the
-// credential's management capability. This server's Delete Space is still
-// root-only, so it answers 404 ("not-found") and the empty Space stays
-// behind; the retirement itself stands either way.
-const spaceOutcomes = new Set<string>()
+// Each retirement deletes the credential's unlock Space through a
+// DELETE-only child of its management capability (the container rule's
+// Space-delete exception), so a retired credential finds no record
 for (const method of listed.filter((m) => m.type === 'recovery-code')) {
   const outcome = await time(`retire a recovery code (${method.label})`, () => retireMethod({ session: acting, method }))
-  check(`the recovery code "${method.label}" is retired`, outcome.completion === 'complete', `${outcome.completion}, unlock Space ${outcome.unlockSpace}`)
-  spaceOutcomes.add(outcome.unlockSpace)
+  check(`the recovery code "${method.label}" is retired and its unlock Space deleted`, outcome.completion === 'complete' && outcome.unlockSpace === 'deleted', `${outcome.completion}, unlock Space ${outcome.unlockSpace}`)
   acting = outcome.session as TransientSession
 }
-// A retired code finds no record once its Space is deleted, and is refused
-// as no longer standing while the Space remains
 const spent = await recoverWithCode({ code: issued.code, serverUrl: WAS }).then(
   (result) => (result === null ? 'no record' : 'opened'),
   (err: { name?: string }) => err.name ?? String(err)
 )
-check('a retired recovery code no longer opens the account', spent === 'no record' || spent === 'TransientLoginUnavailableError', spent)
+check('a retired recovery code finds no record', spent === 'no record', spent)
 const passkeyEntry = listed.find((m) => m.type === 'passkey')!
 const passkeyOutcome = await time('retire the passkey credential', () => retireMethod({ session: acting, method: passkeyEntry }))
-check('the passkey credential is retired', passkeyOutcome.completion === 'complete', `${passkeyOutcome.completion}, unlock Space ${passkeyOutcome.unlockSpace}`)
-spaceOutcomes.add(passkeyOutcome.unlockSpace)
+check('the passkey credential is retired and its unlock Space deleted', passkeyOutcome.completion === 'complete' && passkeyOutcome.unlockSpace === 'deleted', `${passkeyOutcome.completion}, unlock Space ${passkeyOutcome.unlockSpace}`)
 acting = passkeyOutcome.session as TransientSession
-const freshBrowser = await openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store: memoryClientKeyStore() }).then(
-  () => 'opened',
-  (err: { name?: string; message?: string }) => err.name ?? err.message ?? String(err)
-)
-check('the retired passkey no longer opens a fresh browser', freshBrowser !== 'opened', freshBrowser)
-console.log(`     unlock Spaces of the retired credentials: ${[...spaceOutcomes].join(', ')}`)
+check('the retired passkey finds no record', (await fetchStandingRecord({ credential: passkey, serverUrl: WAS })) === null)
 const afterRetirements = await registryOf(acting)
 const registryAfter = await readUnlockMethods({ pws: afterRetirements.pws, spaceId: session.spaceId, userKey: acting.userKey, capability: afterRetirements.capability })
 check('the registry lists the passphrase alone', registryAfter?.record.methods.map((m) => m.type).join(',') === 'passphrase', registryAfter?.record.methods.map((m) => m.type))
