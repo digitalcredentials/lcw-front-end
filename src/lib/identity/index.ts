@@ -14,7 +14,8 @@ import { upsertMethod, upsertPassphraseMethod, emptyRegistry, type UnlockMethod 
 import type { CollectionEncryption } from '@interop/pws-client'
 import type { UserKey } from '@interop/wallet-core/keys'
 import { healRegistry, readRegistry, updateRegistry } from './registry'
-import { sweepCollectionsToUserKey } from './authority'
+import { seedVerifiedAccountLog, sweepCollectionsToUserKey } from './authority'
+import { recallMark, rememberMark, sweptMark } from './marks'
 import { nameOwnClient } from './clients'
 import { MethodNotRemovableError, retireMethod, type RetirementOutcome } from './retire'
 import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
@@ -88,9 +89,10 @@ async function enterTransiently({
   email: string
   config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'>
 }): Promise<TransientSession> {
-  const { session, userKeyGenerations, rosterDescriptor } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
+  const { session, userKeyGenerations, rosterDescriptor, verified } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
   const login = await backEndLogin({ session, email, config })
   const opened: TransientSession = { ...session, email: login.email ?? email, coupon: login.token }
+  seedVerifiedAccountLog(opened.did, verified)
   await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
   return opened
 }
@@ -100,19 +102,28 @@ async function enterTransiently({
 // and every encrypted collection, brought onto the current key when the
 // rotation's fan-out was interrupted. Best effort: the session opens
 // either way, and the pages report what they cannot open.
+//
+// The collections sweep lists the Space and reads every collection's
+// metadata (a dozen signed requests), so it runs only when it can find
+// something: an account whose roster holds more than one key generation
+// (a rotation happened), and only once per generation on this browser,
+// which remembers the generation it last swept to.
 async function settleAfterRotation({ session, generations, rosterDescriptor }: { session: Session; generations: UserKey[]; rosterDescriptor: CollectionEncryption | null }): Promise<void> {
   try {
     await healRegistry({ session, generations })
   } catch (err) {
     console.warn('The sign-in methods registry could not be opened:', err)
   }
-  if (!rosterDescriptor) {
+  if (!rosterDescriptor || generations.length <= 1 || recallMark(sweptMark(session.spaceId)) === session.userKey.id) {
     return
   }
   try {
     const swept = await sweepCollectionsToUserKey({ session, rosterDescriptor, generations })
     if (swept) {
       console.info('Wallet: collections brought onto the current user key at sign-in:', swept.outcomes, swept.failed)
+    }
+    if (!swept || swept.failed.length === 0) {
+      rememberMark(sweptMark(session.spaceId), session.userKey.id)
     }
   } catch (err) {
     console.warn('The collections could not be brought onto the current user key:', err)
@@ -169,9 +180,10 @@ export async function loginWithPasskeySecret({
   if (!email) {
     throw new Error('The passkey carries no account email.')
   }
-  const { session, enrolled, userKeyGenerations, rosterDescriptor } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
+  const { session, enrolled, userKeyGenerations, rosterDescriptor, verified } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
   const login = await backEndLogin({ session, email, config })
   const opened: RememberedSession = { ...session, email: login.email ?? email, coupon: login.token }
+  seedVerifiedAccountLog(opened.did, verified)
   await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
   if (enrolled) {
     await settleOwnClientName(opened)
@@ -359,6 +371,7 @@ export async function addPasskeyCredential({
   }
   const remembered = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
   const opened: RememberedSession = { ...remembered.session, email: session.email, coupon: session.coupon }
+  seedVerifiedAccountLog(opened.did, remembered.verified)
   if (remembered.enrolled) {
     await settleOwnClientName(opened)
   }

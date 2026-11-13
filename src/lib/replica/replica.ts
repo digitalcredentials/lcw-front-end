@@ -4,6 +4,7 @@ import { spaceUrlById } from '@interop/pws-client/paths/layout'
 import { encryptedWalletCollectionIds } from '@interop/wallet-core/space/collections'
 import { walletSpaceProvisioner } from '@interop/wallet-core/keys'
 import { ceremonyAuthority } from '../identity/authority'
+import { provisionedMark, recallMark, rememberMark } from '../identity/marks'
 import { sessionAgents, sessionEncryption, subscribeSession, type RememberedSession, type Session } from '../identity/session'
 import { serviceDescriptionFor } from '../identity/service'
 import { buildCiphers, type ReplicaCiphers } from './ciphers'
@@ -115,13 +116,29 @@ async function start(session: RememberedSession): Promise<Replica> {
   let ciphers: ReplicaCiphers
   try {
     // The Space's collections and their first key epochs, ensured before
-    // anything is pushed (a no-op on an account this wallet or FreeWallet
-    // set up)
-    const authority = await ceremonyAuthority(session)
-    await walletSpaceProvisioner({ pws, spaceId: session.spaceId, controllerDid: session.did, userKey: session.userKey, storeFor: authority.collections.storeFor, collectionIds: encryptedWalletCollectionIds() })().catch((err) =>
-      console.warn('Wallet: the Space could not be provisioned for the replica; its collections are taken as they are:', err)
-    )
-    ciphers = await buildCiphers({ session, pws })
+    // anything is pushed: a no-op on an account this wallet or FreeWallet
+    // set up, at the cost of two dozen signed requests, so it runs once
+    // per browser and Space, and again only when the ciphers cannot be
+    // built from what the Space serves
+    const mark = provisionedMark(session.spaceId)
+    const provision = async () => {
+      const authority = await ceremonyAuthority(session)
+      await walletSpaceProvisioner({ pws, spaceId: session.spaceId, controllerDid: session.did, userKey: session.userKey, storeFor: authority.collections.storeFor, collectionIds: encryptedWalletCollectionIds() })()
+      rememberMark(mark, '1')
+    }
+    const warn = (err: unknown) => console.warn('Wallet: the Space could not be provisioned for the replica; its collections are taken as they are:', err)
+    if (recallMark(mark) !== '1') {
+      await provision().catch(warn)
+      ciphers = await buildCiphers({ session, pws })
+    } else {
+      try {
+        ciphers = await buildCiphers({ session, pws })
+      } catch (err) {
+        console.warn('Wallet: the replica ciphers could not be built from the Space as it is; provisioning it again:', err)
+        await provision().catch(warn)
+        ciphers = await buildCiphers({ session, pws })
+      }
+    }
   } catch (err) {
     await db.close().catch(() => undefined)
     throw err

@@ -25,6 +25,7 @@ import type { TransientSession } from './session'
 import { serviceDescriptionFor } from './service'
 import { visitPins } from './pins'
 import { randomBytes } from './bytes'
+import { generationPublicMark, recallMark, rememberMark } from './marks'
 
 // The transient session: how a standing credential (a passphrase, a
 // recovery code) enters the account for one visit, FreeWallet's way. The
@@ -182,6 +183,8 @@ export async function openTransientSession({
   let annexSpaceId: string
   let healed: IZcap | undefined
   let generationLog: PublishedWebvhLog | undefined
+  // Whether this visit minted or renewed the generation it enrolls into
+  let generationFresh = false
   try {
     const outcome = await ensureCredentialClientAnnexGeneration({
       baseServerUrl,
@@ -217,6 +220,7 @@ export async function openTransientSession({
     generationLog = outcome.generationLog
     if (outcome.generationMinted || outcome.spaceMinted) {
       // The pointer moved: the enrollment must read the fresh log
+      generationFresh = true
       verified = await verifyAccountLog({ did: accountDid, pinStore: visitPins })
     } else if (generationLog && generationLog.log.length >= GENERATION_RENEWAL_ENTRIES) {
       // The pointed generation has grown long: a fresh one takes its place
@@ -236,6 +240,7 @@ export async function openTransientSession({
       })
       healed = renewed.generationDelegation
       generationLog = undefined
+      generationFresh = true
       verified = await verifyAccountLog({ did: accountDid, pinStore: visitPins })
     }
   } catch (err) {
@@ -293,15 +298,20 @@ export async function openTransientSession({
   // the session goes on to sign in: a generation minted a moment ago (a
   // recovery login's) is otherwise unreadable to the back end when its
   // sign-in arrives. Best effort through the sibling delegation; a refusal
-  // changes nothing here.
-  await plaintextCollection({
-    pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
-    spaceId: annexSpaceId,
-    collectionId: clientAnnexDidParts({ did: clientAnnexDid }).generationId,
-    capability: sibling,
-  })
-    .setPublic()
-    .catch(() => undefined)
+  // changes nothing here. Once per generation on this browser: the write
+  // is a no-op after the first, at the cost of a signed request a visit.
+  const generationId = clientAnnexDidParts({ did: clientAnnexDid }).generationId
+  if (generationFresh || recallMark(generationPublicMark(generationId)) !== '1') {
+    await plaintextCollection({
+      pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
+      spaceId: annexSpaceId,
+      collectionId: generationId,
+      capability: sibling,
+    })
+      .setPublic()
+      .then(() => rememberMark(generationPublicMark(generationId), '1'))
+      .catch(() => undefined)
+  }
 
   // 4. The user key, from the credential's standing roster wrap, read as
   // the annex identity under the generation delegation

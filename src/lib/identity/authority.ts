@@ -152,14 +152,43 @@ export async function sweepCollectionsToUserKey({
   })
 }
 
+// The verified account log, kept for a minute after a read, so the steps
+// that follow a sign-in (the collections sweep, the replica's provisioning,
+// the annex collection) share one download and verification of a log that
+// grows with every client and credential (28 KB an entry on the demo). A
+// ceremony that appends to the log invalidates it; a memo gone stale under
+// another client's append is caught by the ceremony's own re-read under
+// its pin.
+const MEMO_MS = 60_000
+let memo: { did: string; verified: VerifiedAccountLog; at: number } | null = null
+
+export async function verifiedAccountLog(did: string): Promise<VerifiedAccountLog> {
+  if (memo && memo.did === did && Date.now() - memo.at < MEMO_MS) {
+    return memo.verified
+  }
+  const verified = await verifyAccountLog({ did, pinStore: visitPins })
+  memo = { did, verified, at: Date.now() }
+  return verified
+}
+
+// The log a sign-in just verified, kept for what follows it
+export function seedVerifiedAccountLog(did: string, verified: VerifiedAccountLog): void {
+  memo = { did, verified, at: Date.now() }
+}
+
+export function invalidateVerifiedAccountLog(): void {
+  memo = null
+}
+
 export async function ceremonyAuthority(session: Session): Promise<CeremonyAuthority> {
   const serviceDescription = await serviceDescriptionFor(session.serverUrl)
   const { baseServerUrl, spaceId, did } = { baseServerUrl: session.serverUrl, spaceId: session.spaceId, did: session.did }
   let verifiedLog: Promise<VerifiedAccountLog> | undefined
   const authority = {
-    verified: () => (verifiedLog ??= verifyAccountLog({ did, pinStore: visitPins })),
+    verified: () => (verifiedLog ??= verifiedAccountLog(did)),
     invalidate: () => {
       verifiedLog = undefined
+      invalidateVerifiedAccountLog()
     },
     spaceHandle: async (): Promise<Space> => {
       const current = authority.session
@@ -171,6 +200,9 @@ export async function ceremonyAuthority(session: Session): Promise<CeremonyAutho
   } as CeremonyAuthority
   authority.session = session
   authority.serviceDescription = serviceDescription
+  // The stores resolve the account's controller from the log already
+  // verified (the memo above), not from a download of their own each
+  const { log } = await authority.verified()
   if (session.kind === 'transient') {
     const acting = await actingAuthority(session)
     const capability = session.generationDelegation
@@ -185,11 +217,11 @@ export async function ceremonyAuthority(session: Session): Promise<CeremonyAutho
     authority.rosterStore = () => acting.rosterStore()
     authority.collections = cascadeCollections({
       space: plain,
-      governed: accountCollectionStores({ baseServerUrl, spaceId, did, pinStore: visitPins, zcapClient: acting.annexZcap, signer: userKeyRosterLogSigner({ keyAgent: acting.ladderAgent }), capability, serviceDescription }),
+      governed: accountCollectionStores({ baseServerUrl, spaceId, did, pinStore: visitPins, zcapClient: acting.annexZcap, signer: userKeyRosterLogSigner({ keyAgent: acting.ladderAgent }), log, capability, serviceDescription }),
     })
     return authority
   }
-  const enrolled = await enrolledAuthority(session)
+  const enrolled = await enrolledAuthority(session, { log })
   const idStore = enrolled.idStore()
   authority.signer = { kind: 'enrolled', updateKeys: session.webvhUpdateKeys }
   authority.clientKeyAgreementKey = enrolled.agents.keyAgreementKey
@@ -199,7 +231,7 @@ export async function ceremonyAuthority(session: Session): Promise<CeremonyAutho
   authority.rosterStore = () => enrolled.rosterStore()
   authority.collections = cascadeCollections({
     space: enrolled.pws.space(spaceId),
-    governed: accountCollectionStores({ baseServerUrl, spaceId, did, pinStore: visitPins, zcapClient: enrolled.zcapClient, signer: userKeyRosterLogSigner({ keyAgent: enrolled.agents.keyAgent }), serviceDescription }),
+    governed: accountCollectionStores({ baseServerUrl, spaceId, did, pinStore: visitPins, zcapClient: enrolled.zcapClient, signer: userKeyRosterLogSigner({ keyAgent: enrolled.agents.keyAgent }), log, serviceDescription }),
   })
   return authority
 }
