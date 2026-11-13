@@ -1,6 +1,7 @@
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { DEMO_EMAIL, DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, trashCard } from './helpers/lcw';
+import { DEMO_EMAIL, DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, titled, trashCard } from './helpers/lcw';
+import { packTar } from '../src/lib/tar';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
 // DEPLOYED_URL is set, so the regular local suite never touches production.
@@ -367,7 +368,9 @@ test.describe('with a passkey', () => {
 
 // Settings → Download my data: the tar is read back, and the demo credential
 // is found decrypted under the demo space's folder and its collection's.
-test('downloads every document unencrypted as one tar', async ({ page }) => {
+test('downloads every document unencrypted as one tar, and imports it back', async ({ page }) => {
+  // The download, two imports and the clean-up each wait on the Space
+  test.setTimeout(300_000);
   const noise = capture(page);
   await logIn(page);
   try {
@@ -400,6 +403,56 @@ test('downloads every document unencrypted as one tar', async ({ page }) => {
     const credential = JSON.parse(new TextDecoder().decode(badge!.bytes));
     expect(credential.jwe).toBeUndefined();
     expect(credential.type).toContain('VerifiableCredential');
+    // The demo credential's tag travels in the manifest
+    const folder = badge!.name.slice(0, badge!.name.lastIndexOf('/'));
+    const tagged = manifest.spaces.flatMap((s: { folder: string; collections: { folder: string; tags?: Record<string, string[]> }[] }) =>
+      s.collections.filter((c) => `${s.folder}/${c.folder}` === folder).map((c) => c.tags?.[badge!.name.slice(folder.length + 1)])
+    );
+    expect(tagged).toEqual([['University of Toronto']]);
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await expect(dialog).toBeHidden();
+
+    // The same file, imported back: everything in it is there already
+    await page.getByRole('button', { name: 'Import my data' }).click();
+    const importing = page.getByRole('dialog', { name: 'Import my data' });
+    await importing.locator('input[type="file"]').setInputFiles({ name: download.suggestedFilename(), mimeType: 'application/x-tar', buffer: Buffer.from(bytes) });
+    await expect(importing.getByTestId('import-summary')).toContainText(/holds \d+ credential/);
+    await importing.getByRole('button', { name: 'Import', exact: true }).click();
+    await expect(importing.getByTestId('import-done')).toContainText('Added 0 credentials', { timeout: 60_000 });
+    await importing.getByRole('button', { name: 'Done' }).click();
+    await expect(importing).toBeHidden();
+
+    // A file saved from another account, holding a credential this one does
+    // not: the credential is added, with its tag
+    const title = `Imported ${Date.now()}`;
+    const crafted = packTar([
+      {
+        name: 'manifest.json',
+        bytes: new TextEncoder().encode(
+          JSON.stringify({
+            format: 'lcw-data-export/1',
+            exportedAt: new Date().toISOString(),
+            account: 'someone@example.org',
+            spaces: [{ folder: 'Elsewhere', id: 'x', url: 'https://example.org/space/x', types: ['Space'], collections: [{ folder: 'private-credentials', id: 'private-credentials', encrypted: true, documents: 1, tags: { 'one.json': ['Imported'] } }] }],
+            excludedCollections: [],
+            problems: [],
+          })
+        ),
+      },
+      { name: 'Elsewhere/private-credentials/one.json', bytes: await titled(title) },
+    ]);
+    await page.getByRole('button', { name: 'Import my data' }).click();
+    const again = page.getByRole('dialog', { name: 'Import my data' });
+    await again.locator('input[type="file"]').setInputFiles({ name: 'elsewhere.tar', mimeType: 'application/x-tar', buffer: Buffer.from(crafted) });
+    await expect(again.getByTestId('import-summary')).toContainText('holds 1 credential');
+    await expect(again.getByTestId('import-summary')).toContainText('another account');
+    await again.getByRole('button', { name: 'Import', exact: true }).click();
+    await expect(again.getByTestId('import-done')).toContainText('Added 1 credential', { timeout: 60_000 });
+    await again.getByRole('button', { name: 'Done' }).click();
+    await expect(credentialCard(page, title)).toBeVisible({ timeout: 30_000 });
+    await expect(credentialCard(page, title)).toContainText('Imported');
+    await trashCard(page, title);
+    await discardFromTrash(page, [title]);
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);

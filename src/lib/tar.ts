@@ -1,6 +1,6 @@
-// A tar writer for the data export: plain ustar, which every extractor
-// opens (macOS Finder, Windows, tar(1)). Nothing here depends on the
-// browser or on Node, so the export can be built in either.
+// A tar writer and reader for the data export: plain ustar, which every
+// extractor opens (macOS Finder, Windows, tar(1)). Nothing here depends on
+// the browser or on Node, so the export can be built and read in either.
 
 export interface TarFile {
   // The path inside the archive, with `/` separators and no leading slash
@@ -10,6 +10,45 @@ export interface TarFile {
 
 const BLOCK = 512
 const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+
+const field = (block: Uint8Array, offset: number, length: number): string => decoder.decode(block.subarray(offset, offset + length)).replace(/\0.*$/s, '')
+
+// Reads the files of a ustar archive (directories and other entry kinds
+// are skipped). Throws when the bytes are not a tar: a header whose
+// checksum does not add up, or a file cut short.
+export function readTar(bytes: Uint8Array): TarFile[] {
+  const files: TarFile[] = []
+  let at = 0
+  while (at + BLOCK <= bytes.length) {
+    const block = bytes.subarray(at, at + BLOCK)
+    if (block.every((byte) => byte === 0)) {
+      // The end-of-archive blocks
+      break
+    }
+    const expected = parseInt(field(block, 148, 8).trim(), 8)
+    let sum = 0
+    block.forEach((byte, i) => {
+      sum += i >= 148 && i < 156 ? 0x20 : byte
+    })
+    if (!Number.isFinite(expected) || sum !== expected) {
+      throw new Error('Not a tar archive.')
+    }
+    const prefix = field(block, 345, 155)
+    const name = (prefix ? `${prefix}/` : '') + field(block, 0, 100)
+    const size = parseInt(field(block, 124, 12).trim() || '0', 8)
+    const type = field(block, 156, 1) || '0'
+    const start = at + BLOCK
+    if (start + size > bytes.length) {
+      throw new Error('The tar archive is cut short.')
+    }
+    if (type === '0') {
+      files.push({ name, bytes: bytes.slice(start, start + size) })
+    }
+    at = start + Math.ceil(size / BLOCK) * BLOCK
+  }
+  return files
+}
 
 function writeField(header: Uint8Array, offset: number, length: number, value: string): void {
   const bytes = encoder.encode(value)
