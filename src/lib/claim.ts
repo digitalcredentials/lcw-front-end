@@ -4,7 +4,8 @@ import { securityLoader } from '@interop/security-document-loader'
 import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient } from './was'
 import { ensureEncryptedCollection } from './edv'
-import { addCredential, DIDS_COLLECTION } from './credentials'
+import { DIDS_COLLECTION } from './credentials'
+import { sessionStores } from './credentialStore'
 import { IssuerError, PlainError, outsideText } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
 import type { ResourceData } from '@interop/pws-client'
@@ -122,9 +123,9 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
 // other wallet contents use) in the account's private-credentials, with
 // the holder's tags. Resolves to its cid.
 export async function saveCredential({ tags, envelope }: { tags: string[]; envelope: Record<string, unknown> }): Promise<{ cid: string }> {
-  const session = await getSessionWASClient()
-  if (!session) {
+  const stores = await sessionStores()
+  if (!stores) {
     throw new Error('UNAUTHORIZED')
   }
-  return addCredential({ space: session.space, body: envelope, tags })
+  return stores.store.addCredential({ body: envelope, tags })
 }

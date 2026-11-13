@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { isAuthenticated } from '../lib/auth';
-import { browserRemembered, loginWithPasskey, setSession, PasskeyCancelledError } from '../lib/identity';
+import { browserRemembered, getSession, loginWithPasskey, setSession, PasskeyCancelledError } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
+import { ensureReplica } from '../lib/replica/replica';
 import Brand from './Brand';
 import LoadingLabel from './LoadingLabel';
 
@@ -19,6 +20,16 @@ export default function RequireAuth({ children }: Props) {
   const [state, setState] = useState<'checking' | 'in' | 'passkey' | 'out'>(() => (isAuthenticated() ? 'in' : 'checking'));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // A remembered session's replica starts as soon as the pages are let in,
+  // so the first page's read finds it running (the pages start it
+  // themselves otherwise)
+  useEffect(() => {
+    const session = state === 'in' ? getSession() : null;
+    if (session?.kind === 'remembered') {
+      void ensureReplica(session);
+    }
+  }, [state]);
 
   useEffect(() => {
     if (state !== 'checking') {

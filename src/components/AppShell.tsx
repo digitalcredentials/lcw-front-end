@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clearToken, getEmail } from '../lib/auth';
+import { stopReplica } from '../lib/replica/replica';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
 import LoadingLabel from './LoadingLabel';
@@ -183,6 +184,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [signingOut, setSigningOut] = useState(false);
   function signOut() {
     setSigningOut(true);
+    // A remembered session's replica stops with it; its rows stay for the
+    // next sign-in
+    void stopReplica();
     clearToken();
     navigate('/login', { replace: true });
   }

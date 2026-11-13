@@ -15,7 +15,8 @@
     "test:identity": "tsx tests/scripts/identity-roundtrip.ts",
     "test:recovery": "tsx tests/scripts/recovery-demo.ts",
     "test:credentials": "tsx tests/scripts/credentials-demo.ts",
-    "test:holder": "tsx tests/scripts/claim-web-holder.ts"
+    "test:holder": "tsx tests/scripts/claim-web-holder.ts",
+    "test:replica": "tsx tests/scripts/replica-demo.ts"
   },
   "dependencies": {
     "@digitalcredentials/batch-issuer-ui": "github:digitalcredentials/batch-issuer-ui#release",
@@ -29,6 +30,7 @@
     "@interop/ezcap": "^7.4.3",
     "@interop/jsonld-signatures": "^11.8.5",
     "@interop/pws-client": "^0.106.0",
+    "@interop/pws-sync": "^0.14.0",
     "@interop/security-document-loader": "^10.1.2",
     "@interop/space-archive": "^0.12.0",
     "@interop/wallet-core": "^0.113.0",
@@ -41,6 +43,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
+    "rxdb": "^17.6.0",
     "tailwindcss": "^4.3.3",
     "vanilla-jsoneditor": "^3.13.0",
     "web-credential-handler": "^3.0.0"

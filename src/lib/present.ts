@@ -7,7 +7,8 @@ import { getSession, accountMethodOf, holderSigner, type HolderSigner } from './
 import { PRIVATE_CREDENTIALS_COLLECTION } from '@interop/wallet-core/space'
 import { credentialFrom } from './linkedin'
 import { buildPresentation } from './vpRequest'
-import { listCredentialIds, readCredential, DIDS_COLLECTION } from './credentials'
+import { DIDS_COLLECTION } from './credentials'
+import { sessionStores } from './credentialStore'
 
 const documentLoader = securityLoader().build()
 
@@ -48,21 +49,15 @@ export interface WalletCredential {
 // collection, each resource unwrapped from its envelope). Unreadable or
 // non-credential resources are skipped.
 export async function loadWalletCredentials(): Promise<WalletCredential[]> {
-  const session = await getSessionWASClient()
-  if (!session) {
+  const stores = await sessionStores()
+  if (!stores) {
     throw new Error('UNAUTHORIZED')
   }
-  const space = session.space
   const credentials: WalletCredential[] = []
-  for (const cid of await listCredentialIds(space)) {
-    try {
-      const body = await readCredential(space, cid)
-      const credential = body ? credentialFrom(body) : null
-      if (credential) {
-        credentials.push({ collectionId: PRIVATE_CREDENTIALS_COLLECTION, resourceId: cid, credential: credential as Record<string, unknown> })
-      }
-    } catch {
-      // not JSON, or unreadable: not a shareable credential
+  for (const { cid, body } of await stores.store.loadCredentials()) {
+    const credential = credentialFrom(body)
+    if (credential) {
+      credentials.push({ collectionId: PRIVATE_CREDENTIALS_COLLECTION, resourceId: cid, credential: credential as Record<string, unknown> })
     }
   }
   return credentials

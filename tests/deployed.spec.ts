@@ -105,6 +105,61 @@ async function logInWithPasskey(page: Page) {
   await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible({ timeout: 60_000 });
 }
 
+// The badge fixture (a presentation around one credential) under another
+// title: the credential's own name and its achievement's, which the card
+// shows
+async function titled(title: string): Promise<Buffer> {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/PlaywrightUpload.json', import.meta.url), 'utf8'));
+  const credential = fixture.verifiableCredential[0];
+  credential.name = title;
+  credential.credentialSubject.achievement.name = title;
+  return Buffer.from(JSON.stringify(fixture));
+}
+
+// Adds a credential under the title through the Add Credential dialog's
+// file input, and waits for its card
+async function addThrough(tab: Page, title: string) {
+  await tab.getByRole('button', { name: 'Add Credential' }).click();
+  const dialog = tab.getByRole('dialog', { name: 'Add Credential' });
+  await dialog.locator('input[type="file"]').setInputFiles({ name: 'replica-test.json', mimeType: 'application/json', buffer: await titled(title) });
+  await dialog.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 30_000 });
+  await expect(credentialCard(tab, title)).toBeVisible();
+}
+
+// Whether a list read afresh from the Space shows the title: leaving the
+// list and coming back mounts the page again, which reads the Space
+async function listedAfresh(tab: Page, title: string): Promise<boolean> {
+  await tab.goto(`${DEPLOYED_URL}/#/settings/credentials`);
+  await tab.goto(`${DEPLOYED_URL}/#/files`);
+  await expect(credentialCard(tab, 'LCW Experience Badge')).toBeVisible({ timeout: 30_000 });
+  return (await credentialCard(tab, title).count()) > 0;
+}
+
+async function confirmDelete(tab: Page) {
+  const dialog = tab.getByRole('dialog', { name: 'Delete Credential' });
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(dialog).toBeHidden({ timeout: 30_000 });
+}
+
+// Moves the credential to Trash from its detail view
+async function trashCard(tab: Page, title: string) {
+  await credentialCard(tab, title).getByRole('button', { name: 'Open' }).click();
+  await tab.getByRole('button', { name: 'Delete', exact: true }).click();
+  await confirmDelete(tab);
+  await expect(credentialCard(tab, title)).toBeHidden();
+}
+
+// Deletes the titles for good from the Trash view
+async function discardFromTrash(tab: Page, titles: string[]) {
+  await tab.getByRole('button', { name: /^Trash \(\d+\)$/ }).click();
+  for (const title of titles) {
+    await credentialCard(tab, title).getByRole('button', { name: 'Delete', exact: true }).click();
+    await confirmDelete(tab);
+    await expect(credentialCard(tab, title)).toBeHidden();
+  }
+}
+
 test('logs in and lists the credentials with their tags', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
@@ -382,6 +437,44 @@ test.describe('with a passkey', () => {
     await expect(own).toContainText('Learner Credential Wallet');
     await expect(own).toContainText('This browser');
     await expect(own.getByRole('button', { name: 'Disconnect' })).toHaveCount(0);
+  });
+
+  // A remembered session reads and writes through a local replica of the
+  // Space, which pws-sync keeps in step with it: a credential added here is
+  // pushed, so a password session (which reads the Space directly) lists
+  // it; one added there is pulled at the replica's next poll, and the list
+  // refreshes by itself; the Trash flow runs through it; and the deletions
+  // reach the Space.
+  test('keeps the list in step with the Space through the local replica', async ({ browser }) => {
+    test.setTimeout(420_000);
+    const stamp = Date.now();
+    const here = `Replica test ${stamp} added here`;
+    const there = `Replica test ${stamp} added elsewhere`;
+    await page.getByRole('link', { name: 'My Credentials' }).click();
+    await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
+    await addThrough(page, here);
+
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    const otherNoise = capture(otherPage);
+    try {
+      await logIn(otherPage);
+      // The push runs a few seconds behind the add
+      await expect.poll(() => listedAfresh(otherPage, here), { timeout: 90_000, intervals: [5_000] }).toBe(true);
+      await addThrough(otherPage, there);
+      // Pulled at the replica's next poll (every 30 s), with no navigation here
+      await expect(credentialCard(page, there)).toBeVisible({ timeout: 120_000 });
+
+      await trashCard(page, here);
+      await trashCard(page, there);
+      await discardFromTrash(page, [here, there]);
+      await expect.poll(async () => !(await listedAfresh(otherPage, here)) && !(await listedAfresh(otherPage, there)), { timeout: 90_000, intervals: [5_000] }).toBe(true);
+    } finally {
+      if (otherNoise.length) {
+        console.log(`--- browser noise (password session) ---\n${otherNoise.join('\n')}`);
+      }
+      await other.close();
+    }
   });
 
   test('the passkey keeps this browser signed in until it is forgotten', async () => {

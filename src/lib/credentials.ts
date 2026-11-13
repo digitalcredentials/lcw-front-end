@@ -9,7 +9,6 @@ import {
   addHistoryCredentialShared,
   addHistoryCredentialUnshared,
 } from '@interop/wallet-core/space'
-import { ensureEncryptedCollection } from './edv'
 import { getSession } from './identity/session'
 import { credentialFrom, credentialName } from './linkedin'
 
@@ -47,7 +46,7 @@ export interface StoredCredential {
 }
 
 // What Trash stores for a deleted credential
-interface TrashRecord {
+export interface TrashRecord {
   cid: string
   tags: string[]
   body: CredentialBody
@@ -176,29 +175,12 @@ export async function addCredential({ space, body, tags = [] }: { space: Space; 
   return { cid }
 }
 
-// Moves a credential to Trash: its body and tags are kept there, its
-// public copy is taken down, and the credential itself is deleted.
+// Deletes a credential (the Trash record and the public copy are the
+// caller's: src/lib/credentialStore.ts moves a credential to Trash)
 export async function deleteCredential({ space, cid }: { space: Space; cid: string }): Promise<void> {
   const body = await readCredential(space, cid)
-  if (body) {
-    const tags = await readTags(space, cid).catch(() => [] as string[])
-    await ensureCollection(space, TRASH_COLLECTION, 'Trash')
-    const record: TrashRecord = { cid, tags, body }
-    await space.collection(TRASH_COLLECTION).add(record as unknown as ResourceData)
-  }
-  if (await findPublicCopy(space, cid)) {
-    await removePublicCopy(space, cid)
-  }
   await privateCredentials(space).resource(cid).delete()
   await recordActivity(space, addHistoryCredentialDeleted({ cid, title: body ? titleOf(body) : undefined, user: user() }))
-}
-
-// Puts a trashed credential back, as a new resource (a new cid) with its
-// tags, and drops the Trash record.
-export async function restoreCredential({ space, item }: { space: Space; item: TrashItem }): Promise<{ cid: string }> {
-  const { cid } = await addCredential({ space, body: item.body, tags: item.tags })
-  await space.collection(TRASH_COLLECTION).resource(item.id).delete()
-  return { cid }
 }
 
 // Deletes a trashed credential for good
@@ -207,16 +189,6 @@ export async function discardTrashItem(space: Space, item: TrashItem): Promise<v
 }
 
 // --- trash -------------------------------------------------------------------
-
-const ensured = new Set<string>()
-async function ensureCollection(space: Space, id: string, name: string): Promise<void> {
-  const key = `${space.collection(id).spaceUrl}${id}`
-  if (ensured.has(key)) {
-    return
-  }
-  await ensureEncryptedCollection({ space, id, name })
-  ensured.add(key)
-}
 
 export async function listTrash(space: Space): Promise<TrashItem[]> {
   const listing = await space.collection(TRASH_COLLECTION).list().catch(() => null)

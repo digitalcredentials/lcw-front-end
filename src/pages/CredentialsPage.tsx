@@ -16,6 +16,7 @@ import {
   type SignInMethod,
 } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
+import { forgetReplica } from '../lib/replica/replica';
 import { RP_NAME } from './LoginPage';
 
 // Settings → Sign-in credentials: the account's sign-in methods as its
@@ -99,6 +100,11 @@ export default function CredentialsPage() {
     setNotice('');
     try {
       await forgetThisBrowser();
+      // The local replica goes with the client key record
+      const current = getSession();
+      if (current) {
+        await forgetReplica({ spaceId: current.spaceId });
+      }
       setNotice('This browser no longer keeps you signed in. Your passkey still opens the account.');
       setRemembered(false);
     } catch (err) {
