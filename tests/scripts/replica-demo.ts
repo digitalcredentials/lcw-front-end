@@ -3,15 +3,21 @@
 // stand-in passkey opens a remembered session, the replica pulls the
 // account's credentials, a credential and its tags added through the
 // replica reach the Space, a credential added directly reaches the
-// replica, and the Trash flow round-trips through it. The passkey and the
-// client it enrolled are removed at the end, so the account is left as it
-// was (its user key rotated twice).
+// replica, and the Trash flow round-trips through it.
 //
-//   DEMO_EMAIL=jc.chartrand@gmail.com npx tsx tests/scripts/replica-demo.ts
+// The stand-in passkey's secret and the client it enrolled are kept in
+// tests/.replica-client.json, so later runs open the same remembered client
+// and add nothing to the account's logs; `--remove` retires the passkey and
+// disconnects the client at the end (two user-key rotations, each of which
+// appends a whole descriptor to the roster log and to every encrypted
+// collection's log) and deletes the file.
+//
+//   DEMO_EMAIL=jc.chartrand@gmail.com npx tsx tests/scripts/replica-demo.ts [--remove]
 import '@interop/http-client'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { getRxStorageMemory } from 'rxdb/plugins/storage-memory'
 import { agentsFromSeed } from '@interop/pws-client/identity'
+import { decodeClientKeyRecord, encodeClientKeyRecord } from '@interop/wallet-core/keys'
 import { clientSigningKeyMultibase } from '@interop/wallet-core/webvh'
 import {
   addPasskeyCredential,
@@ -20,12 +26,14 @@ import {
   listSignInMethods,
   loginWithPassphrase,
   loginWithPasskeySecret,
-  memoryClientKeyStore,
   removeSignInMethod,
   requireTransient,
   setSession,
+  type Session,
 } from '../../src/lib/identity'
+import { pendingAnnexCollection } from '../../src/lib/identity/annexGc'
 import { randomBytes } from '../../src/lib/identity/bytes'
+import type { ClientKeyStore } from '../../src/lib/identity/clientKeyRecord'
 import { directCredentialStore, discardTrashItem, listTrash, restoreFromTrash, sessionStores, trashCredential, type CredentialBody } from '../../src/lib/credentialStore'
 import { replicaFor, setReplicaStorage, stopReplica } from '../../src/lib/replica/replica'
 import { credentialFrom } from '../../src/lib/linkedin'
@@ -35,6 +43,7 @@ if (!email) {
   console.error("Set DEMO_EMAIL to the demo account's email.")
   process.exit(2)
 }
+const remove = process.argv.includes('--remove')
 const passphrase = process.env.DEMO_PASSPHRASE ?? 'my-secret-seed-that-is-long-enou'
 const config = {
   apiBase: (process.env.API_BASE ?? 'https://api.lcw-sandbox.org').replace(/\/+$/, ''),
@@ -71,12 +80,51 @@ function fixtureNamed(name: string): CredentialBody {
   return { ...credential, name }
 }
 
+// --- the stand-in passkey and its client, kept between runs ---------------
+const STATE_FILE = new URL('../.replica-client.json', import.meta.url)
+interface State {
+  // The passkey's PRF output, base64url
+  prf: string
+  // The client-key records by unlock Space id, as wallet-core encodes them
+  records: Record<string, unknown>
+}
+const saveState = (state: State) => writeFileSync(STATE_FILE, `${JSON.stringify(state, null, 2)}\n`)
+const fileClientKeyStore = (state: State): ClientKeyStore => ({
+  load: async (unlock) => {
+    const contents = state.records[unlock.spaceId]
+    return contents ? decodeClientKeyRecord({ contents }) : null
+  },
+  save: async (unlock, record) => {
+    state.records[unlock.spaceId] = encodeClientKeyRecord(record)
+    saveState(state)
+  },
+  remove: async (unlockSpaceId) => {
+    delete state.records[unlockSpaceId]
+    saveState(state)
+  },
+})
+
 // --- a remembered session, its replica in memory ---------------------------
-const password = await loginWithPassphrase({ email, passphrase, config })
-const prf = randomBytes(32)
-const store = memoryClientKeyStore()
-const remembered = await addPasskeyCredential({ session: requireTransient(password), prfOutput: prf, config, store, label: 'Replica script passkey' })
-check('the passkey opens a remembered session', remembered.kind === 'remembered')
+let state: State | null = existsSync(STATE_FILE) ? (JSON.parse(readFileSync(STATE_FILE, 'utf8')) as State) : null
+let remembered: Session
+if (state) {
+  remembered = await loginWithPasskeySecret({ prfOutput: new Uint8Array(Buffer.from(state.prf, 'base64url')), config, store: fileClientKeyStore(state), email })
+  check('the kept passkey opens the same remembered client again', remembered.kind === 'remembered')
+} else {
+  const password = await loginWithPassphrase({ email, passphrase, config })
+  const prf = randomBytes(32)
+  state = { prf: Buffer.from(prf).toString('base64url'), records: {} }
+  remembered = await addPasskeyCredential({ session: requireTransient(password), prfOutput: prf, config, store: fileClientKeyStore(state), label: 'Replica script passkey' })
+  saveState(state)
+  check('the passkey opens a remembered session', remembered.kind === 'remembered')
+}
+if (remembered.kind !== 'remembered') {
+  throw new Error('no remembered session')
+}
+const prf = new Uint8Array(Buffer.from(state.prf, 'base64url'))
+const store = fileClientKeyStore(state)
+const collection = await pendingAnnexCollection()
+check('the stale client-annex generations were collected at login', collection !== null, collection && { collected: collection.collected.length, deferred: collection.deferred.length, failed: collection.failed.length })
 setReplicaStorage(getRxStorageMemory())
 setSession(remembered)
 const stores = await sessionStores()
@@ -141,21 +189,26 @@ if (trashed) {
 }
 await stopReplica()
 
-// --- the passkey and its client, removed again ------------------------------
-const cleanup = await loginWithPassphrase({ email, passphrase, config })
-const passkeyMethod = (await listSignInMethods({ session: cleanup })).find((m) => m.kind === 'passkey' && m.label === 'Replica script passkey')
-const removed = passkeyMethod ? await removeSignInMethod({ session: cleanup, unlockSpaceId: passkeyMethod.unlockSpaceId }) : null
-check('the passkey is removed again', removed?.completion === 'complete', removed && `${removed.completion}, unlock Space ${removed.unlockSpace}`)
-const { keyAgent } = await agentsFromSeed({ seed: remembered.clientSeed })
-const ownKey = clientSigningKeyMultibase({ keyAgent })
-const wallets = await listConnectedWallets(removed?.session ?? cleanup)
-const own = wallets.find((w) => w.signingKeyMultibase === ownKey)
-const outcome = own ? await disconnectWallet({ session: removed?.session ?? cleanup, wallet: own }) : null
-check('the client is disconnected again', outcome?.completion === 'complete', outcome ?? 'not listed')
-const refused = await loginWithPasskeySecret({ prfOutput: prf, config, store, email }).then(
-  () => 'signed in',
-  (err: { status?: number; message?: string }) => err.status ?? err.message
-)
-check('the removed passkey no longer opens the browser that held its record', refused !== 'signed in', refused)
+// --- the passkey and its client: kept for the next run, or removed ----------
+if (!remove) {
+  console.log('     the passkey and its client are kept for the next run (tests/.replica-client.json); pass --remove to retire them')
+} else {
+  const cleanup = await loginWithPassphrase({ email, passphrase, config })
+  const passkeyMethod = (await listSignInMethods({ session: cleanup })).find((m) => m.kind === 'passkey' && m.label === 'Replica script passkey')
+  const removed = passkeyMethod ? await removeSignInMethod({ session: cleanup, unlockSpaceId: passkeyMethod.unlockSpaceId }) : null
+  check('the passkey is removed again', removed?.completion === 'complete', removed && `${removed.completion}, unlock Space ${removed.unlockSpace}`)
+  const { keyAgent } = await agentsFromSeed({ seed: remembered.clientSeed })
+  const ownKey = clientSigningKeyMultibase({ keyAgent })
+  const wallets = await listConnectedWallets(removed?.session ?? cleanup)
+  const own = wallets.find((w) => w.signingKeyMultibase === ownKey)
+  const outcome = own ? await disconnectWallet({ session: removed?.session ?? cleanup, wallet: own }) : null
+  check('the client is disconnected again', outcome?.completion === 'complete', outcome ?? 'not listed')
+  const refused = await loginWithPasskeySecret({ prfOutput: prf, config, store, email }).then(
+    () => 'signed in',
+    (err: { status?: number; message?: string }) => err.status ?? err.message
+  )
+  check('the removed passkey no longer opens the client that held its record', refused !== 'signed in', refused)
+  unlinkSync(STATE_FILE)
+}
 console.log(failures ? `\n${failures} FAILED` : '\nall ok')
 process.exit(failures ? 1 : 0)

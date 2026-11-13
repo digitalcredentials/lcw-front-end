@@ -1,6 +1,7 @@
 import { KEYRING_KDF } from '@interop/wallet-core/keyring'
 import { formatRecoveryCode, recordedDelegationFields } from '@interop/wallet-core/recovery'
 import { ladderRung, standingZcapStale, verifyAccountLog } from '@interop/wallet-core/webvh'
+import { collectClientAnnexGenerationsInBackground } from './annexGc'
 import { visitPins } from './pins'
 import { deriveUnlockCredential, passphraseCredential, type UnlockCredential } from './credential'
 import { delegateUnlockManagement, fetchStandingRecord, type StandingRecord } from './records'
@@ -175,6 +176,8 @@ export async function loginWithPasskeySecret({
   if (enrolled) {
     await settleOwnClientName(opened)
   }
+  // The stale annex generations, collected while the pages open
+  collectClientAnnexGenerationsInBackground(opened)
   return opened
 }
 
@@ -359,6 +362,7 @@ export async function addPasskeyCredential({
   if (remembered.enrolled) {
     await settleOwnClientName(opened)
   }
+  collectClientAnnexGenerationsInBackground(opened)
   return opened
 }
 
