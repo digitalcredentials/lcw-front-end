@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getToken, clearToken } from '../lib/auth';
 import AppShell from '../components/AppShell';
@@ -183,11 +183,21 @@ export default function WalletPage() {
   // this page is already mounted: that pushes a new history entry (a new
   // location key) without remounting, so each new key returns the view to
   // the whole list.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const firstKey = useRef(true);
   useEffect(() => {
     setViewing(null);
     setView('credentials');
     setFilter(new Set());
     setError(null);
+    // A later arrival here (the link, the title, an import's Done) reads
+    // the Space again too; the mount's own read is the load effect's
+    if (firstKey.current) {
+      firstKey.current = false;
+    } else {
+      void loadRef.current();
+    }
   }, [location.key]);
 
   const cards = useMemo<Card[]>(

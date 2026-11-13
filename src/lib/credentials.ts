@@ -2,6 +2,7 @@ import type { ResourceData, Space } from '@interop/pws-client'
 import { resourceUrl } from '@interop/pws-client/paths'
 import { cidFrom } from '@interop/pws-client/sync'
 import { PRIVATE_CREDENTIALS_COLLECTION, PUBLIC_CREDENTIALS_COLLECTION, WALLET_ACTIVITY_COLLECTION } from '@interop/wallet-core/space'
+import { normalizeTags } from './tags'
 
 // The account Space's credentials in FreeWallet's layout, so a credential
 // stored by either wallet is seen by both:
@@ -101,19 +102,7 @@ export async function recordActivity(space: Space, entry: object): Promise<void>
 
 // --- tags --------------------------------------------------------------------
 
-// Tags as the holder typed them, trimmed, without blanks or repeats
-export function normalizeTags(tags: Iterable<string>): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const raw of tags) {
-    const tag = raw.trim()
-    if (tag && !seen.has(tag)) {
-      seen.add(tag)
-      out.push(tag)
-    }
-  }
-  return out
-}
+export { normalizeTags }
 
 function tagsOf(custom: unknown): string[] {
   const tags = (custom as { tags?: unknown } | null | undefined)?.tags

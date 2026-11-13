@@ -1,6 +1,6 @@
 import type { IKeyAgreementKey, IKeyResolver } from '@interop/data-integrity-core'
 import type { CollectionEncryption } from '@interop/pws-client'
-import { EPOCH_CONFIGURATION_STATE_TYPE, createEdvDocCipher } from '@interop/pws-client/edv'
+import { EPOCH_CONFIGURATION_STATE_TYPE, createEdvDocCipher, createEdvEncryption } from '@interop/pws-client/edv'
 import {
   readSpaceArchive,
   parseArchivePath,
@@ -53,6 +53,10 @@ export interface ArchivedCollection {
   resources: Map<string, ArchivedResource>
   // A chunked resource's chunk files, by resource id then chunk index
   chunks: Map<string, Map<number, Uint8Array>>
+  // Each resource's metadata `custom` (where a credential's tags live), from
+  // the metadata sidecar the archive carries beside it: an envelope on an
+  // encrypted collection, a plain object on a plaintext one
+  customs?: Map<string, unknown>
 }
 
 export interface ArchivedSpace {
@@ -75,7 +79,7 @@ export async function readArchivedSpace(bytes: Uint8Array): Promise<ArchivedSpac
   const collection = (id: string): ArchivedCollection => {
     let c = space.collections.get(id)
     if (!c) {
-      c = { id, meta: null, resources: new Map(), chunks: new Map() }
+      c = { id, meta: null, resources: new Map(), chunks: new Map(), customs: new Map() }
       space.collections.set(id, c)
     }
     return c
@@ -113,6 +117,16 @@ export async function readArchivedSpace(bytes: Uint8Array): Promise<ArchivedSpac
         collection(position.collectionId).meta = collectionMetadataFromFile({ bytes: await entry.bytes() })
       } else if (kind.kind === 'collectionLog') {
         collection(position.collectionId).log = await entry.bytes()
+      } else if (kind.kind === 'metaSidecar') {
+        try {
+          const sidecar = JSON.parse(new TextDecoder().decode(await entry.bytes())) as { custom?: unknown }
+          if (sidecar.custom !== undefined && sidecar.custom !== null) {
+            const c = collection(position.collectionId)
+            ;(c.customs ??= new Map()).set(kind.resourceId, sidecar.custom)
+          }
+        } catch {
+          // A sidecar that is not JSON carries no tags
+        }
       } else if (kind.kind === 'representation') {
         collection(position.collectionId).resources.set(kind.resourceId, {
           id: kind.resourceId,
@@ -133,6 +147,14 @@ export interface ExportedDocument {
   id: string
   bytes: Uint8Array
   extension: string
+  // The holder's tags on the document, from its resource metadata
+  tags?: string[]
+}
+
+// The tags a resource metadata `custom` carries: the keys of its `tags` map
+const tagsOf = (custom: unknown): string[] => {
+  const tags = (custom as { tags?: unknown } | null | undefined)?.tags
+  return tags && typeof tags === 'object' ? Object.keys(tags as object).filter((tag) => tag.trim() !== '') : []
 }
 
 const utf8 = new TextEncoder()
@@ -176,21 +198,29 @@ function encryptionOf(collection: ArchivedCollection): CollectionEncryption | un
 // collection's own encryption descriptor from the archive, so a resource
 // written under an earlier epoch still opens. A resource that cannot be
 // opened is reported in `problems`, not exported, so one damaged document
-// does not stop the rest. `label` names the space in the report.
+// does not stop the rest. A resource's tags are decoded from its metadata
+// envelope with the collection's codec; tags that cannot be read are
+// reported and the document exported without them. `label` names the
+// space in the report; `spaceUrl` is what the codec binds metadata to.
 export async function decryptCollection({
   collection,
   encryption,
   keys,
+  spaceUrl,
   label,
   problems,
 }: {
   collection: ArchivedCollection
   encryption: CollectionEncryption
   keys: { keyAgreementKey: IKeyAgreementKey; keyResolver: IKeyResolver }
+  spaceUrl: string
   label: string
   problems: string[]
 }): Promise<ExportedDocument[]> {
   const cipher = await createEdvDocCipher({ ...keys, collectionId: collection.id, encryption })
+  const codec = collection.customs?.size
+    ? await createEdvEncryption({ resolveKeys: async () => keys, idDerivation: 'content' }).codecFor({ spaceUrl, collectionId: collection.id, scheme: encryption.scheme, encryption })
+    : null
   const decoder = new TextDecoder()
   const chunkSource = async ({ docId, chunkIndex }: { docId: string; chunkIndex: number }) => {
     const bytes = collection.chunks.get(docId)?.get(chunkIndex)
@@ -198,18 +228,32 @@ export async function decryptCollection({
   }
   const documents: ExportedDocument[] = []
   for (const resource of collection.resources.values()) {
+    let document: ExportedDocument
     try {
       const envelope = JSON.parse(decoder.decode(resource.bytes))
       const plain = await cipher.decrypt({ id: resource.id, envelope, chunkSource })
-      if (plain instanceof Blob) {
-        documents.push({ id: resource.id, bytes: new Uint8Array(await plain.arrayBuffer()), extension: extensionFor(plain.type) })
-      } else {
-        documents.push({ id: resource.id, bytes: utf8.encode(JSON.stringify(plain, null, 2)), extension: 'json' })
-      }
+      document =
+        plain instanceof Blob
+          ? { id: resource.id, bytes: new Uint8Array(await plain.arrayBuffer()), extension: extensionFor(plain.type) }
+          : { id: resource.id, bytes: utf8.encode(JSON.stringify(plain, null, 2)), extension: 'json' }
     } catch (err) {
       console.error(`Wallet: the export could not open ${label}/${collection.id}/${resource.id}:`, err)
       problems.push(`${label}/${collection.id}/${resource.id} could not be decrypted and was left out.`)
+      continue
     }
+    const custom = collection.customs?.get(resource.id)
+    if (custom !== undefined && codec) {
+      try {
+        const tags = tagsOf(await codec.decodeMeta({ custom }, { kind: 'resource', id: resource.id }))
+        if (tags.length) {
+          document.tags = tags
+        }
+      } catch (err) {
+        console.error(`Wallet: the export could not read the tags of ${label}/${collection.id}/${resource.id}:`, err)
+        problems.push(`The tags of ${label}/${collection.id}/${resource.id} could not be read; the document was exported without them.`)
+      }
+    }
+    documents.push(document)
   }
   return documents
 }
@@ -219,11 +263,13 @@ export async function decryptCollection({
 export async function exportedCollections({
   space,
   keys,
+  spaceUrl,
   label,
   problems,
 }: {
   space: ArchivedSpace
   keys: { keyAgreementKey: IKeyAgreementKey; keyResolver: IKeyResolver }
+  spaceUrl: string
   label: string
   problems: string[]
 }): Promise<ExportedCollection[]> {
@@ -241,14 +287,18 @@ export async function exportedCollections({
       continue
     }
     if (encryption) {
-      const documents = await decryptCollection({ collection, encryption, keys, label, problems })
+      const documents = await decryptCollection({ collection, encryption, keys, spaceUrl, label, problems })
       collections.push({ id: collection.id, encrypted: true, documents })
     } else {
-      const documents = [...collection.resources.values()].map((r) => ({
-        id: r.id,
-        bytes: r.bytes,
-        extension: extensionFor(r.contentType, r.extension),
-      }))
+      const documents = [...collection.resources.values()].map((r) => {
+        const tags = tagsOf(collection.customs?.get(r.id))
+        return {
+          id: r.id,
+          bytes: r.bytes,
+          extension: extensionFor(r.contentType, r.extension),
+          ...(tags.length && { tags }),
+        }
+      })
       collections.push({ id: collection.id, encrypted: false, documents })
     }
   }
@@ -279,7 +329,15 @@ export interface ExportManifest {
     url: string
     name?: string
     types: string[]
-    collections: { folder: string; id: string; encrypted: boolean; documents: number }[]
+    collections: {
+      folder: string
+      id: string
+      encrypted: boolean
+      documents: number
+      // The tags of the documents that carry any, by file name in the
+      // collection's folder
+      tags?: Record<string, string[]>
+    }[]
   }[]
   excludedCollections: string[]
   // Documents that could not be exported, one sentence each
@@ -339,24 +397,31 @@ export function packDataExport({
   spaces.forEach((space, i) => {
     const folder = spaceFolders[i]
     const collectionFolders = uniqueNames(space.collections.map((c) => safeName(c.id, 'collection')))
+    const entries = space.collections.map((c, j) => {
+      const names = uniqueNames(c.documents.map((d) => safeName(d.id, 'document')))
+      const tags: Record<string, string[]> = {}
+      c.documents.forEach((d, k) => {
+        const file = `${names[k]}.${d.extension}`
+        files.push({ name: `${folder}/${collectionFolders[j]}/${file}`, bytes: d.bytes })
+        if (d.tags?.length) {
+          tags[file] = d.tags
+        }
+      })
+      return {
+        folder: collectionFolders[j],
+        id: c.id,
+        encrypted: c.encrypted,
+        documents: c.documents.length,
+        ...(Object.keys(tags).length && { tags }),
+      }
+    })
     manifest.spaces.push({
       folder,
       id: space.id,
       url: space.url,
       ...(space.name !== undefined && { name: space.name }),
       types: space.types,
-      collections: space.collections.map((c, j) => ({
-        folder: collectionFolders[j],
-        id: c.id,
-        encrypted: c.encrypted,
-        documents: c.documents.length,
-      })),
-    })
-    space.collections.forEach((c, j) => {
-      const names = uniqueNames(c.documents.map((d) => safeName(d.id, 'document')))
-      c.documents.forEach((d, k) => {
-        files.push({ name: `${folder}/${collectionFolders[j]}/${names[k]}.${d.extension}`, bytes: d.bytes })
-      })
+      collections: entries,
     })
   })
   files.unshift({ name: 'manifest.json', bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) })

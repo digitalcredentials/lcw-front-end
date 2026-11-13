@@ -8,6 +8,7 @@ import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
 import FailureText from './FailureText';
 import ExportDataModal from './ExportDataModal';
+import ImportDataModal from './ImportDataModal';
 import { describeError, type Failure } from '../lib/errors';
 
 // The signed-in layout: the product title and navigation run down a left
@@ -34,8 +35,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [walletState, setWalletState] = useState<'unknown' | 'enabled' | 'disabled'>('unknown');
   const [walletBusy, setWalletBusy] = useState(false);
   const [walletError, setWalletError] = useState<Failure | null>(null);
-  // Settings → Download my data
+  // Settings → Download my data, Import my data
   const [exportOpen, setExportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   // Shown when the wallet opens while the browser wallet is not enabled; at
   // most once per tab session
@@ -279,6 +281,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               >
                 Download my data
               </button>
+              <button
+                onClick={() => setImportOpen(true)}
+                title="Add the credentials from a downloaded data file back to your wallet"
+                className={itemClass(false)}
+              >
+                Import my data
+              </button>
               <p className="px-3 pt-2 text-xs uppercase tracking-wide">
                 <span className="text-gray-400">Browser wallet: </span>
                 {walletState === 'enabled' && (
@@ -459,6 +468,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
       {/* Shown once per tab session when the browser wallet is not enabled */}
       {exportOpen && <ExportDataModal onClose={() => setExportOpen(false)} />}
+      {importOpen && (
+        <ImportDataModal
+          onClose={() => setImportOpen(false)}
+          onDone={() => {
+            setImportOpen(false);
+            // The list, read again with what was added
+            navigate('/files');
+          }}
+        />
+      )}
 
       {enablePromptOpen && (
         <div

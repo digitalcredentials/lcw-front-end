@@ -35,7 +35,7 @@ async function exportSpace(space: SpaceInfo, problems: string[]): Promise<Export
   }
   const archived = await readArchivedSpace(await exportArchive(space))
   const label = space.name ?? parseSpaceUrl(space.url)?.spaceId ?? space.url
-  const collections = await exportedCollections({ space: archived, keys: sessionVaultKeys(session), label, problems })
+  const collections = await exportedCollections({ space: archived, keys: sessionVaultKeys(session), spaceUrl: space.url, label, problems })
   return {
     id: archived.id,
     url: space.url,

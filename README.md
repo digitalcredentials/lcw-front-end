@@ -261,8 +261,24 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   `account`), the holder keys (`dids`) and the public copies
   (`public-credentials`, and the earlier layout's `public`) are left out;
   `private-credentials` and `Trash`
-  are included. The documents
-  in the file are not encrypted, which the dialog says before the download.
+  are included. A document's tags travel with it: the archive carries each
+  resource's metadata sidecar, whose `custom` the collection's codec decodes,
+  and the manifest lists the tags per document (`tags`, by file name in the
+  collection's folder). The documents in the file are not encrypted, which
+  the dialog says before the download.
+- **Import my data** (`src/lib/dataImport.ts`, the dialog in
+  `src/components/ImportDataModal.tsx`): **Settings → Import my data** takes
+  a file Download my data made and adds the credentials in its
+  `private-credentials` folders back to the account through the credential
+  store, so one the account holds already (the same content cid) is left as
+  it is, with the tags the file gives it added to the stored copy; a
+  presentation stored as a document is unwrapped to its credentials. The
+  dialog says what the file holds (and when it was saved from which
+  account) before anything is added, counts what was added and what was
+  there, and skips the documents of those folders that are not credentials.
+  A file that is not a tar, or carries no `lcw-data-export/1` manifest, is
+  refused with a sentence saying so. Other collections in the file
+  (activity entries, Trash records, batch files) are not imported.
 - **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
   `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
   wallet with the [authn.io](https://authn.io) mediator (a once-per-session
@@ -364,7 +380,9 @@ Lint (oxlint) and the unit specs that need no server: parsing and matching
 of verifiable presentation requests (`src/lib/vpRequest.ts`), the
 interpretation of verifier-core results for the pre-share check
 (`src/lib/verify.ts`), and the data export's tar writer, Space archive
-reader and layout (`src/lib/tar.ts`, `src/lib/dataExport.ts`).
+reader and layout (`src/lib/tar.ts`, `src/lib/dataExport.ts`), and the
+data import's tar reader, download reader (tags included) and adding
+against a store (`tests/data-import.spec.ts`, `src/lib/dataImport.ts`).
 
 ```bash
 npm run test:e2e
@@ -405,8 +423,10 @@ browser, the local replica keeping that browser's list in step with the
 Space (a credential added there is listed by a password session in a
 second browser context, one added in the password session is pulled into
 the passkey tab's list with no navigation, and both go through Trash and
-out of the Space), the phone layout, and the data download (the tar is read back
-and the demo credential found decrypted in it) — with console errors and
+out of the Space), the phone layout, and the data download (the tar is read back,
+the demo credential found decrypted in it with its tag in the manifest,
+the same file imported back with nothing added, and a file saved from
+another account imported with its credential and tag arriving) — with console errors and
 failed requests captured for debugging. Skipped unless `DEPLOYED_URL` is
 set. Run it after every deploy. Each run leaves one passkey credential and
 one enrolled client on the demo account, on purpose: removing either

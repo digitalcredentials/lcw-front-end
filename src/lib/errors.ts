@@ -35,9 +35,11 @@ export type WalletAction =
   | 'read-qr'
   | 'start-camera'
   | 'export-data'
+  | 'import-data'
 
 const FAILED: Record<WalletAction, string> = {
   'export-data': "We couldn't put your download together.",
+  'import-data': "We couldn't add the credentials from that file.",
   'load-spaces': "We couldn't load your spaces.",
   'load-collections': "We couldn't load your collections.",
   'load-credentials': "We couldn't load your credentials.",
