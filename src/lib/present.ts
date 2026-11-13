@@ -5,7 +5,6 @@ import jsigs from '@interop/jsonld-signatures'
 import { getSessionWASClient } from './was'
 import { getSession, accountMethodOf, holderSigner, type HolderSigner } from './identity'
 import { PRIVATE_CREDENTIALS_COLLECTION } from '@interop/wallet-core/space'
-import { credentialFrom } from './linkedin'
 import { buildPresentation } from './vpRequest'
 import { DIDS_COLLECTION } from './credentials'
 import { sessionStores } from './credentialStore'
@@ -46,21 +45,14 @@ export interface WalletCredential {
 }
 
 // Loads every credential of the account (the private-credentials
-// collection, each resource unwrapped from its envelope). Unreadable or
-// non-credential resources are skipped.
+// collection; unreadable or non-credential resources are left out by the
+// store).
 export async function loadWalletCredentials(): Promise<WalletCredential[]> {
   const stores = await sessionStores()
   if (!stores) {
     throw new Error('UNAUTHORIZED')
   }
-  const credentials: WalletCredential[] = []
-  for (const { cid, body } of await stores.store.loadCredentials()) {
-    const credential = credentialFrom(body)
-    if (credential) {
-      credentials.push({ collectionId: PRIVATE_CREDENTIALS_COLLECTION, resourceId: cid, credential: credential as Record<string, unknown> })
-    }
-  }
-  return credentials
+  return (await stores.store.loadCredentials()).map(({ rid, body }) => ({ collectionId: PRIVATE_CREDENTIALS_COLLECTION, resourceId: rid, credential: body }))
 }
 
 // Builds the response presentation for a request. Signed as the holder when

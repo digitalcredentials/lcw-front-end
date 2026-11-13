@@ -3,27 +3,25 @@ import type { RxCollection, RxDocument } from 'rxdb/plugins/core'
 import { resourceUrl } from '@interop/pws-client/paths'
 import { PUBLIC_CREDENTIALS_COLLECTION } from '@interop/wallet-core/space'
 import type { CredentialBody, StoredCredential } from '../credentials'
-import { normalizeTags } from '../credentials'
-import type { CredentialStore } from '../credentialStore'
+import { contentCid, isCredential, normalizeTags } from '../credentials'
+import type { CredentialRows } from '../credentialStore'
 import { isUnknownEpoch } from './ciphers'
 import type { Replica } from './replica'
 import type { ReplicaKey } from './database'
 
-// The credential store over the replica: reads are local (a row's
+// The credential rows over the replica: reads are local (a row's
 // envelope decrypted once and remembered for the row's life), writes are
 // local rows pws-sync pushes to the Space as conditional writes. The
 // shapes are FreeWallet's: a credential is one content-addressed envelope
-// in private-credentials, its public copy a plaintext row under the same
-// id in public-credentials, and an activity entry one envelope in
-// wallet-activity.
+// in private-credentials holding the bare credential, its public copy a
+// plaintext row under the credential's content cid in public-credentials,
+// and an activity entry one envelope in wallet-activity.
 
 type Json = Parameters<NonNullable<ReturnType<Replica['ciphers']['for']>['cipher']>['encrypt']>[0]['data']
 
-const parsed = (data: unknown): CredentialBody | null => (data === null || data === undefined || data instanceof Blob || typeof data !== 'object' ? null : (data as CredentialBody))
-
-export function replicaStore({ replica, activity }: { replica: Replica; activity: (entry: object) => object }): CredentialStore {
+export function replicaRows({ replica }: { replica: Replica }): CredentialRows {
   const rows = (key: ReplicaKey): RxCollection<SyncedDoc> => replica.db[key]
-  // Decrypted bodies by row id: a content-addressed row never changes
+  // Decrypted credentials by row id: a content-addressed row never changes
   const opened = new Map<string, Promise<CredentialBody | null>>()
 
   // Runs a cipher operation, rebuilding the collection's ciphers once when
@@ -40,21 +38,22 @@ export function replicaStore({ replica, activity }: { replica: Replica; activity
     }
   }
 
-  function decrypt(key: ReplicaKey, row: SyncedDoc): Promise<CredentialBody | null> {
-    const cacheKey = `${key}/${row.id}`
-    let pending = opened.get(cacheKey)
+  // The credential a row holds, or null when it holds something else
+  function decrypt(row: SyncedDoc): Promise<CredentialBody | null> {
+    let pending = opened.get(row.id)
     if (!pending) {
-      pending = withCiphers(key, async ({ cipher }) => {
+      pending = withCiphers('privateCredentials', async ({ cipher }) => {
         if (!cipher) {
-          return parsed(row.data)
+          throw new Error('The private-credentials collection has no cipher.')
         }
-        return parsed(await cipher.decrypt({ id: row.id, envelope: row.data as Json }))
+        const data = await cipher.decrypt({ id: row.id, envelope: row.data as Json })
+        return isCredential(data) ? data : null
       }).catch((err) => {
-        opened.delete(cacheKey)
+        opened.delete(row.id)
         console.warn(`Wallet: the replica row ${row.id} could not be opened:`, err)
         return null
       })
-      opened.set(cacheKey, pending)
+      opened.set(row.id, pending)
     }
     return pending
   }
@@ -86,49 +85,35 @@ export function replicaStore({ replica, activity }: { replica: Replica; activity
 
   const now = () => new Date().toISOString()
 
-  async function recordActivity(entry: object): Promise<void> {
-    try {
-      await withCiphers('walletActivity', async ({ cipher }) => {
-        if (!cipher) {
-          throw new Error('The wallet-activity collection has no cipher.')
-        }
-        const { id, envelope, epoch } = await cipher.encrypt({ data: activity(entry) as Json })
-        await rows('walletActivity').insertIfNotExists({ id, updatedAt: now(), data: envelope as Json, ...(epoch && { epoch }) })
-      })
-    } catch (err) {
-      console.warn('The activity entry could not be written:', err)
-    }
-  }
-
   return {
     kind: 'replica',
-    async loadCredentials() {
+    async all() {
       await replica.ready
-      const all = await rows('privateCredentials').find().exec()
+      const docs = await rows('privateCredentials').find().exec()
       const loaded = await Promise.all(
-        all.map(async (doc): Promise<StoredCredential | null> => {
-          const body = await decrypt('privateCredentials', plain(doc))
+        docs.map(async (doc): Promise<StoredCredential | null> => {
+          const body = await decrypt(plain(doc))
           if (!body) {
             return null
           }
           const tags = await readCustom(plain(doc))
             .then(tagsOf)
             .catch(() => [] as string[])
-          return { cid: doc.id, body, tags }
+          return { cid: contentCid(body), rid: doc.id, body, tags }
         })
       )
       return loaded.filter((c): c is StoredCredential => c !== null)
     },
-    async readCredential(cid) {
+    async read(rid) {
       await replica.ready
-      const doc = await row('privateCredentials', cid)
-      return doc ? decrypt('privateCredentials', plain(doc)) : null
+      const doc = await row('privateCredentials', rid)
+      return doc ? decrypt(plain(doc)) : null
     },
-    async readTags(cid) {
-      const doc = await row('privateCredentials', cid)
+    async readTags(rid) {
+      const doc = await row('privateCredentials', rid)
       return doc ? tagsOf(await readCustom(plain(doc))) : []
     },
-    async addCredential({ body, tags = [] }) {
+    async insert({ body, tags }) {
       const normalized = normalizeTags(tags)
       const { id, envelope, epoch } = await withCiphers('privateCredentials', async ({ cipher }) => {
         if (!cipher) {
@@ -138,24 +123,24 @@ export function replicaStore({ replica, activity }: { replica: Replica; activity
       })
       const custom = normalized.length ? await encodeCustom(id, { tags: Object.fromEntries(normalized.map((tag) => [tag, ''])) }) : undefined
       await rows('privateCredentials').insertIfNotExists({ id, updatedAt: now(), data: envelope as Json, ...(epoch && { epoch }), ...(custom !== undefined && { custom: custom as Json }) })
-      opened.set(`privateCredentials/${id}`, Promise.resolve(body))
-      return { cid: id }
+      opened.set(id, Promise.resolve(body))
+      return { cid: contentCid(body), rid: id }
     },
-    async setTags(cid, tags) {
-      const doc = await row('privateCredentials', cid)
+    async setTags(rid, tags) {
+      const doc = await row('privateCredentials', rid)
       if (!doc) {
         throw new Error('The credential is no longer stored.')
       }
       const existing = await readCustom(plain(doc))
-      const custom = await encodeCustom(cid, { ...(existing.name && { name: existing.name }), tags: Object.fromEntries(normalizeTags(tags).map((tag) => [tag, ''])) })
+      const custom = await encodeCustom(rid, { ...(existing.name && { name: existing.name }), tags: Object.fromEntries(normalizeTags(tags).map((tag) => [tag, ''])) })
       await doc.incrementalPatch({ custom: custom as Json })
     },
-    async deleteCredential(cid) {
-      const doc = await row('privateCredentials', cid)
+    async remove(rid) {
+      const doc = await row('privateCredentials', rid)
       if (doc) {
         await doc.remove()
       }
-      opened.delete(`privateCredentials/${cid}`)
+      opened.delete(rid)
     },
     async findPublicCopy(cid) {
       return (await row('publicCredentials', cid)) !== null
@@ -173,7 +158,19 @@ export function replicaStore({ replica, activity }: { replica: Replica; activity
     publicCopyUrl(cid) {
       return resourceUrl({ spaceUrl: replica.spaceUrl, collectionId: PUBLIC_CREDENTIALS_COLLECTION, resourceId: cid })
     },
-    recordActivity,
+    async recordActivity(entry) {
+      try {
+        await withCiphers('walletActivity', async ({ cipher }) => {
+          if (!cipher) {
+            throw new Error('The wallet-activity collection has no cipher.')
+          }
+          const { id, envelope, epoch } = await cipher.encrypt({ data: entry as Json })
+          await rows('walletActivity').insertIfNotExists({ id, updatedAt: now(), data: envelope as Json, ...(epoch && { epoch }) })
+        })
+      } catch (err) {
+        console.warn('The activity entry could not be written:', err)
+      }
+    },
     subscribe: (listener) => replica.subscribe(listener),
   }
 }

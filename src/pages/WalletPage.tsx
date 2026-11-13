@@ -24,7 +24,7 @@ import {
   type TrashItem,
 } from '../lib/credentialStore';
 import {
-  credentialFrom,
+  credentialsFrom,
   credentialName,
   issuerName,
   credentialIssuance,
@@ -49,11 +49,8 @@ interface Summary {
   expires: Date | null;
 }
 
-function summaryOf(body: unknown): Summary | null {
-  const credential = credentialFrom(body);
-  if (!credential) {
-    return null;
-  }
+function summaryOf(body: CredentialBody): Summary | null {
+  const credential = body as CredentialLike;
   return {
     title: credentialName(credential),
     logo: credentialImage(credential),
@@ -269,9 +266,18 @@ export default function WalletPage() {
       setUploading(false);
       return;
     }
-    const credential = credentialFrom(body) ?? (body as Record<string, unknown>);
+    // A presentation envelope is unwrapped: each credential in it is stored
+    // on its own
+    const credentials = credentialsFrom(body);
+    if (credentials.length === 0) {
+      setUploadError({ text: `We couldn't read ${name}. Check that it's a credential file.` });
+      setUploading(false);
+      return;
+    }
     const done = await withSession('upload', async (s) => {
-      await s.store.addCredential({ body: body as CredentialBody, tags: [suggestTag(credential as Record<string, unknown>)] });
+      for (const credential of credentials) {
+        await s.store.addCredential({ body: credential as CredentialBody, tags: [suggestTag(credential as Record<string, unknown>)] });
+      }
       return true;
     }, setUploadError);
     setUploading(false);
@@ -353,7 +359,7 @@ export default function WalletPage() {
   // --- derived views of the open credential -------------------------------------
 
   const viewingSource = useMemo(() => (viewing ? JSON.stringify(viewing.card.body, null, 2) : ''), [viewing]);
-  const viewingCredential = useMemo<CredentialLike | null>(() => (viewing ? credentialFrom(viewing.card.body) : null), [viewing]);
+  const viewingCredential = useMemo<CredentialLike | null>(() => (viewing ? (viewing.card.body as CredentialLike) : null), [viewing]);
   const viewingSummary = useMemo(() => {
     const credential = viewingCredential;
     if (!credential) {

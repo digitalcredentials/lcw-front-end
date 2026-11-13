@@ -26,8 +26,7 @@ import {
   setSession,
 } from '../../src/lib/identity'
 import { randomBytes } from '../../src/lib/identity/bytes'
-import { discardTrashItem, listTrash, restoreFromTrash, sessionStores, trashCredential, type CredentialBody } from '../../src/lib/credentialStore'
-import { addCredential as addDirect, readCredential as readDirect, readTags as readTagsDirect } from '../../src/lib/credentials'
+import { directCredentialStore, discardTrashItem, listTrash, restoreFromTrash, sessionStores, trashCredential, type CredentialBody } from '../../src/lib/credentialStore'
 import { replicaFor, setReplicaStorage, stopReplica } from '../../src/lib/replica/replica'
 import { credentialFrom } from '../../src/lib/linkedin'
 
@@ -64,13 +63,12 @@ async function until<T>(label: string, probe: () => Promise<T | null | false>, m
 }
 // The credential's own `name` member (the display name a wallet derives can
 // come from the achievement instead)
-const nameOf = (body: CredentialBody) => (credentialFrom(body) as { name?: unknown } | null)?.name
-// A credential of its own: the badge fixture (a presentation envelope
-// around one credential) with another name on the credential
+const nameOf = (body: CredentialBody | null | undefined) => body?.name
+// A credential of its own: the badge credential (inside the fixture's
+// presentation) under another name
 function fixtureNamed(name: string): CredentialBody {
-  const body = JSON.parse(readFileSync(new URL('../fixtures/PlaywrightUpload.json', import.meta.url), 'utf8')) as CredentialBody & { verifiableCredential: Record<string, unknown>[] }
-  body.verifiableCredential[0].name = name
-  return body
+  const credential = credentialFrom(JSON.parse(readFileSync(new URL('../fixtures/PlaywrightUpload.json', import.meta.url), 'utf8'))) as CredentialBody
+  return { ...credential, name }
 }
 
 // --- a remembered session, its replica in memory ---------------------------
@@ -88,6 +86,8 @@ if (!stores) {
 check('a remembered session reads through the replica', stores.store.kind === 'replica', stores.store.kind)
 const replica = replicaFor(remembered)
 check('the replica is running for the session', replica !== null)
+// The Space read directly, as a password session reads it
+const direct = directCredentialStore(stores.space)
 
 // --- the first pull ---------------------------------------------------------
 const listed = await stores.store.loadCredentials()
@@ -96,47 +96,48 @@ check('the demo credential carries its tag', listed.find((c) => nameOf(c.body) =
 
 // --- a credential and its tags added through the replica reach the Space ---
 const added = await stores.store.addCredential({ body: fixtureNamed('Replica script credential'), tags: ['Replica'] })
-check('the replica mints a content-derived id', added.cid.length > 10, added.cid)
-const pushed = await until('the credential is pushed', () => readDirect(stores.space, added.cid))
+check('the replica stores the credential under its content cid', added.created && added.cid.length > 10 && added.rid !== added.cid, added)
+check('the same credential added again is the one already there', (await stores.store.addCredential({ body: fixtureNamed('Replica script credential') })).created === false)
+const pushed = await until('the credential is pushed', () => direct.readCredential(added.cid))
 check('the credential added through the replica is readable directly', pushed !== null && nameOf(pushed) === 'Replica script credential')
 const pushedTags = await until('its tags are pushed', async () => {
-  const tags = await readTagsDirect(stores.space, added.cid)
+  const tags = await direct.readTags(added.cid)
   return tags.includes('Replica') ? tags : null
 })
 check('its tags reached the Space', pushedTags?.includes('Replica'), pushedTags)
 await stores.store.setTags(added.cid, ['Replica', 'Second'])
 const retagged = await until('the changed tags are pushed', async () => {
-  const tags = await readTagsDirect(stores.space, added.cid)
+  const tags = await direct.readTags(added.cid)
   return tags.includes('Second') ? tags : null
 })
 check('tags changed through the replica reached the Space', retagged?.includes('Second'), retagged)
 
 // --- a credential added directly reaches the replica ------------------------
-const direct = await addDirect({ space: stores.space, body: fixtureNamed('Direct credential'), tags: ['Direct'] })
+const directAdded = await direct.addCredential({ body: fixtureNamed('Direct credential'), tags: ['Direct'] })
 replica?.reSync()
-const pulled = await until('the direct credential is pulled', () => stores.store.readCredential(direct.cid))
+const pulled = await until('the direct credential is pulled', () => stores.store.readCredential(directAdded.cid))
 check('a credential added directly is readable through the replica', pulled !== null && nameOf(pulled) === 'Direct credential')
-check('its tags came with it', (await stores.store.readTags(direct.cid)).includes('Direct'), await stores.store.readTags(direct.cid))
+check('its tags came with it', (await stores.store.readTags(directAdded.cid)).includes('Direct'), await stores.store.readTags(directAdded.cid))
 
 // --- Trash through the replica ------------------------------------------------
 await trashCredential({ ...stores, cid: added.cid })
-const gone = await until('the deletion is pushed', async () => ((await readDirect(stores.space, added.cid)) === null ? true : null))
+const gone = await until('the deletion is pushed', async () => ((await direct.readCredential(added.cid)) === null ? true : null))
 check('a credential trashed through the replica is deleted from the Space', gone === true)
 const trashed = (await listTrash(stores.space)).find((item) => item.cid === added.cid)
 check('the Trash record holds its body and tags', trashed !== undefined && nameOf(trashed.body) === 'Replica script credential' && trashed.tags.includes('Second'))
 if (trashed) {
   const restored = await restoreFromTrash({ ...stores, item: trashed })
-  const back = await until('the restored credential is pushed', () => readDirect(stores.space, restored.cid))
-  check('a credential restored through the replica is readable directly, under a new id', back !== null && restored.cid !== added.cid)
+  const back = await until('the restored credential is pushed', () => direct.readCredential(restored.cid))
+  check('a credential restored through the replica is readable directly, in a new resource under the same cid', back !== null && restored.cid === added.cid && restored.rid !== added.rid)
   // Both script credentials go, so the account is left with the badge alone
-  for (const cid of [restored.cid, direct.cid]) {
+  for (const cid of [restored.cid, directAdded.cid]) {
     await trashCredential({ ...stores, cid })
     const item = (await listTrash(stores.space)).find((entry) => entry.cid === cid)
     if (item) {
       await discardTrashItem(stores.space, item)
     }
   }
-  await until('the cleanup is pushed', async () => ((await readDirect(stores.space, direct.cid)) === null ? true : null))
+  await until('the cleanup is pushed', async () => ((await direct.readCredential(directAdded.cid)) === null ? true : null))
 }
 await stopReplica()
 

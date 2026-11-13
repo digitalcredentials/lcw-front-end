@@ -105,15 +105,14 @@ async function logInWithPasskey(page: Page) {
   await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible({ timeout: 60_000 });
 }
 
-// The badge fixture (a presentation around one credential) under another
-// title: the credential's own name and its achievement's, which the card
-// shows
+// The badge credential (the one inside the fixture's presentation) under
+// another title: its own name and its achievement's, which the card shows
 async function titled(title: string): Promise<Buffer> {
   const fixture = JSON.parse(await readFile(new URL('./fixtures/PlaywrightUpload.json', import.meta.url), 'utf8'));
   const credential = fixture.verifiableCredential[0];
   credential.name = title;
   credential.credentialSubject.achievement.name = title;
-  return Buffer.from(JSON.stringify(fixture));
+  return Buffer.from(JSON.stringify(credential));
 }
 
 // Adds a credential under the title through the Add Credential dialog's
@@ -534,11 +533,9 @@ test('downloads every document unencrypted as one tar', async ({ page }) => {
       (e) => /\/private-credentials\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
     );
     expect(badge, names.join('\n')).toBeTruthy();
-    // The demo seed stores the credential inside a presentation; either way
-    // the plain document is there, not an envelope
-    const doc = JSON.parse(new TextDecoder().decode(badge!.bytes));
-    expect(doc.jwe).toBeUndefined();
-    const credential = doc.type.includes('VerifiablePresentation') ? [doc.verifiableCredential].flat()[0] : doc;
+    // The plain credential is there, not its encrypted envelope
+    const credential = JSON.parse(new TextDecoder().decode(badge!.bytes));
+    expect(credential.jwe).toBeUndefined();
     expect(credential.type).toContain('VerifiableCredential');
   } finally {
     if (noise.length) {
