@@ -111,7 +111,9 @@ export async function issueRecoveryCode({ session, label = 'Recovery code', coup
 
 // A remembered session's authority over the account log and the roster:
 // the enrolled client's own key, signing as the account.
-export async function enrolledAuthority(session: RememberedSession) {
+// `log`: the account log already verified, so the roster store resolves the
+// account's controller from it instead of downloading the log again
+export async function enrolledAuthority(session: RememberedSession, { log }: { log?: Parameters<typeof accountControllerResolver>[0]['log'] } = {}) {
   const serviceDescription = await serviceDescriptionFor(session.serverUrl)
   const agents = await agentsFromSeed({ seed: session.clientSeed })
   const zcapClient = webvhZcapClient({ keyAgent: agents.keyAgent, did: session.did })
@@ -128,7 +130,7 @@ export async function enrolledAuthority(session: RememberedSession) {
         zcapClient,
         spaceId: session.spaceId,
         serviceDescription,
-        resolveController: accountControllerResolver({ did: session.did, pinStore: visitPins }),
+        resolveController: accountControllerResolver({ did: session.did, pinStore: visitPins, ...(log && { log }) }),
         pinStore: visitPins,
         signer: userKeyRosterLogSigner({ keyAgent: agents.keyAgent }),
       }),

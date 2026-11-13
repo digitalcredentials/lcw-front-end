@@ -75,11 +75,49 @@ export function isCredential(data: unknown): data is CredentialBody {
   return [type ?? []].flat().includes('VerifiableCredential') || (typeof credentialSubject === 'object' && credentialSubject !== null)
 }
 
-const privateCredentials = (space: Space) => space.collection(PRIVATE_CREDENTIALS_COLLECTION)
-const publicCredentials = (space: Space) => space.collection(PUBLIC_CREDENTIALS_COLLECTION, { encryption: 'plaintext' })
+type Collection = ReturnType<Space['collection']>
+
+// One handle per collection and Space: a handle reads the collection's
+// encryption descriptor once and keeps its codec, where a handle per call
+// read the descriptor again for every resource. A handle whose descriptor
+// has fallen behind a rotation (a read meets an epoch it does not know)
+// is replaced by a fresh one and the read tried again, once.
+const handles = new WeakMap<Space, Map<string, Collection>>()
+const PLAINTEXT = { encryption: 'plaintext' } as const
+
+function collectionOf(space: Space, collectionId: string, plaintext = false): Collection {
+  let own = handles.get(space)
+  if (!own) {
+    own = new Map()
+    handles.set(space, own)
+  }
+  let handle = own.get(collectionId)
+  if (!handle) {
+    handle = plaintext ? space.collection(collectionId, PLAINTEXT) : space.collection(collectionId)
+    own.set(collectionId, handle)
+  }
+  return handle
+}
+
+const isUnknownEpoch = (err: unknown) => (err as { name?: string } | null)?.name === 'UnknownEpochError'
+
+async function withCollection<T>(space: Space, collectionId: string, run: (collection: Collection) => Promise<T>, plaintext = false): Promise<T> {
+  try {
+    return await run(collectionOf(space, collectionId, plaintext))
+  } catch (err) {
+    if (!isUnknownEpoch(err)) {
+      throw err
+    }
+    handles.get(space)?.delete(collectionId)
+    return run(collectionOf(space, collectionId, plaintext))
+  }
+}
+
+const privateCredentials = (space: Space) => collectionOf(space, PRIVATE_CREDENTIALS_COLLECTION)
+const publicCredentials = (space: Space) => collectionOf(space, PUBLIC_CREDENTIALS_COLLECTION, true)
 
 async function readJson(space: Space, collectionId: string, id: string): Promise<unknown> {
-  const data = await space.collection(collectionId).resource(id).get()
+  const data = await withCollection(space, collectionId, (collection) => collection.resource(id).get())
   if (data instanceof Blob) {
     try {
       return JSON.parse(await data.text())
@@ -110,13 +148,13 @@ function tagsOf(custom: unknown): string[] {
 }
 
 export async function readTags(space: Space, rid: string): Promise<string[]> {
-  const meta = await privateCredentials(space).resource(rid).meta()
+  const meta = await withCollection(space, PRIVATE_CREDENTIALS_COLLECTION, (collection) => collection.resource(rid).meta())
   return tagsOf(meta?.custom)
 }
 
 // Replaces a resource's tags (its metadata's `name`, if any, is kept)
 export async function setTags(space: Space, rid: string, tags: Iterable<string>): Promise<void> {
-  await privateCredentials(space).resource(rid).setTags(Object.fromEntries(normalizeTags(tags).map((tag) => [tag, ''])))
+  await withCollection(space, PRIVATE_CREDENTIALS_COLLECTION, (collection) => collection.resource(rid).setTags(Object.fromEntries(normalizeTags(tags).map((tag) => [tag, '']))))
 }
 
 // Every tag in use, with the number of credentials carrying it
@@ -165,7 +203,7 @@ export async function loadCredentials(space: Space): Promise<StoredCredential[]>
 
 // Stores a credential in a resource of its own, with its tags
 export async function addCredential({ space, body, tags = [] }: { space: Space; body: CredentialBody; tags?: Iterable<string> }): Promise<{ cid: string; rid: string }> {
-  const { id: rid } = await privateCredentials(space).add(body as unknown as ResourceData)
+  const { id: rid } = await withCollection(space, PRIVATE_CREDENTIALS_COLLECTION, (collection) => collection.add(body as unknown as ResourceData))
   const normalized = normalizeTags(tags)
   if (normalized.length) {
     await setTags(space, rid, normalized)

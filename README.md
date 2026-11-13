@@ -65,7 +65,16 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   (`annexGc.ts`, wallet-core's GC pass, the one FreeWallet runs too): the
   annex Space's `gen-` collections the pointer does not name are deleted,
   each recorded as a GenerationCollect entry in `wallet-activity`. The
-  pass runs after the login, never holds it up, and never fails it. Either
+  pass runs after the login, never holds it up, and never fails it. A
+  sign-in does as little else as it can (every request is signed, and the
+  server verifies the signer's account log for each): the account log it
+  verified is kept for a minute (`authority.ts`) for the steps that follow
+  it, instead of each downloading the log again; the collections sweep
+  that repairs a user-key rotation torn mid-fan-out (a dozen requests)
+  runs only when the roster holds more than one key generation, and once
+  per generation on a browser, which remembers the generation it last
+  swept to (`marks.ts`); and the annex generation is made world-readable
+  once per generation on a browser, not at every visit. Either
   session's keys live in this tab's
   `sessionStorage`: gone when the tab closes, and the CHAPI popup, a window
   of its own, signs the user in itself. **Passkeys** (`passkey.ts`,
@@ -163,7 +172,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   the credentials, encrypted, in collections FreeWallet leaves alone:
   `Trash` (a deleted credential's body and tags until it is restored, in a
   new resource, or discarded) and `dids` (the holder keys of credentials
-  claimed with a did:key).
+  claimed with a did:key). The direct path keeps one handle per collection
+  and Space, so a collection's encryption descriptor is read once for a
+  listing rather than once per credential; a handle whose descriptor has
+  fallen behind a rotation is replaced and the read tried again.
 - **The local replica** (`src/lib/replica/`, `src/lib/credentialStore.ts`):
   a remembered session reads and writes its credentials through a copy of
   `private-credentials`, `public-credentials` and `wallet-activity` kept in
@@ -177,7 +189,11 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   no plaintext, and the store decrypts on read with ciphers built from the
   collection's descriptor and the session's user key (rebuilt when the key
   rotates). Reads are local once the first pull has settled, which a
-  sign-in waits for; the list reloads when a pull brings a change. A
+  sign-in waits for; the list reloads when a pull brings a change. The
+  Space's collections and their first key epochs are provisioned before
+  the replica's first start on a browser (a no-op on an account either
+  wallet set up, at the cost of two dozen requests), and again only when
+  the ciphers cannot be built from what the Space serves. A
   password session and the CHAPI popup read and write the Space directly
   through the same `CredentialStore` interface; `Trash` and `dids` are
   direct in every session. A sign-out stops the replica and keeps its rows;
