@@ -168,6 +168,17 @@ export function getSession(): Session | null {
   }
 }
 
+// Listeners for the session changing in this tab: set (a sign-in, a user
+// key adopted mid-session) or cleared (a sign-out)
+const sessionListeners = new Set<(session: Session | null) => void>()
+
+export function subscribeSession(listener: (session: Session | null) => void): () => void {
+  sessionListeners.add(listener)
+  return () => sessionListeners.delete(listener)
+}
+
+const notifySession = (session: Session | null) => sessionListeners.forEach((listener) => listener(session))
+
 export function setSession(session: Session): void {
   const userKey = { id: session.userKey.id, secret: toBase64url(session.userKey.secret) }
   let stored: Stored
@@ -190,10 +201,12 @@ export function setSession(session: Session): void {
     }
   }
   storage().setItem(SESSION_KEY, JSON.stringify(stored))
+  notifySession(session)
 }
 
 export function clearSession(): void {
   storage().removeItem(SESSION_KEY)
+  notifySession(null)
 }
 
 // The session's account Space URL, in the form the rest of the wallet uses.

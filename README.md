@@ -154,6 +154,26 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   credential's body and tags until it is restored, as a new resource, or
   discarded) and `dids` (the holder keys of credentials claimed with a
   did:key).
+- **The local replica** (`src/lib/replica/`, `src/lib/credentialStore.ts`):
+  a remembered session reads and writes its credentials through a copy of
+  `private-credentials`, `public-credentials` and `wallet-activity` kept in
+  this browser's IndexedDB (an RxDB database per account Space, Dexie
+  storage, pws-sync's synced-document schema), FreeWallet's way. pws-sync's
+  RxDB replication pulls the Space's changes feed every 30 seconds, on
+  reconnection and on request, and pushes each local row as a conditional
+  write with this browser's writer id; a row is the server's stored body
+  unchanged, so on an encrypted collection the replica holds the EDV
+  envelope and the encrypted metadata envelope (where the tags live) and
+  no plaintext, and the store decrypts on read with ciphers built from the
+  collection's descriptor and the session's user key (rebuilt when the key
+  rotates). Reads are local once the first pull has settled, which a
+  sign-in waits for; the list reloads when a pull brings a change. A
+  password session and the CHAPI popup read and write the Space directly
+  through the same `CredentialStore` interface; `Trash` and `dids` are
+  direct in every session. A sign-out stops the replica and keeps its rows;
+  **Forget this browser** deletes the database and the writer id with the
+  client key record. RxDB loads on demand, so the eager bundle stays free
+  of it.
 - **My Credentials** (`src/pages/WalletPage.tsx`): the wallet opens on
   every credential of the account as a card, newest first, with a filter
   bar of the tags in use (each with its count), **Untagged**, and
@@ -371,7 +391,11 @@ scratch batch space, under a passkey session), the sign-in credentials
 page, a passkey added at sign-in that keeps the browser signed in until it
 is forgotten (a virtual authenticator with the PRF extension, through the
 Chrome DevTools Protocol), the Connected wallets page listing that
-browser, the phone layout, and the data download (the tar is read back
+browser, the local replica keeping that browser's list in step with the
+Space (a credential added there is listed by a password session in a
+second browser context, one added in the password session is pulled into
+the passkey tab's list with no navigation, and both go through Trash and
+out of the Space), the phone layout, and the data download (the tar is read back
 and the demo credential found decrypted in it) — with console errors and
 failed requests captured for debugging. Skipped unless `DEPLOYED_URL` is
 set. Run it after every deploy. Each run leaves one passkey credential and
@@ -416,6 +440,13 @@ from a password session and disconnects the client it enrolled.
 test issuer as the demo account's `did:web` projection, checking the
 projection the identity domain serves, the issuer's `acceptedMethods`, and
 that the issued credential is bound to the account DID; nothing is stored.
+`npm run test:replica` (`DEMO_EMAIL=...`) runs the local replica outside a
+browser (RxDB's memory storage) on a remembered session opened with a
+stand-in passkey: the first pull lists the demo credential with its tag, a
+credential and its tags added through the replica reach the Space, a
+credential added directly reaches the replica, the Trash flow round-trips
+through it, and the passkey and its client are removed again (two
+rotations per run).
 
 ## Deploy
 

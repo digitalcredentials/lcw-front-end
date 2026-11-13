@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getToken, clearToken } from '../lib/auth';
-import { getSessionWASClient, type SessionClient } from '../lib/was';
 import AppShell from '../components/AppShell';
 import LoadingLabel from '../components/LoadingLabel';
 import FailureText from '../components/FailureText';
@@ -11,25 +10,19 @@ import ShareCredentialModal from '../components/ShareCredentialModal';
 import JSONInput from '../components/JSONInput';
 import { plugins, useWalletHost } from '../plugins';
 import { suggestTag } from '../lib/collectionName';
+import { tagCounts } from '../lib/credentials';
 import {
-  addCredential,
-  createPublicCopy,
-  deleteCredential,
   discardTrashItem,
-  findPublicCopy,
   listTrash,
-  loadCredentials,
   normalizeTags,
-  publicCopyUrl,
-  readCredential,
-  removePublicCopy,
-  restoreCredential,
-  setTags,
-  tagCounts,
+  restoreFromTrash,
+  sessionStores,
+  trashCredential,
   type CredentialBody,
+  type SessionStores,
   type StoredCredential,
   type TrashItem,
-} from '../lib/credentials';
+} from '../lib/credentialStore';
 import {
   credentialFrom,
   credentialName,
@@ -125,7 +118,9 @@ export default function WalletPage() {
   const [tagDraft, setTagDraft] = useState('');
   const [savingTags, setSavingTags] = useState(false);
 
-  const session = useMemo(() => getSessionWASClient(), []);
+  // The stores for the session: the replica of a remembered session, or
+  // the Space directly; opened once, and reloaded on what reaches them
+  const session = useMemo(() => sessionStores(), []);
 
   const handleError = useCallback((action: WalletAction, err: unknown, setter?: (f: Failure) => void) => {
     if (isSessionEnded(err)) {
@@ -157,7 +152,7 @@ export default function WalletPage() {
         navigate('/login', { replace: true });
         return;
       }
-      const [stored, trashed] = await Promise.all([loadCredentials(s.space), listTrash(s.space)]);
+      const [stored, trashed] = await Promise.all([s.store.loadCredentials(), listTrash(s.space)]);
       setCredentials(stored);
       setTrash(trashed);
     } catch (err) {
@@ -170,6 +165,22 @@ export default function WalletPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A change that reached the store from elsewhere (another wallet's write,
+  // pulled into the replica) reloads the list
+  useEffect(() => {
+    let unsubscribe = () => {};
+    let cancelled = false;
+    void session.then((s) => {
+      if (s && !cancelled) {
+        unsubscribe = s.store.subscribe(() => void load());
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [session, load]);
 
   // Clicking My Credentials or the wallet title navigates here even when
   // this page is already mounted: that pushes a new history entry (a new
@@ -225,7 +236,7 @@ export default function WalletPage() {
 
   // --- actions ---------------------------------------------------------------
 
-  async function withSession<T>(action: WalletAction, run: (s: SessionClient) => Promise<T>, setter?: (f: Failure) => void): Promise<T | undefined> {
+  async function withSession<T>(action: WalletAction, run: (s: SessionStores) => Promise<T>, setter?: (f: Failure) => void): Promise<T | undefined> {
     try {
       const s = await session;
       if (!s) {
@@ -260,7 +271,7 @@ export default function WalletPage() {
     }
     const credential = credentialFrom(body) ?? (body as Record<string, unknown>);
     const done = await withSession('upload', async (s) => {
-      await addCredential({ space: s.space, body: body as CredentialBody, tags: [suggestTag(credential as Record<string, unknown>)] });
+      await s.store.addCredential({ body: body as CredentialBody, tags: [suggestTag(credential as Record<string, unknown>)] });
       return true;
     }, setUploadError);
     setUploading(false);
@@ -279,7 +290,7 @@ export default function WalletPage() {
       if (card.trash) {
         await discardTrashItem(s.space, card.trash);
       } else {
-        await deleteCredential({ space: s.space, cid: card.id });
+        await trashCredential({ ...s, cid: card.id });
       }
       return true;
     });
@@ -298,7 +309,7 @@ export default function WalletPage() {
     setRestoring(card.id);
     setError(null);
     const done = await withSession('restore', async (s) => {
-      await restoreCredential({ space: s.space, item: card.trash! });
+      await restoreFromTrash({ ...s, item: card.trash! });
       return true;
     });
     setRestoring(null);
@@ -314,7 +325,7 @@ export default function WalletPage() {
     setSavingTags(true);
     setError(null);
     const done = await withSession('save-tags', async (s) => {
-      await setTags(s.space, card.id, normalized);
+      await s.store.setTags(card.id, normalized);
       return true;
     });
     setSavingTags(false);
@@ -751,7 +762,7 @@ export default function WalletPage() {
 
       {/* Sharing publishes a plaintext copy in the public-credentials
           collection under the credential's own id, so sharing again brings
-          the same link back (src/lib/credentials.ts) */}
+          the same link back (src/lib/credentialStore.ts) */}
       {shareTarget && (
         <ShareCredentialModal
           resourceName={titleOf(shareTarget)}
@@ -760,25 +771,25 @@ export default function WalletPage() {
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            return (await findPublicCopy(s.space, shareTarget.id)) ? publicCopyUrl(s.space, shareTarget.id) : null;
+            return (await s.store.findPublicCopy(shareTarget.id)) ? s.store.publicCopyUrl(shareTarget.id) : null;
           }}
           onCreatePublicLink={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            const body = await readCredential(s.space, shareTarget.id);
+            const body = await s.store.readCredential(shareTarget.id);
             if (!body) {
               throw new CredentialMissingError('The storage returned nothing for this credential.');
             }
-            return createPublicCopy(s.space, shareTarget.id, body);
+            return s.store.createPublicCopy(shareTarget.id, body);
           }}
           onUnshare={async () => {
             const s = await session;
             if (!s) {
               throw new Error('Your session has expired. Sign in again.');
             }
-            await removePublicCopy(s.space, shareTarget.id);
+            await s.store.removePublicCopy(shareTarget.id);
           }}
           onLoadCredential={async () => shareTarget.body}
           onClose={() => setShareTarget(null)}
