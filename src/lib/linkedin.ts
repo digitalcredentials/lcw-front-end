@@ -27,25 +27,28 @@ export interface CredentialLike {
   };
 }
 
-// Stored wallet resources are either a presentation envelope
-// ({verifiableCredential: [vc]}) or a bare credential. Returns the credential
-// when the data looks like one, else null.
-export function credentialFrom(data: unknown): CredentialLike | null {
+// Every credential in a document handed to the wallet (pasted, uploaded,
+// scanned, or returned by an issuer): the credentials of a presentation
+// envelope ({verifiableCredential: [...]}), or the document itself when it
+// is one. A stored credential is the bare credential, never an envelope.
+export function credentialsFrom(data: unknown): CredentialLike[] {
   if (typeof data !== 'object' || data === null) {
-    return null;
+    return [];
   }
-  const envelope = data as { verifiableCredential?: unknown[] };
-  const candidate = (Array.isArray(envelope.verifiableCredential)
-    ? envelope.verifiableCredential[0]
-    : data) as CredentialLike;
-  if (typeof candidate !== 'object' || candidate === null) {
-    return null;
-  }
-  const types = [candidate.type ?? []].flat();
-  if (!types.includes('VerifiableCredential') && !candidate.credentialSubject) {
-    return null;
-  }
-  return candidate;
+  const envelope = data as { verifiableCredential?: unknown };
+  const candidates = Array.isArray(envelope.verifiableCredential) ? envelope.verifiableCredential : [data];
+  return candidates.filter((candidate): candidate is CredentialLike => {
+    if (typeof candidate !== 'object' || candidate === null) {
+      return false;
+    }
+    const { type, credentialSubject } = candidate as CredentialLike;
+    return [type ?? []].flat().includes('VerifiableCredential') || !!credentialSubject;
+  });
+}
+
+// The first credential in such a document, or null when there is none
+export function credentialFrom(data: unknown): CredentialLike | null {
+  return credentialsFrom(data)[0] ?? null;
 }
 
 function parseDate(value: unknown): Date | null {

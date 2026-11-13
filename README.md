@@ -138,22 +138,27 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   wallet offers to issue a **welcome credential** (the test issuer's LCW
   Sandbox Badge) and, in the same flow, to enable the browser wallet
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
-- **Credentials, in FreeWallet's layout** (`src/lib/credentials.ts`): every
-  credential is one encrypted resource in the account Space's
-  `private-credentials` collection, under the id the encrypting codec
-  derives from its envelope (its cid), so a credential stored by either
-  wallet is seen by both. A shared credential has a plaintext copy under
-  the same cid in `public-credentials`, a collection readable by anyone;
-  claims, shares, unshares and deletes each append an entry to
-  `wallet-activity`. The holder's **tags** on a credential are the keys of
-  its own metadata's `custom.tags` map (the PWS resource metadata object,
-  encrypted with the credential), so they travel with it and no other
-  wallet overwrites them; FreeWallet has no tags of its own and leaves the
-  map alone. This wallet's own records sit beside the credentials,
-  encrypted, in collections FreeWallet leaves alone: `Trash` (a deleted
-  credential's body and tags until it is restored, as a new resource, or
-  discarded) and `dids` (the holder keys of credentials claimed with a
-  did:key).
+- **Credentials, in FreeWallet's layout** (`src/lib/credentials.ts`,
+  `src/lib/credentialStore.ts`): every credential is stored as the bare
+  Verifiable Credential (a presentation handed to the wallet is unwrapped,
+  each credential in it stored on its own), one encrypted resource in the
+  account Space's `private-credentials` collection, so a credential stored
+  by either wallet is seen by both. The resource id derives from the
+  ciphertext; the credential itself is known by its **content cid**, the
+  hash of the canonicalized credential (pws-client's `cidFrom`), the same
+  in every wallet, and a credential stored again is the one already there.
+  A shared credential has a plaintext copy under its content cid in
+  `public-credentials`, a collection readable by anyone; claims, shares,
+  unshares and deletes each append an entry to `wallet-activity` naming the
+  credential by its content cid. The holder's **tags** on a credential are
+  the keys of its resource's own metadata `custom.tags` map (the PWS
+  resource metadata object, encrypted with the credential), so they travel
+  with it and no other wallet overwrites them; FreeWallet has no tags of
+  its own and leaves the map alone. This wallet's own records sit beside
+  the credentials, encrypted, in collections FreeWallet leaves alone:
+  `Trash` (a deleted credential's body and tags until it is restored, in a
+  new resource, or discarded) and `dids` (the holder keys of credentials
+  claimed with a did:key).
 - **The local replica** (`src/lib/replica/`, `src/lib/credentialStore.ts`):
   a remembered session reads and writes its credentials through a copy of
   `private-credentials`, `public-credentials` and `wallet-activity` kept in
@@ -411,10 +416,12 @@ passphrase in the spec file) is registered by `npm run register:demo`
 (`DEMO_EMAIL=... REGISTRATION_CODE=...`), which runs the wallet's own
 registration from the shell; its confirmation email still has to be clicked.
 Its account Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`):
-the LCW Experience Badge fixture in `private-credentials`, tagged
-"University of Toronto", stored the way the wallet stores credentials
-(`src/lib/credentials.ts`). Both scripts run the
-identity layer under `tsx`, and both are idempotent. `npm run test:identity`
+the LCW Experience Badge (the credential inside the fixture's presentation)
+in `private-credentials`, tagged "University of Toronto", stored the way
+the wallet stores credentials (`src/lib/credentials.ts`); `-- --reset`
+first deletes every stored credential, Trash record and public copy, so
+the Space holds the badge alone. Both scripts run the identity layer under
+`tsx`, and both are idempotent. `npm run test:identity`
 (`WAS_URL=... COUPON=...`, or `WAS_URL=... PROVISIONING=open` against a
 server that creates Spaces by id) exercises the identity layer against a
 PWS server without the back end: signup, the transient login, a passkey

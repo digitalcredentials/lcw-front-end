@@ -205,7 +205,7 @@ export default function ChapiPage() {
     try {
       const tags = normalizeTags(tagsDraft.split(','));
       const displayName = credentialName(claimRef.current.credential);
-      await saveCredential({ tags, envelope: claimRef.current.envelope });
+      await saveCredential({ tags, credential: claimRef.current.credential });
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',

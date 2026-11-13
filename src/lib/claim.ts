@@ -13,9 +13,10 @@ import type { ResourceData } from '@interop/pws-client'
 const documentLoader = securityLoader().build()
 
 export interface ClaimResult {
-  // The issued credential
+  // The issued credential (what gets stored)
   credential: Record<string, unknown>
-  // The full presentation envelope the issuer returned (what gets stored)
+  // The presentation the issuer returned it in (handed back to the
+  // issuer's page by the CHAPI flow)
   envelope: Record<string, unknown>
   // The wallet DID the credential is bound to
   holderDid: string
@@ -119,13 +120,12 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   return { credential, envelope, holderDid }
 }
 
-// Saves the claimed credential (in its presentation envelope, the shape
-// other wallet contents use) in the account's private-credentials, with
-// the holder's tags. Resolves to its cid.
-export async function saveCredential({ tags, envelope }: { tags: string[]; envelope: Record<string, unknown> }): Promise<{ cid: string }> {
+// Saves the claimed credential in the account's private-credentials, with
+// the holder's tags. Resolves to its content cid.
+export async function saveCredential({ tags, credential }: { tags: string[]; credential: Record<string, unknown> }): Promise<{ cid: string }> {
   const stores = await sessionStores()
   if (!stores) {
     throw new Error('UNAUTHORIZED')
   }
-  return stores.store.addCredential({ body: envelope, tags })
+  return stores.store.addCredential({ body: credential, tags })
 }
