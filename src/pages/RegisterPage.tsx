@@ -11,6 +11,8 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [registrationCode, setRegistrationCode] = useState('');
+  // "Contact me with news and updates": unticked unless the tester ticks it
+  const [contactOptIn, setContactOptIn] = useState(false);
   const [error, setError] = useState('');
   // Set once the back end has started the registration: the form gives way
   // to a "Check your email" state, so a second click cannot register again
@@ -38,6 +40,7 @@ export default function RegisterPage() {
         email,
         passphrase: password,
         registrationCode,
+        contactOptIn,
         config: identityConfig(),
         onStage: setStage,
       });
@@ -127,6 +130,20 @@ export default function RegisterPage() {
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               placeholder="Your registration code"
             />
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              id="contactOptIn"
+              type="checkbox"
+              checked={contactOptIn}
+              onChange={(e) => setContactOptIn(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <label htmlFor="contactOptIn" className="text-sm text-gray-700">
+              Contact me with news and updates
+              <span className="block text-xs text-gray-500">You can change this later in Settings.</span>
+            </label>
           </div>
 
           {error && (

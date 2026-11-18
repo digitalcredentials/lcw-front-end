@@ -74,12 +74,16 @@ export async function signUp({
   email,
   passphrase,
   registrationCode,
+  contactOptIn = false,
   config,
   onStage,
 }: {
   email: string
   passphrase: string
   registrationCode: string
+  // The register page's "Contact me with news and updates", stored by the
+  // back end with the account
+  contactOptIn?: boolean
   config: SignupConfig
   onStage?: (stage: string) => void
 }): Promise<SignupResult> {
@@ -170,7 +174,7 @@ export async function signUp({
         const res = await fetch(`${config.apiBase}/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, did, registrationCode }),
+          body: JSON.stringify({ email, did, registrationCode, contactOptIn }),
         })
         const body = (await res.json().catch(() => ({}))) as ErrorBody
         if (!res.ok) {

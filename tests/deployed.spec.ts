@@ -250,6 +250,45 @@ test('lists the sign-in credentials under Settings, and adds a passkey there', a
   }
 });
 
+test('the register page asks about news and updates, unticked', async ({ page }) => {
+  await page.goto(`${DEPLOYED_URL}/#/register`);
+  const contact = page.getByLabel('Contact me with news and updates');
+  await expect(contact).toBeVisible();
+  await expect(contact).not.toBeChecked();
+});
+
+test('shows the contact choice under Settings, and changes it', async ({ page }) => {
+  const noise = capture(page);
+  await logIn(page);
+  const open = async () => {
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('link', { name: 'Email updates' }).click();
+    await expect(page.getByRole('heading', { name: 'Email updates' })).toBeVisible();
+  };
+  const choice = page.getByLabel('Contact me with news and updates');
+  try {
+    await open();
+    await expect(choice).toBeVisible();
+    const before = await choice.isChecked();
+    // Changed, saved, and still changed when the page reads it back
+    await choice.setChecked(!before);
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('status')).toContainText('Saved');
+    await page.reload();
+    await open();
+    await expect(choice).toBeChecked({ checked: !before });
+    // The demo account's choice as it was
+    await choice.setChecked(before);
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('status')).toContainText('Saved');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  } finally {
+    if (noise.length) {
+      console.log(`--- browser noise ---\n${noise.join('\n')}`);
+    }
+  }
+});
+
 // The flows that need a remembered session (a session signed in with a
 // passkey signs as the account: managing spaces, staying signed in) share
 // one browser context, so each run leaves one passkey credential and one

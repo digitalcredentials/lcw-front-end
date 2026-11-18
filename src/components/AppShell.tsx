@@ -274,6 +274,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               >
                 Connected wallets
               </Link>
+              <Link
+                to="/settings/email"
+                className={itemClass(pathname === '/settings/email')}
+                title="Whether we may email you with news and updates"
+              >
+                Email updates
+              </Link>
               <button
                 onClick={() => setExportOpen(true)}
                 title="Save every document in your spaces to one unencrypted file"
