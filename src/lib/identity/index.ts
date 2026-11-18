@@ -65,16 +65,18 @@ export async function registerAccount({
   email,
   passphrase,
   registrationCode,
+  contactOptIn,
   config,
   onStage,
 }: {
   email: string
   passphrase: string
   registrationCode: string
+  contactOptIn?: boolean
   config: IdentityConfig
   onStage?: (stage: string) => void
 }): Promise<string> {
-  const { message } = await signUp({ email, passphrase, registrationCode, config, onStage })
+  const { message } = await signUp({ email, passphrase, registrationCode, contactOptIn, config, onStage })
   return message
 }
 

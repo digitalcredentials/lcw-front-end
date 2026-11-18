@@ -7,6 +7,7 @@ import WalletPage from './pages/WalletPage'
 import PluginPage from './pages/PluginPage'
 import CredentialsPage from './pages/CredentialsPage'
 import WalletsPage from './pages/WalletsPage'
+import EmailUpdatesPage from './pages/EmailUpdatesPage'
 import RequireAuth from './components/RequireAuth'
 import LoadingLabel from './components/LoadingLabel'
 import { isAuthenticated } from './lib/auth'
@@ -87,6 +88,14 @@ function App() {
           element={
             <RequireAuth>
               <WalletsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/email"
+          element={
+            <RequireAuth>
+              <EmailUpdatesPage />
             </RequireAuth>
           }
         />
