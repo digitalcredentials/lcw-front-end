@@ -4,6 +4,7 @@ import {
   ClientAnnexGenerationUnavailableError,
   attributePointerEntryRung,
   clientAnnexDidParts,
+  clientAnnexRungHash,
   delegatedClientsDelegationSpaceId,
   delegatedClientsPointer,
   embeddedGenerationDelegation,
@@ -12,6 +13,7 @@ import {
   ladderSignedGenerationDelegationMinter,
   mintPointedClientAnnexGeneration,
   movePointerAsLadder,
+  readClientAnnexLogOrAbsent,
   standingRungHashesOf,
   type ClientAnnexWriteStore,
 } from '@interop/wallet-core/clientAnnex'
@@ -97,7 +99,9 @@ const GENERATION_RENEWAL_ENTRIES = 24
 // Mints a fresh generation from this credential's ladder seed, through the
 // record's sibling delegation, and moves the account's pointer to it with
 // a bridge-signed entry: the same block the readiness ensure runs when a
-// credential is not admitted, run here because the generation is long.
+// credential is not admitted, run here because the generation is long, or
+// because a retirement must leave a rung out. `standingRungHashes` are the
+// other credentials' annex rungs the fresh genesis admits.
 async function renewGeneration({
   baseServerUrl,
   spaceId,
@@ -108,7 +112,7 @@ async function renewGeneration({
   standingZcap,
   sibling,
   bridge,
-  superseded,
+  standingRungHashes,
   serviceDescription,
 }: {
   baseServerUrl: string
@@ -120,7 +124,7 @@ async function renewGeneration({
   standingZcap: UnlockCredential['standing']['agents']['zcapClient']
   sibling: IZcap
   bridge: IZcap
-  superseded: PublishedWebvhLog
+  standingRungHashes: string[]
   serviceDescription: Awaited<ReturnType<typeof serviceDescriptionFor>>
 }): Promise<{ clientAnnexDid: string; generationDelegation: IZcap }> {
   const idStore = delegatedWebvhLogStore({ baseServerUrl, spaceId, collectionId: ID_COLLECTION.id, delegation: bridge, zcapClient: standingZcap, pinStore: visitPins, serviceDescription })
@@ -132,12 +136,84 @@ async function renewGeneration({
     controller: accountDid,
     ladderSeed,
     capability: sibling,
-    standingRungHashes: await standingRungHashesOf(superseded),
+    standingRungHashes,
     mintGenerationDelegation: ladderSignedGenerationDelegationMinter({ accountDid, ladderSeed, baseServerUrl, spaceId }),
     point: (clientAnnexDid: string) => movePointerAsLadder({ idStore, ladderSeed, clientAnnexDid, accountDid }),
     pinStore: visitPins,
   })
   return { clientAnnexDid: generation.clientAnnexDid, generationDelegation: generation.generationDelegation }
+}
+
+// Replaces the pointed generation from this visit, for a retirement that
+// must take a retired credential's annex rung out of the annex when no
+// strike entry can: the fresh generation restates the old one's admitted
+// rungs less the named retired ones, or none at all when the retired
+// credential's seed is not in hand ('unnamed'). The visit's key is then
+// enrolled into the fresh generation, since the server admits a generation
+// delegation only to the generation the account points at; the session
+// carries on as the fresh annex DID.
+export async function swapTransientGeneration({
+  session,
+  retiredLadderSeeds,
+}: {
+  session: TransientSession
+  retiredLadderSeeds: Uint8Array[] | 'unnamed'
+}): Promise<TransientSession> {
+  const baseServerUrl = session.serverUrl
+  const serviceDescription = await serviceDescriptionFor(baseServerUrl)
+  const verified = await verifyAccountLog({ did: session.did, pinStore: visitPins })
+  const pointed = delegatedClientsPointer({ doc: verified.doc })
+  if (!pointed) {
+    throw new TransientLoginUnavailableError({ reason: 'no-clientAnnex-generation' })
+  }
+  const { spaceId: annexSpaceId, generationId } = clientAnnexDidParts({ did: pointed })
+  const standingZcap = (await agentsFromSeed({ seed: session.standingClientSeed })).zcapClient
+  const generationStore = (collectionId: string) =>
+    delegatedWebvhLogStore({ baseServerUrl, spaceId: annexSpaceId, collectionId, delegation: session.siblingDelegation, zcapClient: standingZcap, pinStore: visitPins, serviceDescription })
+  let standingRungHashes: string[] = []
+  if (retiredLadderSeeds !== 'unnamed') {
+    const superseded = await readClientAnnexLogOrAbsent({ store: generationStore(generationId), expectedDid: pointed })
+    if (superseded) {
+      const retired = new Set(await Promise.all(retiredLadderSeeds.map((ladderSeed) => clientAnnexRungHash({ ladderSeed }))))
+      standingRungHashes = (await standingRungHashesOf(superseded)).filter((hash) => !retired.has(hash))
+    }
+  }
+  const renewed = await renewGeneration({
+    baseServerUrl,
+    spaceId: session.spaceId,
+    annexSpaceId,
+    accountDid: session.did,
+    accountLog: verified.log,
+    ladderSeed: session.ladderSeed,
+    standingZcap,
+    sibling: session.siblingDelegation,
+    bridge: session.bridgeDelegation,
+    standingRungHashes,
+    serviceDescription,
+  })
+  const { keyAgent } = await agentsFromSeed({ seed: session.visitSeed })
+  const { clientAnnexDid, doc } = await enrollTransientClient({
+    readAccountDocument: async () => (await verifyAccountLog({ did: session.did, pinStore: visitPins })).doc,
+    storeForGenerationId: (id) => refuseMissingGeneration(generationStore(id)),
+    ladderSeed: session.ladderSeed,
+    transientKeyMultibase: clientSigningKeyMultibase({ keyAgent }),
+    mintGenerationDelegation: async () => {
+      throw new TransientLoginUnavailableError({ reason: 'no-generation-delegation' })
+    },
+  })
+  const generationDelegation = embeddedGenerationDelegation({ doc }) ?? renewed.generationDelegation
+  // World-readable, as a sign-in leaves its generation (see the visit below)
+  const freshId = clientAnnexDidParts({ did: clientAnnexDid }).generationId
+  await plaintextCollection({
+    pws: new PwsClient({ baseServerUrl, zcapClient: standingZcap, serviceDescription }),
+    spaceId: annexSpaceId,
+    collectionId: freshId,
+    capability: session.siblingDelegation,
+  })
+    .setPublic()
+    .then(() => rememberMark(generationPublicMark(freshId), '1'))
+    .catch(() => undefined)
+  return { ...session, clientAnnexDid, generationDelegation }
 }
 
 // Enters the account a standing record points at, for this visit.
@@ -235,7 +311,7 @@ export async function openTransientSession({
         standingZcap,
         sibling,
         bridge,
-        superseded: generationLog,
+        standingRungHashes: await standingRungHashesOf(generationLog),
         serviceDescription,
       })
       healed = renewed.generationDelegation

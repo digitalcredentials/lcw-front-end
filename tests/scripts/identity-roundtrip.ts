@@ -24,13 +24,17 @@ import { addStandingCredential } from '../../src/lib/identity/standing'
 import { openRememberedSession } from '../../src/lib/identity/remembered'
 import { memoryClientKeyStore } from '../../src/lib/identity/clientKeyRecord'
 import { issueRecoveryCode, recoverWithCode } from '../../src/lib/identity/recovery'
-import { readUnlockMethods, updateUnlockMethods, upsertMethod } from '../../src/lib/identity/unlockMethods'
+import { readUnlockMethods, updateUnlockMethods, upsertMethod, type PasskeyUnlockMethod } from '../../src/lib/identity/unlockMethods'
 import { getSession, sessionAgents, setSession, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
 import { pointerOf } from '../../src/lib/identity/records'
 import { CLIENT_NAME, approveConnectCode, disconnectWallet, listConnectedWallets, nameOwnClient, renameConnectedWallet } from '../../src/lib/identity/clients'
 import { MethodNotRemovableError, retireMethod } from '../../src/lib/identity/retire'
 import { completeEnrollmentCore, mintEnrollmentRequest } from '@interop/wallet-core/enrollment'
+import { clientAnnexDidParts, clientAnnexRungAdmitted, delegatedClientsPointer } from '@interop/wallet-core/clientAnnex'
+import { delegatedWebvhLogStore, verifyAccountLog } from '@interop/wallet-core/webvh'
+import { agentsFromSeed } from '@interop/pws-client/identity'
+import { visitPins } from '../../src/lib/identity/pins'
 import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 
 const WAS = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
@@ -79,6 +83,46 @@ if (!found) {
 const entry = await time('transient login', () => openTransientSession({ credential, found, serverUrl: WAS }))
 const session: TransientSession = { ...entry.session, email, coupon }
 check('the session signs as the client annex', session.clientAnnexDid.startsWith('did:webvh:') && session.clientAnnexDid !== session.did)
+
+// Whether the generation the account points at admits a credential's annex
+// rung, read through the passphrase's sibling delegation
+async function annexAdmits(ladderSeed: Uint8Array): Promise<boolean> {
+  const { doc } = await verifyAccountLog({ did: session.did, pinStore: visitPins })
+  const pointed = delegatedClientsPointer({ doc })
+  if (!pointed) {
+    return false
+  }
+  const { spaceId, generationId } = clientAnnexDidParts({ did: pointed })
+  const { zcapClient } = await agentsFromSeed({ seed: session.standingClientSeed })
+  const store = delegatedWebvhLogStore({ baseServerUrl: WAS, spaceId, collectionId: generationId, delegation: session.siblingDelegation, zcapClient, pinStore: visitPins, serviceDescription: await serviceDescriptionFor(WAS) })
+  return clientAnnexRungAdmitted({ store, ladderSeed, expectedDid: pointed })
+}
+
+// A passkey credential added from a transient session and listed in the
+// registry, with its ladder seed read back from its record
+async function addListedPasskey(from: TransientSession, label: string) {
+  const added = await deriveUnlockCredential({ secret: randomBytes(32), kdf: PASSKEY_KDF })
+  const established = await addStandingCredential({ session: from, credential: added, lowEntropy: false, email })
+  const method: PasskeyUnlockMethod = {
+    type: 'passkey',
+    label,
+    createdAt: new Date().toISOString(),
+    credentialId: toBase64url(randomBytes(16)),
+    transports: ['internal'],
+    backupEligibility: false,
+    backupState: false,
+    unlockSpaceId: established.unlockSpaceId,
+    ...(established.manageCapability && { manageCapability: established.manageCapability }),
+    ...established.standingFields,
+  }
+  const reach = await registryOf(from)
+  await updateUnlockMethods({ pws: reach.pws, spaceId: from.spaceId, userKey: from.userKey, capability: reach.capability, mutate: (existing) => upsertMethod({ record: existing!, entry: method }) })
+  const record = await fetchStandingRecord({ credential: added, serverUrl: WAS })
+  if (!record?.ladderSeed) {
+    throw new Error(`no record for ${label}`)
+  }
+  return { method, ladderSeed: record.ladderSeed }
+}
 const first = await registryOf(session)
 const registry = await readUnlockMethods({ pws: first.pws, spaceId: session.spaceId, userKey: session.userKey, capability: first.capability })
 check('the registry lists the passphrase', registry?.record.methods.some((m) => m.type === 'passphrase'), registry?.record.methods.map((m) => m.type))
@@ -218,13 +262,27 @@ if (!current) {
 }
 check('the remembered session adopted the rotated user key', current.userKey.id !== rememberedNow.userKey.id)
 
+// --- the client annex at a retirement, the enrolled arm: a second passkey,
+// removed from the remembered session without its seed (no tap), leaves
+// the pointed generation for a fresh one that restates nothing ---
+const adding = await time('passphrase login to add a second passkey', () => openTransientSession({ credential, found, serverUrl: WAS }))
+const passkeyB = await time('add a second passkey credential', () => addListedPasskey({ ...adding.session, email, coupon }, 'Second passkey'))
+check('the second passkey is admitted to the pointed generation', await annexAdmits(passkeyB.ladderSeed))
+setSession(current)
+const removedB = await time('remove the second passkey from the remembered session', () => retireMethod({ session: current, method: passkeyB.method }))
+check('the second passkey is retired and its unlock Space deleted', removedB.completion === 'complete' && removedB.unlockSpace === 'deleted', `${removedB.completion}, unlock Space ${removedB.unlockSpace}`)
+check('without its seed the generation is replaced (enrolled arm)', removedB.annex === 'swapped', removedB.annex)
+check('the fresh generation does not admit the second passkey', !(await annexAdmits(passkeyB.ladderSeed)))
+check("the fresh generation admits the remembered session's passkey", await annexAdmits(passkeyFound.ladderSeed!))
+
 // --- removing sign-in methods: the recovery codes and the passkey retired
 // from a passphrase session (the ladder arm), the session adopting each
 // rotation; a credential cannot retire itself ---
 const retiring = await time('passphrase login before the retirements', () => openTransientSession({ credential, found, serverUrl: WAS }))
 let acting: TransientSession = { ...retiring.session, email, coupon }
 setSession(acting)
-check('the passphrase session adopted the rotated user key at sign-in', acting.userKey.id === current.userKey.id)
+check('the passphrase session adopted the rotated user key at sign-in', acting.userKey.id === removedB.session.userKey.id)
+check('the passphrase admitted itself again at sign-in after the swap', await annexAdmits(found.ladderSeed!))
 const before = await registryOf(acting)
 const listed = (await readUnlockMethods({ pws: before.pws, spaceId: session.spaceId, userKey: acting.userKey, capability: before.capability }))?.record.methods ?? []
 const selfRefusal = await retireMethod({ session: acting, method: listed.find((m) => m.type === 'passphrase')! }).then(
@@ -234,10 +292,36 @@ const selfRefusal = await retireMethod({ session: acting, method: listed.find((m
 check('the acting passphrase refuses to retire itself', selfRefusal === 'acting', selfRefusal)
 // Each retirement deletes the credential's unlock Space through a
 // DELETE-only child of its management capability (the container rule's
-// Space-delete exception), so a retired credential finds no record
+// Space-delete exception), so a retired credential finds no record.
+// The passkey first, its seed in hand (as its tap would give it): one
+// entry strikes its annex rung from the pointed generation
+const passkeyEntry = listed.find((m) => m.type === 'passkey')!
+check('the passkey is admitted to the pointed generation', await annexAdmits(passkeyFound.ladderSeed!))
+const passkeyOutcome = await time('retire the passkey credential, its seed in hand', () => retireMethod({ session: acting, method: passkeyEntry, retiredLadderSeed: passkeyFound.ladderSeed! }))
+check('the passkey credential is retired and its unlock Space deleted', passkeyOutcome.completion === 'complete' && passkeyOutcome.unlockSpace === 'deleted', `${passkeyOutcome.completion}, unlock Space ${passkeyOutcome.unlockSpace}`)
+check('with its seed in hand the annex rung is struck', passkeyOutcome.annex === 'struck', passkeyOutcome.annex)
+check('the pointed generation no longer admits the passkey', !(await annexAdmits(passkeyFound.ladderSeed!)))
+acting = passkeyOutcome.session as TransientSession
+check('the retired passkey finds no record', (await fetchStandingRecord({ credential: passkey, serverUrl: WAS })) === null)
+// The ladder arm's swap: a third passkey, removed from this passphrase
+// session without its seed. The session carries on as the fresh annex DID,
+// its visit key enrolled there, through every step that follows
+const passkeyC = await time('add a third passkey credential', () => addListedPasskey(acting, 'Third passkey'))
+check('the third passkey is admitted to the pointed generation', await annexAdmits(passkeyC.ladderSeed))
+const annexBefore = acting.clientAnnexDid
+const removedC = await time('remove the third passkey from the passphrase session', () => retireMethod({ session: acting, method: passkeyC.method }))
+check('the third passkey is retired and its unlock Space deleted', removedC.completion === 'complete' && removedC.unlockSpace === 'deleted', `${removedC.completion}, unlock Space ${removedC.unlockSpace}`)
+check('without its seed the generation is replaced (ladder arm)', removedC.annex === 'swapped', removedC.annex)
+acting = removedC.session as TransientSession
+check('the passphrase session moved to the fresh generation', acting.clientAnnexDid !== annexBefore)
+check('the fresh generation does not admit the third passkey', !(await annexAdmits(passkeyC.ladderSeed)))
+check('the fresh generation admits the passphrase', await annexAdmits(found.ladderSeed!))
+// The recovery codes: with only this session's rung admitted now, nothing
+// in the annex is left to take out
 for (const method of listed.filter((m) => m.type === 'recovery-code')) {
   const outcome = await time(`retire a recovery code (${method.label})`, () => retireMethod({ session: acting, method }))
   check(`the recovery code "${method.label}" is retired and its unlock Space deleted`, outcome.completion === 'complete' && outcome.unlockSpace === 'deleted', `${outcome.completion}, unlock Space ${outcome.unlockSpace}`)
+  check(`the recovery code "${method.label}" leaves the annex as it was`, outcome.annex === 'clean', outcome.annex)
   acting = outcome.session as TransientSession
 }
 const spent = await recoverWithCode({ code: issued.code, serverUrl: WAS }).then(
@@ -245,11 +329,6 @@ const spent = await recoverWithCode({ code: issued.code, serverUrl: WAS }).then(
   (err: { name?: string }) => err.name ?? String(err)
 )
 check('a retired recovery code finds no record', spent === 'no record', spent)
-const passkeyEntry = listed.find((m) => m.type === 'passkey')!
-const passkeyOutcome = await time('retire the passkey credential', () => retireMethod({ session: acting, method: passkeyEntry }))
-check('the passkey credential is retired and its unlock Space deleted', passkeyOutcome.completion === 'complete' && passkeyOutcome.unlockSpace === 'deleted', `${passkeyOutcome.completion}, unlock Space ${passkeyOutcome.unlockSpace}`)
-acting = passkeyOutcome.session as TransientSession
-check('the retired passkey finds no record', (await fetchStandingRecord({ credential: passkey, serverUrl: WAS })) === null)
 const afterRetirements = await registryOf(acting)
 const registryAfter = await readUnlockMethods({ pws: afterRetirements.pws, spaceId: session.spaceId, userKey: acting.userKey, capability: afterRetirements.capability })
 check('the registry lists the passphrase alone', registryAfter?.record.methods.map((m) => m.type).join(',') === 'passphrase', registryAfter?.record.methods.map((m) => m.type))

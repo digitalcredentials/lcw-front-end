@@ -293,11 +293,14 @@ export async function replaceRecoveryCode({ session, config }: { session: Sessio
 export async function replacePassphrase({ session, passphrase, config }: { session: Session; passphrase: string; config: Pick<IdentityConfig, 'apiBase' | 'serverUrl'> }): Promise<Session> {
   const registry = await readRegistry(session)
   const previous = registry?.methods.find((method) => method.type === 'passphrase')
+  // A session opened with the previous password holds its ladder seed, so
+  // the retirement can strike that password's annex rung
+  const retiredLadderSeed = previous && session.kind === 'transient' && session.unlockSpaceId === previous.unlockSpaceId ? session.ladderSeed : undefined
   await changePassphrase({ session, passphrase })
   let next = await loginWithPassphrase({ email: session.email, passphrase, config })
   if (previous && previous.unlockSpaceId !== next.unlockSpaceId) {
     try {
-      next = (await retireMethod({ session: next, method: previous })).session
+      next = (await retireMethod({ session: next, method: previous, ...(retiredLadderSeed && { retiredLadderSeed }) })).session
     } catch (err) {
       console.error('The previous password could not be retired; it still opens the account:', err)
     }
