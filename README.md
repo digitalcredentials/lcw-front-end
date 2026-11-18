@@ -377,7 +377,13 @@ deployed URLs (`VITE_API_BASE_URL` for lcw-back-end, `VITE_WAS_BASE_URL` for
 the WAS server's `/spaces`, `VITE_TEMPLATES_API_BASE`, `VITE_ISSUER_API_BASE`
 for the test issuer that grants the welcome credential, `VITE_BATCH_API_BASE`
 for the batch issuer's notify endpoint, and `VITE_STATUS_API_BASE` for the
-status list service). The full local stack
+status list service). `VITE_WELCOME_URL` is the deployment's welcome page
+(`https://welcome.alpha.lcw.app` for alpha.lcw.app): a signed-out visitor
+who opens the wallet's plain address is sent there (`src/lib/welcomePage.ts`,
+the check in `src/App.tsx`), while `#` addresses (`#/login`, `#/register`),
+paths the hosting serves itself (`/request`), a session in the tab and a
+browser a passkey remembers open the wallet as before. The sandbox sets
+none, so its plain address opens the sign-in form. The full local stack
 is:
 
 - **lcw-back-end** `sam local start-api --port 3001 ...` — the login API
