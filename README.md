@@ -1,5 +1,10 @@
 # lcw-front-end
 
+> [!IMPORTANT]
+> **Alpha.** This is part of the Learner Credential Wallet alpha, an early test
+> version. It may change without notice. We read issues, but may not answer or
+> fix them during the alpha.
+
 The web front end for the Learner Credential Wallet (LCW): a React + TypeScript
 + Vite app for signing in with a passphrase that unlocks the account's keys,
 browsing the account's
@@ -554,3 +559,7 @@ non-default behaviors: `/manifest.json` (CORS for CHAPI, via S3 bucket CORS +
 the managed CORS-S3Origin origin-request policy + CachingDisabled) and
 `/chapi.html` + `/index.html` (CachingDisabled, so the shells are always
 fresh). This config lives only on the live distribution, not in IaC.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
