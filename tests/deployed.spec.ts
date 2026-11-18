@@ -275,7 +275,9 @@ test('shows the contact choice under Settings, and changes it', async ({ page })
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('status')).toContainText('Saved');
     await page.reload();
-    await open();
+    // The reload lands back on Email updates with the Settings menu already
+    // open, so clicking Settings here would close it.
+    await expect(page.getByRole('heading', { name: 'Email updates' })).toBeVisible();
     await expect(choice).toBeChecked({ checked: !before });
     // The demo account's choice as it was
     await choice.setChecked(before);
