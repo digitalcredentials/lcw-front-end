@@ -7,9 +7,14 @@ import type { IZcap } from '@interop/data-integrity-core/zcap'
 import type { ZcapClient } from '@interop/ezcap'
 import {
   clientAnnexDidParts,
+  clientAnnexRungHash,
   delegatedClientsPointer,
   ensureGenerationDelegationCurrent,
   ladderSignedGenerationDelegationMinter,
+  readClientAnnexLogOrAbsent,
+  retireClientAnnexRung,
+  standingRungHashesOf,
+  swapClientAnnexGeneration,
 } from '@interop/wallet-core/clientAnnex'
 import {
   accountCollectionStores,
@@ -36,6 +41,7 @@ import { actingAuthority } from './standing'
 import { sessionAgents, sessionEncryption, setSession, type Session } from './session'
 import { serviceDescriptionFor } from './service'
 import { visitPins } from './pins'
+import { swapTransientGeneration } from './transient'
 
 // What a ceremony on the account (approving a wallet, disconnecting one,
 // removing a sign-in method) needs from the session, in the two forms the
@@ -307,4 +313,90 @@ export async function renewGenerationDelegation({
     return { session: next, renewed }
   }
   return { session, renewed }
+}
+
+export type AnnexRetirement = 'struck' | 'clean' | 'swapped' | 'skipped'
+
+// Takes a retired credential's annex rung out of the client annex. The rung
+// is the same key on every generation and each new generation restates the
+// rungs the old one admitted, so without this a retired credential could
+// keep writing the pointed generation and every later one.
+//
+// With the retired credential's ladder seed in hand, one entry signed by
+// this session's credential strikes the rung from the pointed generation.
+// Without it (a passkey removed without its tap, a recovery code) nothing
+// names the retired rung's hash, so a generation admitting any rung other
+// than this session's own is replaced by one that restates nothing; each
+// other credential admits itself again at its next transient sign-in, by
+// minting a generation of its own. A session with no standing credential
+// (a remembered one opened on a record alone) holds no seed to act with.
+export async function retireAnnexInventory({
+  session,
+  retiredLadderSeed,
+}: {
+  session: Session
+  retiredLadderSeed?: Uint8Array
+}): Promise<{ session: Session; annex: AnnexRetirement }> {
+  const standing = standingOf(session)
+  if (!standing) {
+    return { session, annex: 'skipped' }
+  }
+  const serviceDescription = await serviceDescriptionFor(session.serverUrl)
+  const verified = await verifyAccountLog({ did: session.did, pinStore: visitPins })
+  const pointed = delegatedClientsPointer({ doc: verified.doc })
+  if (!pointed) {
+    return { session, annex: 'skipped' }
+  }
+  const { spaceId: annexSpaceId, generationId } = clientAnnexDidParts({ did: pointed })
+  const standingAgents = await agentsFromSeed({ seed: standing.clientSeed })
+  const store = delegatedWebvhLogStore({
+    baseServerUrl: session.serverUrl,
+    spaceId: annexSpaceId,
+    collectionId: generationId,
+    delegation: standing.siblingDelegation,
+    zcapClient: standingAgents.zcapClient,
+    pinStore: visitPins,
+    serviceDescription,
+  })
+  if (retiredLadderSeed) {
+    try {
+      const { struck } = await retireClientAnnexRung({ store, retiredLadderSeed, actingLadderSeed: standing.ladderSeed, expectedDid: pointed })
+      return { session, annex: struck ? 'struck' : 'clean' }
+    } catch (err) {
+      if ((err as { name?: string })?.name !== 'ClientAnnexRungUncommittedError') {
+        throw err
+      }
+      // This session's rung is not admitted to sign the strike: the swap
+      // below leaves the retired rung out instead
+    }
+  } else {
+    const published = await readClientAnnexLogOrAbsent({ store, expectedDid: pointed })
+    const own = await clientAnnexRungHash({ ladderSeed: standing.ladderSeed })
+    const others = published ? (await standingRungHashesOf(published)).filter((hash) => hash !== own) : []
+    if (others.length === 0) {
+      return { session, annex: 'clean' }
+    }
+  }
+  const retiredLadderSeeds: Uint8Array[] | 'unnamed' = retiredLadderSeed ? [retiredLadderSeed] : 'unnamed'
+  if (session.kind === 'transient') {
+    const next = await swapTransientGeneration({ session, retiredLadderSeeds })
+    setSession(next)
+    return { session: next, annex: 'swapped' }
+  }
+  // A remembered session invokes as the account, so it writes the annex
+  // Space and signs the re-point with its own keys
+  const enrolled = await enrolledAuthority(session, { log: verified.log })
+  await swapClientAnnexGeneration({
+    pws: enrolled.pws,
+    baseServerUrl: session.serverUrl,
+    accountSpaceId: session.spaceId,
+    account: { did: session.did, doc: verified.doc },
+    idStore: enrolled.idStore(),
+    signer: { kind: 'enrolled', updateKeys: session.webvhUpdateKeys },
+    zcapClient: enrolled.zcapClient,
+    ladderSeed: standing.ladderSeed,
+    retiredLadderSeeds,
+    replicaServerDids: [],
+  })
+  return { session, annex: 'swapped' }
 }
