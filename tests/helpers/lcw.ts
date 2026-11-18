@@ -45,7 +45,9 @@ export async function logIn(page: Page) {
     sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
     localStorage.setItem(`lcw_passkey_offer_dismissed:${email}`, 'true');
   }, DEMO_EMAIL);
-  await page.goto(`${DEPLOYED_URL}/`);
+  // The sign-in page by its own address: a deployment with a welcome page
+  // sends a signed-out visitor at the plain address there
+  await page.goto(`${DEPLOYED_URL}/#/login`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -80,7 +82,7 @@ export async function virtualAuthenticator(page: Page): Promise<void> {
 export async function logInWithPasskey(page: Page) {
   await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await virtualAuthenticator(page);
-  await page.goto(`${DEPLOYED_URL}/`);
+  await page.goto(`${DEPLOYED_URL}/#/login`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();

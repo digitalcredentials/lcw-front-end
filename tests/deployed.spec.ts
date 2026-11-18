@@ -189,7 +189,7 @@ test('offers the welcome credential on first open after registration', async ({ 
     sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
     localStorage.setItem('lcw_welcome_pending', email);
   }, DEMO_EMAIL);
-  await page.goto(`${DEPLOYED_URL}/`);
+  await page.goto(`${DEPLOYED_URL}/#/login`);
   await page.getByLabel('Email').fill(DEMO_EMAIL);
   await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
