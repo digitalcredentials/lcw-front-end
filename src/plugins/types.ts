@@ -1,26 +1,15 @@
 import type { ComponentType } from 'react';
 import type { PwsClient } from '@interop/pws-client';
-import type { SpaceInfo } from '../lib/spaces';
 
 // What the wallet supplies to every plugin. A plugin is a React component
 // bundled into the wallet (a published npm package, or a file in this repo)
 // that receives this host object and nothing else: no env vars, no storage,
 // no login flow. Capabilities a single plugin needs beyond these are wired in
-// that plugin's registry entry (see batchIssuerPlugin.ts), not added here.
+// that plugin's registry entry (see Verifier.tsx), not added here.
 export interface WalletHost {
-  // The signed-in session's WAS client; null when the session is gone.
+  // The signed-in session's PWS client; null when the session is gone.
   getSession(): Promise<{ client: PwsClient } | null>;
-  // The WAS server's /spaces API, authenticated as the session's DID. Only
-  // batch spaces are created: the account has its one credential space.
-  spaces: {
-    create(type: 'batch', name: string): Promise<string>;
-    list(): Promise<SpaceInfo[]>;
-    remove(spaceUrl: string): Promise<void>;
-  };
-  // Base URLs of the deployed services (trailing slash removed).
-  statusApiBase: string;
-  templatesApiBase: string;
-  // Called when a WAS or back-end call is rejected as unauthorized; the
+  // Called when a PWS or back-end call is rejected as unauthorized; the
   // wallet clears the session and returns to the login page.
   onUnauthorized(): void;
 }
@@ -29,7 +18,7 @@ export interface WalletHost {
 // AppShell behind RequireAuth (so the component may use the router like any
 // wallet page), with a link in the left sidebar unless `menu` is false.
 export interface WalletPluginPage {
-  // Route path, e.g. '/batches'. Also the sidebar link target.
+  // Route path, e.g. '/verify'. Also the sidebar link target.
   path: string;
   // Sidebar link tooltip.
   description?: string;

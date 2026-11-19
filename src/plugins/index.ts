@@ -1,4 +1,3 @@
-import { batchIssuerPlugin } from './batchIssuerPlugin';
 import { verifierPlugin } from './verifierPlugin';
 import type { WalletPlugin } from './types';
 
@@ -6,11 +5,11 @@ import type { WalletPlugin } from './types';
 // generates a route for each plugin page and AppShell a sidebar link for
 // each page that wants one; the credential detail view renders every
 // credentialDetail slot. To add a plugin: install its package, write a
-// registry entry like batchIssuerPlugin.ts that maps the WalletHost onto
-// the plugin's own adapter, and append it here. A plugin whose JSX carries
+// registry entry like verifierPlugin.ts that maps the WalletHost onto the
+// plugin's own inputs, and append it here. A plugin whose JSX carries
 // Tailwind classes also needs an @source line in src/index.css so those
 // classes are compiled.
-export const plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin];
+export const plugins: WalletPlugin[] = [verifierPlugin];
 
 // The pages the plugins contribute, with their plugin.
 export const pluginPages = plugins.flatMap((plugin) =>

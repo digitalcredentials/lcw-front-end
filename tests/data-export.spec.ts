@@ -172,8 +172,8 @@ test('packDataExport lays the documents out by space and collection, with a mani
         id: 'dcc-was-2',
         url: 'https://was.example/space/dcc-was-2',
         name: 'Main Space',
-        types: ['Space', 'BatchSpace'],
-        collections: [{ id: 'batches', encrypted: false, documents: [{ id: 'b/1', bytes: utf8.encode('{}'), extension: 'json' }] }],
+        types: ['Space'],
+        collections: [{ id: 'notes', encrypted: false, documents: [{ id: 'n/1', bytes: utf8.encode('{}'), extension: 'json' }] }],
       },
       { id: 'dcc-was-3', url: 'https://was.example/space/dcc-was-3', types: ['Space'], collections: [] },
     ],
@@ -184,7 +184,7 @@ test('packDataExport lays the documents out by space and collection, with a mani
   expect(entries.filter((e) => e.type === '0').map((e) => e.name)).toEqual([
     'manifest.json',
     'Main Space/Badges/z6one.json',
-    'Main Space (2)/batches/b 1.json',
+    'Main Space (2)/notes/n 1.json',
   ]);
   expect(manifest.spaces.map((s) => s.folder)).toEqual(['Main Space', 'Main Space (2)', 'dcc-was-3']);
   expect(manifest.spaces[0].collections).toEqual([

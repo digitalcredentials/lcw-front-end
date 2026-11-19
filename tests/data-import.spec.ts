@@ -66,7 +66,7 @@ test('readDataExport finds the credentials of a download with their tags, skippi
           { id: 'wallet-activity', encrypted: true, documents: [{ id: 'a1', bytes: json({ type: ['Create'] }), extension: 'json' }] },
         ],
       },
-      { id: 'dcc-pws-2', url: 'https://was.example/space/dcc-pws-2', name: 'Batch', types: ['Space', 'BatchSpace'], collections: [{ id: 'batch', encrypted: false, documents: [{ id: 'batch', bytes: json({}), extension: 'json' }] }] },
+      { id: 'dcc-pws-2', url: 'https://was.example/space/dcc-pws-2', name: 'Other', types: ['Space'], collections: [{ id: 'notes', encrypted: false, documents: [{ id: 'note', bytes: json({}), extension: 'json' }] }] },
     ],
   });
   const contents = readDataExport(bytes);
