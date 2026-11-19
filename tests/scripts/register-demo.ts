@@ -1,6 +1,6 @@
 // Registers the deployed demo account the way the wallet's register page
-// does (src/lib/identity): creates the account and client-annex Spaces with
-// the registration code as the coupon, runs the credential-anchored
+// does (src/lib/identity): creates the account Space with the registration
+// code and the client-annex Space under it, runs the credential-anchored
 // genesis on the passphrase, records the email with the back end (which
 // emails the confirmation link), and promotes the Spaces to the account's
 // did:webvh. The confirmation link still has to be clicked before login

@@ -14,7 +14,7 @@ import { ID_COLLECTION } from '@interop/wallet-core/space'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import type { UnlockCredential } from './credential'
 import { bindStandingRecord, pointerOf } from './records'
-import type { TransientSession } from './session'
+import { sessionSpaceCreation, type TransientSession } from './session'
 import { serviceDescriptionFor } from './service'
 import { visitPins } from './pins'
 import type { StandingUnlockFields } from './unlockMethods'
@@ -27,6 +27,10 @@ import type { StandingUnlockFields } from './unlockMethods'
 // escrows the user key to it, its sibling delegation reaches the annex
 // generation the new credential's rung is committed into, and the visit's
 // annex identity invokes the roster under the generation delegation.
+//
+// The new credential's unlock Space is created under the account: the
+// visit's annex identity narrows the generation delegation into the
+// creating capability for the credential's unlock did:key (`./provision`).
 //
 // Order: the new credential's record first (inert until its ladder VM is
 // published, so a tear leaves an orphan a retry overwrites), the annex
@@ -103,7 +107,6 @@ export async function addStandingCredential({
   credential,
   lowEntropy,
   email,
-  coupon = session.coupon,
 }: {
   session: TransientSession
   credential: UnlockCredential
@@ -111,9 +114,6 @@ export async function addStandingCredential({
   // passkey's PRF-derived key publishes verbatim
   lowEntropy: boolean
   email?: string
-  // The coupon the new credential's unlock Space is created with: the
-  // session's (the registration token) unless given
-  coupon?: string
 }): Promise<EstablishedCredential> {
   const acting = await actingAuthority(session)
   const { standing } = credential
@@ -136,7 +136,7 @@ export async function addStandingCredential({
   const bound = await bindStandingRecord({
     credential,
     serverUrl: session.serverUrl,
-    coupon,
+    creation: await sessionSpaceCreation(session),
     controller: boundAgent.id.split('#')[0],
     email,
     pointer,

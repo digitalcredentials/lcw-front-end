@@ -76,7 +76,7 @@ function refuseMissingGeneration(store: ClientAnnexWriteStore): ClientAnnexWrite
 }
 
 export interface TransientEntry {
-  session: Omit<TransientSession, 'email' | 'coupon'>
+  session: Omit<TransientSession, 'email' | 'provisioning'>
   verified: VerifiedAccountLog
   // The user-key roster's descriptor as read, and every generation of the
   // user key it wraps to the credential, oldest first (empty when they

@@ -14,13 +14,14 @@ import { accountCollectionStores, userKeyRosterDescriptorStore, userKeyRosterLog
 import { WALLET_SPACE_NAME } from '@interop/wallet-core/space'
 import { memoryResourceLogPinStore } from '@interop/vh-resource-log'
 import { passphraseCredential, type UnlockCredential } from './credential'
-import { createSpaceWithCoupon } from './provision'
+import { createAccountSpace, createSpaceUnderAccount, spaceCreationBy, type Provisioning } from './provision'
 import { bindStandingRecord, fetchStandingRecord, pointerOf } from './records'
 import { emptyRegistry, standingFieldsOf, updateUnlockMethods, upsertPassphraseMethod } from './unlockMethods'
 import { serviceDescriptionFor } from './service'
 
 // Registration: the credential-anchored account genesis, FreeWallet's
-// signup, wrapped in this wallet's coupon and email registration.
+// signup, wrapped in this wallet's registration code and email
+// registration.
 //
 // The passphrase is the anchoring credential. Its standing record is
 // written first (the ladder seed must be recoverable before anything
@@ -33,21 +34,26 @@ import { serviceDescriptionFor } from './service'
 // the passphrase is recorded in the unlock-methods registry and the email
 // is registered with the back end.
 //
-// The three Spaces (the account Space, the client-annex Space, the
-// passphrase's unlock Space) are created here with the coupon, under the
-// did:keys the ceremony then finds in control, so the server's coupon-less
-// paths and their cap are never used: the ceremony's Space steps are
-// ensures that adopt a Space already in place (`./provision`).
+// The three Spaces are created here, under the did:keys the ceremony then
+// finds in control, so the server's coupon-less paths and their cap are
+// never used: the ceremony's Space steps are ensures that adopt a Space
+// already in place (`./provision`). The registration code is sent once, for
+// the account Space. The client-annex Space and the passphrase's unlock
+// Space are created under the account Space, which the bootstrap did:key
+// controls until the promotion: the first by that key itself, the second
+// by the passphrase's unlock did:key with a capability the bootstrap key
+// delegates to it.
 
 export interface SignupConfig {
   // lcw-back-end, which registers the email; absent, no email is registered
   // (a test against a bare PWS server)
   apiBase?: string
   serverUrl: string
-  // How the Spaces come to exist: created here with the registration code
-  // as the coupon (this server), or left to the ceremony's create-by-id (a
-  // server with open provisioning, such as the reference server)
-  provisioning?: 'coupon' | 'open'
+  // How the Spaces come to exist: created here, the account Space with the
+  // registration code and the others under it (this server, the default),
+  // or left to the ceremony's create-by-id (a server with open
+  // provisioning, such as the reference server)
+  provisioning?: Provisioning
 }
 
 export const ANNEX_SPACE_NAME = 'Client annex'
@@ -108,12 +114,14 @@ export async function signUp({
   const spaceId = mintSpaceId()
   const annexSpaceId = mintSpaceId()
 
-  const coupon = (config.provisioning ?? 'coupon') === 'coupon' ? registrationCode : undefined
-  if (coupon) {
+  const underAccount = (config.provisioning ?? 'account') === 'account'
+  if (underAccount) {
     onStage?.('Creating your storage space')
-    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon, id: spaceId, controller: bootstrapDid, name: WALLET_SPACE_NAME, type: ['Space'] })
-    await createSpaceWithCoupon({ zcapClient: bootstrapZcap, serverUrl, coupon, id: annexSpaceId, controller: bootstrapDid, name: ANNEX_SPACE_NAME, type: [...CLIENT_ANNEX_SPACE_TYPE] })
+    await createAccountSpace({ zcapClient: bootstrapZcap, serverUrl, registrationCode, id: spaceId, controller: bootstrapDid, name: WALLET_SPACE_NAME, type: ['Space'] })
+    await createSpaceUnderAccount({ zcapClient: bootstrapZcap, serverUrl, accountSpaceId: spaceId, id: annexSpaceId, controller: bootstrapDid, name: ANNEX_SPACE_NAME, type: [...CLIENT_ANNEX_SPACE_TYPE] })
   }
+  // The passphrase's unlock Space, created at the record's first bind
+  const creation = underAccount ? spaceCreationBy({ zcapClient: bootstrapZcap, serverUrl, accountSpaceId: spaceId }) : undefined
 
   // The sibling delegation into the annex Space, which names the Space the
   // ceremony then adopts rather than minting one
@@ -136,7 +144,7 @@ export async function signUp({
       recipientKid: credential.standing.recipientKid,
       keyAgreementKey: credential.standing.agents.keyAgreementKey,
     },
-    bindRecord: (bind) => bindStandingRecord({ credential, serverUrl, coupon, email, ladderSeed, ...bind }),
+    bindRecord: (bind) => bindStandingRecord({ credential, serverUrl, creation, email, ladderSeed, ...bind }),
     rosterStoreFor: ({ did, log }) =>
       userKeyRosterDescriptorStore({
         baseServerUrl: serverUrl,

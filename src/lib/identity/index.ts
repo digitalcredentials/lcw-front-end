@@ -47,15 +47,14 @@ export interface LoginResult {
   verified: boolean
   email: string
   controller: string
-  token?: string
 }
 
 export const invalidCredentials = () => Object.assign(new Error('Invalid email or password.'), { status: 401 })
 
 // Proves the session to the back end: the acting identity signs the login
-// (the enrolled client as the account, or the visit's annex identity),
-// and the registration token comes back as the session's coupon.
-async function backEndLogin({ session, email, config }: { session: Omit<Session, 'email' | 'coupon'>; email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<LoginResult> {
+// (the enrolled client as the account, or the visit's annex identity), and
+// the account's email comes back as the back end holds it.
+async function backEndLogin({ session, email, config }: { session: Omit<Session, 'email' | 'provisioning'>; email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<LoginResult> {
   const { zcapClient } = await sessionAgents({ ...session, email } as Session)
   const response = await zcapClient.request({ url: `${config.apiBase}/login`, method: 'POST', action: 'write', json: { email } })
   return response.data as LoginResult
@@ -93,7 +92,7 @@ async function enterTransiently({
 }): Promise<TransientSession> {
   const { session, userKeyGenerations, rosterDescriptor, verified } = await openTransientSession({ credential, found, serverUrl: config.serverUrl })
   const login = await backEndLogin({ session, email, config })
-  const opened: TransientSession = { ...session, email: login.email ?? email, coupon: login.token }
+  const opened: TransientSession = { ...session, email: login.email ?? email }
   seedVerifiedAccountLog(opened.did, verified)
   await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
   return opened
@@ -184,7 +183,7 @@ export async function loginWithPasskeySecret({
   }
   const { session, enrolled, userKeyGenerations, rosterDescriptor, verified } = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
   const login = await backEndLogin({ session, email, config })
-  const opened: RememberedSession = { ...session, email: login.email ?? email, coupon: login.token }
+  const opened: RememberedSession = { ...session, email: login.email ?? email }
   seedVerifiedAccountLog(opened.did, verified)
   await settleAfterRotation({ session: opened, generations: userKeyGenerations, rosterDescriptor })
   if (enrolled) {
@@ -203,7 +202,7 @@ export async function loginWithRecoveryCode({ email, code, config }: { email: st
     throw Object.assign(new Error('That recovery code is not valid.'), { status: 401 })
   }
   const login = await backEndLogin({ session: recovered.session, email, config })
-  return { ...recovered.session, email: login.email ?? email, coupon: login.token }
+  return { ...recovered.session, email: login.email ?? email }
 }
 
 export { readRegistry, updateRegistry }
@@ -375,7 +374,7 @@ export async function addPasskeyCredential({
     throw new Error('The passkey credential was not found after it was added.')
   }
   const remembered = await openRememberedSession({ credential, found, serverUrl: config.serverUrl, store })
-  const opened: RememberedSession = { ...remembered.session, email: session.email, coupon: session.coupon }
+  const opened: RememberedSession = { ...remembered.session, email: session.email, ...(session.provisioning && { provisioning: session.provisioning }) }
   seedVerifiedAccountLog(opened.did, remembered.verified)
   if (remembered.enrolled) {
     await settleOwnClientName(opened)

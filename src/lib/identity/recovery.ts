@@ -9,7 +9,7 @@ import { addUserKeyRosterRecipient, userKeyRosterDescriptorStore, userKeyRosterL
 import type { UnlockCredential } from './credential'
 import { provisionUnlockSpace } from './provision'
 import { delegateUnlockManagement, fetchStandingRecord, pointerOf, type StandingRecord } from './records'
-import type { Session, RememberedSession, TransientSession } from './session'
+import { sessionSpaceCreation, type Session, type RememberedSession, type TransientSession } from './session'
 import { actingAuthority } from './standing'
 import { serviceDescriptionFor } from './service'
 import { visitPins } from './pins'
@@ -43,10 +43,10 @@ export interface IssuedRecoveryCode {
 }
 
 // Issues a new recovery code for the account from a live session. The
-// code's unlock Space is created with the coupon (the session's
-// registration token unless given), so the server's capped coupon-less
-// path is not used.
-export async function issueRecoveryCode({ session, label = 'Recovery code', coupon = session.coupon }: { session: Session; label?: string; coupon?: string }): Promise<IssuedRecoveryCode> {
+// code's unlock Space is created under the account, with a capability the
+// session delegates to the code's unlock did:key, so the server's capped
+// coupon-less path is not used.
+export async function issueRecoveryCode({ session, label = 'Recovery code' }: { session: Session; label?: string }): Promise<IssuedRecoveryCode> {
   const code = generateRecoveryCode()
   const credential = await recoveryCredential(code)
   const { client, unlock } = credential
@@ -68,7 +68,7 @@ export async function issueRecoveryCode({ session, label = 'Recovery code', coup
     signer: unlock.recordSigner,
     bindingMacKey: client.bindingMacKey,
   })
-  await provisionUnlockSpace({ credential, serverUrl, coupon })
+  await provisionUnlockSpace({ credential, serverUrl, creation: await sessionSpaceCreation(session) })
   await ensureUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   await putUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
   const manageCapability = await delegateUnlockManagement({ credential, serverUrl, to: session.did })

@@ -284,20 +284,17 @@ function isNameRefused(error: unknown): boolean {
     || /#(reserved-id|invalid-id|id-conflict)$/.test(type ?? '')
 }
 
-// The storage server's answer to a new Space when the account's coupon (its
-// registration token) has no uses left or has expired.
-const COUPON_REQUIRED = 'https://github.com/digitalcredentials/was-server-aws#coupon-required'
-
 // Turns a failure into a sentence saying what failed and what the person can
 // do. It names a cause only where the error shows it, and otherwise says to
 // try again.
 export function describeError(action: WalletAction, error: unknown): Failure {
   const detail = technicalDetail(error)
   // The summary, not the error: an HTTP client's error keeps the request it
-  // sent, body included (a new Space's coupon, an uploaded credential), and
+  // sent, body included (the registration code at signup, an uploaded
+  // credential), and
   // the console outlives a sign-out in the same tab
   console.error(`Wallet: ${action} failed: ${detail}`)
-  const { status, name, type } = readFailure(error)
+  const { name } = readFailure(error)
   const service = serviceFor(action, error)
   if (error instanceof PlainError) {
     return { text: error.message, detail: error.detail }
@@ -319,9 +316,6 @@ export function describeError(action: WalletAction, error: unknown): Failure {
   // same error is no fault of the person's.
   if (name === 'CollectionExistsError' && (action === 'create-collection' || action === 'claim-collection')) {
     return { text: 'You already have a collection with this name. Choose a different name.', detail }
-  }
-  if (action === 'create-space' && status === 403 && type === COUPON_REQUIRED) {
-    return { text: `${FAILED[action]} Your account can't create more spaces right now.`, detail }
   }
   if ((action === 'create-collection' || action === 'claim-collection') && isNameRefused(error)) {
     return { text: "That name can't be used for a collection. Choose a different name.", detail }
