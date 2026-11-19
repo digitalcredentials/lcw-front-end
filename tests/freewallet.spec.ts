@@ -35,7 +35,16 @@ async function logInToFreeWallet(page: Page, { remember }: { remember: boolean }
       (window as unknown as { __E2E_REMEMBER_BROWSER__?: boolean }).__E2E_REMEMBER_BROWSER__ = true;
     });
   }
-  await page.locator('input[type="password"]').fill(ACCOUNT_PASSPHRASE);
+  // In a tab that was signed in, FreeWallet draws its login form again
+  // shortly after the address changes, which empties a field filled before
+  // that, and Log in with an empty field does nothing. The passphrase is
+  // filled until it stays.
+  const passphrase = page.locator('input[type="password"]');
+  await expect(async () => {
+    await passphrase.fill(ACCOUNT_PASSPHRASE);
+    await page.waitForTimeout(500);
+    await expect(passphrase).toHaveValue(ACCOUNT_PASSPHRASE, { timeout: 100 });
+  }).toPass({ timeout: 30_000 });
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
 }
 
@@ -51,13 +60,12 @@ async function addInFreeWallet(page: Page, title: string) {
   await expect(page.getByText(title)).toBeVisible({ timeout: 60_000 });
 }
 
-// The signing keys of the clients this wallet lists under Connected wallets
+// The signing keys of the clients this wallet lists under Connected wallets,
+// as the page lists them when it is opened: by address from another page,
+// so that it loads again
 async function connectedWalletKeys(lcw: Page): Promise<string[]> {
-  const settings = lcw.getByRole('button', { name: 'Settings' });
-  if ((await settings.getAttribute('aria-expanded')) !== 'true') {
-    await settings.click();
-  }
-  await lcw.getByRole('link', { name: 'Connected wallets' }).click();
+  await lcw.goto(`${DEPLOYED_URL}/#/files`);
+  await lcw.goto(`${DEPLOYED_URL}/#/settings/wallets`);
   const cards = lcw.locator('[data-wallet-key]');
   await expect(cards.first()).toBeVisible({ timeout: 60_000 });
   return cards.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-wallet-key') ?? ''));
@@ -99,21 +107,11 @@ test('FreeWallet and this wallet share the account Space', async ({ browser }) =
     });
 
     await test.step('disconnecting FreeWallet here refuses its next login', async () => {
-      // FreeWallet enrolls its browser as a client after its login has
-      // landed, so the list is read again until the client is on it. On an
-      // account as small as the run's own, everything above is over before
-      // that entry is published.
-      let enrolled: string[] = [];
-      await expect
-        .poll(
-          async () => {
-            await lcw.getByRole('link', { name: 'My Credentials' }).click();
-            enrolled = (await connectedWalletKeys(lcw)).filter((key) => !clientsBefore.includes(key));
-            return enrolled.length;
-          },
-          { message: 'FreeWallet enrolled one client', timeout: 180_000, intervals: [5_000] }
-        )
-        .toBe(1);
+      // FreeWallet enrolled its browser as a client when it logged in, and
+      // the page lists the account's clients as they stand when it opens
+      const clientsAfter = await connectedWalletKeys(lcw);
+      const enrolled = clientsAfter.filter((key) => !clientsBefore.includes(key));
+      expect(enrolled, 'FreeWallet enrolled one client').toHaveLength(1);
       const card = lcw.locator(`[data-wallet-key="${enrolled[0]}"]`);
       lcw.once('dialog', (dialog) => void dialog.accept());
       await card.getByRole('button', { name: 'Disconnect' }).click();
