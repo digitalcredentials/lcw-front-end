@@ -422,7 +422,7 @@ issued credential) against the deployed issuer without a browser or the
 mediator.
 
 ```bash
-DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
+DEPLOYED_URL=https://lcw-sandbox.org REGISTRATION_CODE=... npx playwright test tests/deployed.spec.ts
 ```
 
 Opt-in smoke tests against a deployed instance: login and the credentials
@@ -441,16 +441,13 @@ the demo credential found decrypted in it with its tag in the manifest,
 the same file imported back with nothing added, and a file saved from
 another account imported with its credential and tag arriving) — with console errors and
 failed requests captured for debugging. Skipped unless `DEPLOYED_URL` is
-set. Run it after every deploy. Each run leaves one passkey credential and
-one enrolled client on the demo account, on purpose: removing either
-rotates the account's user key, and every rotation appends an entry
-carrying the whole descriptor to the user-key roster log and to every
-encrypted collection's governing log, so the logs grow with the square of
-the rotation count (a dozen rotations put the demo Space past the 4 MB an
-export can carry). `npm run test:credentials` removes them on demand.
+set. Run it after every deploy. It runs on an account of its own, made
+before the first test and deleted after the last (see
+[The account the tests run on](#the-account-the-tests-run-on)), so the
+passkey credential and the enrolled client a run adds go with the account.
 
 ```bash
-FREEWALLET_URL=http://localhost:5174 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/freewallet.spec.ts
+FREEWALLET_URL=http://localhost:5174 DEPLOYED_URL=https://lcw-sandbox.org REGISTRATION_CODE=... npx playwright test tests/freewallet.spec.ts
 ```
 
 The account Space shared with FreeWallet, demonstrated against both
@@ -458,29 +455,78 @@ wallets. It needs a FreeWallet dev server pointed at the same PWS server
 (`VITE_WAS_SERVER_URL=https://was.lcw-sandbox.org/ pnpm run dev` in a
 checkout of [interop-alliance/freewallet](https://github.com/interop-alliance/freewallet);
 the remember-this-browser seam its own tests use is a dev-build feature)
-and the deployed wallet. This wallet opens the demo account with a passkey;
+and the deployed wallet. This wallet opens the run's account with a passkey;
 FreeWallet opens the same account with the passphrase alone (the same
 unlock derivation; its login remembers the browser, which self-enrolls as
 a client of the account) and lists the badge; a credential added in
 FreeWallet reaches this wallet's replica and one added here reaches
 FreeWallet's; this wallet disconnects FreeWallet's client under Connected
 wallets, after which FreeWallet's next login is refused; both test
-credentials are removed. Each run adds one passkey client of this wallet
-to the demo account and rotates its user key once (the disconnect), so run
-it on demand, not after every deploy. Skipped unless both URLs are set.
+credentials are removed. Skipped unless both URLs are set; it needs the
+FreeWallet server, so it is run on demand.
 The helpers both suites share are in `tests/helpers/lcw.ts`.
 
-The demo account these tests sign in as (`jc.chartrand@gmail.com`, the
-passphrase in the spec file) is registered by `npm run register:demo`
-(`DEMO_EMAIL=... REGISTRATION_CODE=...`), which runs the wallet's own
-registration from the shell; its confirmation email still has to be clicked.
-Its account Space is then seeded by `npm run seed:demo` (`DEMO_EMAIL=...`):
-the LCW Experience Badge (the credential inside the fixture's presentation)
-in `private-credentials`, tagged "University of Toronto", stored the way
-the wallet stores credentials (`src/lib/credentials.ts`); `-- --reset`
-first deletes every stored credential, Trash record and public copy, so
-the Space holds the badge alone. Both scripts run the identity layer under
-`tsx`, and both are idempotent. `npm run test:identity`
+### The account the tests run on
+
+No account is kept for the tests. Each run against a deployment makes one,
+uses it, and deletes it (`tests/helpers/testAccount.ts`), so nothing grows
+from one run to the next: not the account's logs, which every user-key
+rotation and every sign-in method lengthens, and not the Spaces of the
+sign-in methods a run adds.
+
+- **Made** the way the register page makes one (the wallet's own
+  registration, run under `tsx`), under an Amazon SES mailbox-simulator
+  address, which accepts the registration's emails and delivers them to
+  nobody, and a passphrase chosen for the run.
+- **Confirmed** without a person: the confirmation link is read from the
+  registration state machine's pending execution and opened, and the run
+  waits, as the confirmation page does, until the back end has recorded
+  the account.
+- **Completed** as a first sign-in completes it: the recovery code the
+  sign-in page issues in the background is issued and handed to the back
+  end here. A test that signs in and ends within seconds would otherwise
+  cut that step short after the code's unlock Space exists and before the
+  account lists it, and nothing could delete that Space afterwards.
+- **Seeded** with the LCW Experience Badge (the credential inside the
+  fixture's presentation) in `private-credentials`, tagged "University of
+  Toronto", stored the way the wallet stores credentials
+  (`src/lib/credentials.ts`).
+- **Deleted** with the account's own authority: each sign-in method's
+  unlock Space through the management capability its credential delegated
+  to the account, the client-annex Space, the account Space, and the
+  passphrase's own unlock Space; then the back end's two rows for the
+  email. Whatever could not be deleted, or is still registered under the
+  account afterwards, is printed as `LEFT BEHIND` and fails the run.
+
+What a run needs: `REGISTRATION_CODE` (the deployment's; one use per run),
+and AWS access to the deployment through the `aws` CLI, for the two steps
+no endpoint offers: reading the confirmation link and deleting the back
+end's rows. `API_BASE`, `WAS_URL`, `BACK_END_STACK`, `ACCOUNTS_TABLE`,
+`RECOVERY_TABLE` and `SPACES_TABLE` default to the sandbox's.
+
+The browser tests get their account from Playwright's global setup and
+teardown (`tests/global-setup.ts`, `tests/global-teardown.ts`), which act
+only when `DEPLOYED_URL` is set and run `tests/scripts/test-account.ts` as
+a process of its own. A run records its account in
+`tests/.test-account.<name>.json` (ignored by git) until it has deleted
+it, so an account left by a run that was cut short is deleted by the next
+run. `KEEP_TEST_ACCOUNT=1` leaves the account in place and takes it up
+again on the next run, for going over one test repeatedly;
+`npm run test:account -- delete` deletes it (`create` and `show` are the
+other two commands). Each script below makes and deletes an account of its
+own the same way.
+
+For an account kept by hand (one to show the wallet with):
+`npm run register:demo` (`DEMO_EMAIL=... DEMO_PASSPHRASE=...
+REGISTRATION_CODE=...`) runs the wallet's own registration from the shell,
+after which its confirmation email has to be clicked, and
+`npm run seed:demo` (`DEMO_EMAIL=... DEMO_PASSPHRASE=...`) stores the
+badge in it; `-- --reset` first deletes every stored credential, Trash
+record and public copy, so the Space holds the badge alone.
+
+### Scripts
+
+`npm run test:identity`
 (`WAS_URL=... COUPON=...`, the registration code, which the run sends once;
 or `WAS_URL=... PROVISIONING=open` against a
 server that creates Spaces by id) exercises the identity layer against a
@@ -492,32 +538,32 @@ disconnection with its user-key rotation, and the joiner refused after
 it), the removal of the recovery codes and the passkey credential from a
 passphrase session (the acting credential refusing to retire itself), the
 last client disconnected, and the passphrase again on the rotated key. The
-account it creates is left behind. `npm run test:recovery`
-(`DEMO_EMAIL=...`) runs account recovery against the deployed back end on
-the demo account: it issues a code, recovers with it under an interim
-passphrase (which retires the demo passphrase's credential and the used
+account it creates is left behind (it runs without the back end, on a
+passphrase it does not keep).
+
+The four below run against the deployed back end and PWS server
+(`REGISTRATION_CODE=...`), each on an account it makes and deletes.
+`npm run test:recovery` runs account recovery: it issues a code, recovers
+with it under an interim
+passphrase (which retires the first passphrase's credential and the used
 code and stores a replacement), checks that neither signs in any more,
-and sets the demo passphrase back (which retires the interim one). Each
-run rotates the user key three times and leaves the account as it was.
-`npm run test:credentials` (`DEMO_EMAIL=...`) lists the demo account's
+and sets the first passphrase back (which retires the interim one), three
+user-key rotations in all.
+`npm run test:credentials` lists the account's
 sign-in methods, adds a stand-in passkey credential, signs in with it as
 a remembered client, lists the methods again, then removes the passkey
 from a password session and disconnects the client it enrolled.
-`npm run test:holder` (`DEMO_EMAIL=...`) claims a badge from the deployed
-test issuer as the demo account's `did:web` projection, checking the
+`npm run test:holder` claims a badge from the deployed
+test issuer as the account's `did:web` projection, checking the
 projection the identity domain serves, the issuer's `acceptedMethods`, and
 that the issued credential is bound to the account DID; nothing is stored.
-`npm run test:replica` (`DEMO_EMAIL=...`) runs the local replica outside a
+`npm run test:replica` runs the local replica outside a
 browser (RxDB's memory storage) on a remembered session opened with a
-stand-in passkey: the first pull lists the demo credential with its tag, a
+stand-in passkey: the first pull lists the seeded credential with its tag, a
 credential and its tags added through the replica reach the Space, a
 credential added directly reaches the replica, and the Trash flow
-round-trips through it. The stand-in passkey's secret and the client it
-enrolled are kept in `tests/.replica-client.json` (ignored by git), so
-later runs open the same remembered client and add nothing to the
-account's logs; `npm run test:replica -- --remove` retires the passkey and
-disconnects the client at the end (two user-key rotations) and deletes the
-file. The script also reports the annex generations the login collected.
+round-trips through it. The script also reports the annex generations the
+login collected.
 
 ## Deploy
 

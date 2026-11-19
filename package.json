@@ -12,6 +12,7 @@
     "test:claim": "node tests/scripts/claim-wire.mjs",
     "register:demo": "tsx tests/scripts/register-demo.ts",
     "seed:demo": "tsx tests/scripts/seed-demo.ts",
+    "test:account": "tsx tests/scripts/test-account.ts",
     "test:identity": "tsx tests/scripts/identity-roundtrip.ts",
     "test:recovery": "tsx tests/scripts/recovery-demo.ts",
     "test:credentials": "tsx tests/scripts/credentials-demo.ts",

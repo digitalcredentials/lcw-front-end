@@ -28,5 +28,5 @@ dist-ssr
 test-results/
 playwright-report/
 
-# The replica script's stand-in passkey and client (tests/scripts/replica-demo.ts)
-tests/.replica-client.json
+# The accounts the tests make for themselves, until they delete them (tests/helpers/testAccount.ts)
+tests/.test-account.*.json

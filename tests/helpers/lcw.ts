@@ -1,12 +1,16 @@
 import { expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-// What the tests against a deployed wallet share: the demo account, the
-// sign-ins, and the credential list's controls.
+// What the tests against a deployed wallet share: the account they run on,
+// the sign-ins, and the credential list's controls.
 
 export const DEPLOYED_URL = (process.env.DEPLOYED_URL ?? '').replace(/\/+$/, '');
-export const DEMO_EMAIL = 'jc.chartrand@gmail.com';
-export const DEMO_PASSPHRASE = 'my-secret-seed-that-is-long-enou';
+// The run's own account, made by the global setup before the first test and
+// deleted after the last (tests/global-setup.ts): seeded with the LCW
+// Experience Badge, tagged University of Toronto. Empty when DEPLOYED_URL
+// is not set, in which case these tests are skipped.
+export const ACCOUNT_EMAIL = process.env.TEST_ACCOUNT_EMAIL ?? '';
+export const ACCOUNT_PASSPHRASE = process.env.TEST_ACCOUNT_PASSPHRASE ?? '';
 
 // Surface everything the browser complains about: console errors, page
 // errors, and requests that fail or come back >= 400.
@@ -44,12 +48,12 @@ export async function logIn(page: Page) {
   await page.addInitScript((email) => {
     sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
     localStorage.setItem(`lcw_passkey_offer_dismissed:${email}`, 'true');
-  }, DEMO_EMAIL);
+  }, ACCOUNT_EMAIL);
   // The sign-in page by its own address: a deployment with a welcome page
   // sends a signed-out visitor at the plain address there
   await page.goto(`${DEPLOYED_URL}/#/login`);
-  await page.getByLabel('Email').fill(DEMO_EMAIL);
-  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByLabel('Email').fill(ACCOUNT_EMAIL);
+  await page.getByLabel('Password').fill(ACCOUNT_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   // Login lands on the credentials list. Signing in runs the account's
   // ceremonies against the live server and back end, which take longer
@@ -83,8 +87,8 @@ export async function logInWithPasskey(page: Page) {
   await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await virtualAuthenticator(page);
   await page.goto(`${DEPLOYED_URL}/#/login`);
-  await page.getByLabel('Email').fill(DEMO_EMAIL);
-  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByLabel('Email').fill(ACCOUNT_EMAIL);
+  await page.getByLabel('Password').fill(ACCOUNT_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByRole('button', { name: 'Add a passkey' }).click();
   await expect(page.getByRole('heading', { name: 'My Credentials' })).toBeVisible({ timeout: 60_000 });
