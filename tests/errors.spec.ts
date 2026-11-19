@@ -10,10 +10,6 @@ import { describeError, isSessionEnded, outsideText, technicalDetail, Collection
 const offline = () => mapError(new TypeError('Failed to fetch'));
 const timedOut = () => mapError(Object.assign(new Error('Request timed out: GET https://was.example/space/s/'), { name: 'TimeoutError' }));
 const status = (code: number) => mapError({ status: code, message: `Request failed with status code ${code}` });
-const COUPON_REQUIRED = 'https://github.com/digitalcredentials/was-server-aws#coupon-required';
-const couponRequired = () =>
-  Object.assign(new Error('Request failed with status code 403'), { status: 403, data: { type: COUPON_REQUIRED } });
-
 test.beforeEach(() => {
   console.error = () => {};
 });
@@ -95,13 +91,6 @@ test('a name clash is named only for a new collection', () => {
   expect(describeError('upload', clash).text).toBe("We couldn't add this credential. Please try again.");
 });
 
-test("an account whose coupon is used up can't create a space", () => {
-  expect(describeError('create-space', couponRequired()).text).toBe("We couldn't create the space. Your account can't create more spaces right now.");
-  // The coupon problem on any other status is not the coupon refusal
-  const couponOn400 = Object.assign(new Error('x'), { status: 400, data: { type: COUPON_REQUIRED } });
-  expect(describeError('create-space', couponOn400).text).toBe("We can't tell whether the space was created. Check before trying again.");
-});
-
 test('anything else names the action and says to try again', () => {
   const unreadable = new EncryptionError('Cannot determine whether collection s/Work is encrypted');
   expect(describeError('open', unreadable).text).toBe("We couldn't open this credential. Please try again.");
@@ -119,7 +108,7 @@ test('the console gets the summary, not the request the error carries', () => {
   // An HTTP client's error keeps the request it sent, body included
   const error = mapError(Object.assign(new Error('Request failed with status code 500'), {
     status: 500,
-    options: { json: { coupon: 'registration-token' } },
+    options: { json: { coupon: 'registration-code' } },
   }));
   describeError('create-space', error);
   expect(logged).toEqual(['Wallet: create-space failed: PwsServerError: Request failed with status code 500 (HTTP 500)']);

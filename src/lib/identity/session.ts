@@ -5,6 +5,7 @@ import { webvhSigner, webvhZcapClient, type ClientWebvhUpdateKeys } from '@inter
 import type { ZcapClient } from '@interop/ezcap'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import { fromBase64url, toBase64url } from './bytes'
+import { spaceCreationBy, type Provisioning, type SpaceCreation } from './provision'
 
 // The signed-in session: what one credential opened, kept for this tab
 // only. sessionStorage survives a reload of the tab and is gone when the tab
@@ -24,9 +25,11 @@ import { fromBase64url, toBase64url } from './bytes'
 
 export interface SessionBase {
   email: string
-  // The registration token /login returns, required by the PWS server as the
-  // coupon when creating a space.
-  coupon?: string
+  // How the account's further Spaces come to exist: under the account Space
+  // with a capability on it (this PWS server; also what an absent value
+  // means), or `open`, created by id by wallet-core's own step (a server
+  // with open provisioning, which the test scripts run against).
+  provisioning?: Provisioning
   // The account's did:webvh
   did: string
   // Where the account lives: the PWS server and the account Space.
@@ -244,6 +247,20 @@ export async function sessionAgents(session: Session): Promise<{
     zcapClient: webvhZcapClient({ keyAgent: agents.keyAgent, did: session.did }),
     capabilityFor: () => undefined,
   }
+}
+
+// How the session creates a further Space of the account (the unlock Space
+// of a sign-in method it adds): the acting identity delegates the creating
+// capability to the new Space's key, from the account Space's root when it
+// signs as the account, under the generation delegation when it signs as
+// the client annex. Undefined under open provisioning.
+export async function sessionSpaceCreation(session: Session): Promise<SpaceCreation | undefined> {
+  if (session.provisioning === 'open') {
+    return undefined
+  }
+  const { zcapClient, capabilityFor } = await sessionAgents(session)
+  const capability = capabilityFor(session.spaceId)
+  return spaceCreationBy({ zcapClient, serverUrl: session.serverUrl, accountSpaceId: session.spaceId, ...(capability && { capability }) })
 }
 
 // Whether the session can reach Spaces other than the account Space (a

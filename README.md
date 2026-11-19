@@ -20,13 +20,18 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   account derives from the passphrase: registration (`signup.ts`) mints the
   account's keys at random, and the passphrase only derives an **unlock
   credential** (wallet-core's keyring derivation, FreeWallet's salts) that
-  opens them. A bootstrap `did:key` creates two Spaces through the PWS
-  server's `POST /spaces/` with the registration code as coupon, and the
-  passphrase's unlock Space is created the same way under its unlock
-  identity (`provision.ts`): every Space this wallet makes, the unlock
-  Spaces of later passkeys and recovery codes included, redeems the coupon
-  (the registration token `/login` returns), so the server's capped
-  coupon-less path is never used for its accounts. The
+  opens them. The registration code is sent to the PWS server once: a
+  bootstrap `did:key` creates the account Space through `POST /spaces/`
+  with the code (which the server calls the coupon). To the server that
+  Space is the account, and every other Space this wallet makes is created
+  under it, at `POST /space/{account}/spaces`, with a capability on the
+  account Space and no code (`provision.ts`): the client-annex Space by the
+  bootstrap key itself, and each unlock Space (the passphrase's at signup,
+  those of later passkeys, passphrases and recovery codes) by its own
+  unlock `did:key`, to which whoever acts for the account delegates a
+  capability to create that one Space. Nothing keeps the code after signup,
+  and the server's capped coupon-less path is never used for this wallet's
+  accounts. The
   **account Space** holds the account's `did:webvh` log in its
   world-readable `id` collection (served through the identity domain,
   `VITE_ID_DOMAIN`), the user key (X25519, the recipient of every encrypted
@@ -44,10 +49,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   one of two session kinds (`session.ts`). A **transient session**, from
   the password or a recovery code, signs as the client annex under a
   delegation the annex holds for the account Space, so it reads and writes
-  the account Space and nothing else: it signs in to the back end
-  (`POST /login`, which verifies the annex against the account document
-  and returns the registration token, the PWS server's space-creation
-  coupon), claims credentials with a fresh `did:key`, and presents the
+  the account Space and nothing else (creating a Space under the account is
+  a request to the account Space, so it can add a sign-in method): it signs
+  in to the back end (`POST /login`, which verifies the annex against the
+  account document), claims credentials with a fresh `did:key`, and presents the
   account's own DIDs unsigned (signing a presentation as the account needs
   a passkey). A **remembered session**, from a passkey, signs as the
   account itself and reaches every Space. It holds a client key record in
@@ -473,7 +478,8 @@ the wallet stores credentials (`src/lib/credentials.ts`); `-- --reset`
 first deletes every stored credential, Trash record and public copy, so
 the Space holds the badge alone. Both scripts run the identity layer under
 `tsx`, and both are idempotent. `npm run test:identity`
-(`WAS_URL=... COUPON=...`, or `WAS_URL=... PROVISIONING=open` against a
+(`WAS_URL=... COUPON=...`, the registration code, which the run sends once;
+or `WAS_URL=... PROVISIONING=open` against a
 server that creates Spaces by id) exercises the identity layer against a
 PWS server without the back end: signup, the transient login, a passkey
 credential added from it, the remembered logins, recovery codes from both

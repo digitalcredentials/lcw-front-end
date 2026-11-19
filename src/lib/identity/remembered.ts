@@ -28,7 +28,7 @@ import { defaultClientKeyStore, type ClientKeyStore } from './clientKeyRecord'
 // remove.
 
 export interface RememberedEntry {
-  session: Omit<RememberedSession, 'email' | 'coupon'>
+  session: Omit<RememberedSession, 'email' | 'provisioning'>
   verified: VerifiedAccountLog
   enrolled: boolean
   // The user-key roster's descriptor as read (null when the account serves

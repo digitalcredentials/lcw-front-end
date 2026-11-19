@@ -9,10 +9,12 @@
 //   WAS_URL=https://was.lcw-sandbox.org COUPON=... npx tsx tests/scripts/identity-roundtrip.ts
 //   WAS_URL=http://localhost:3002 PROVISIONING=open npx tsx tests/scripts/identity-roundtrip.ts
 //
-// With a COUPON every Space (the account and annex Spaces, each
-// credential's unlock Space) is created through POST /spaces/ with it (this
-// server); with PROVISIONING=open the ceremonies create them by id (the
-// reference server). The account it creates is left behind.
+// With a COUPON (the registration code) the account Space is created
+// through POST /spaces/ with it, and every other Space (the annex Space,
+// each credential's unlock Space) under the account Space with a capability
+// on it and no code (this server); with PROVISIONING=open the ceremonies
+// create them by id (the reference server). The account it creates is left
+// behind.
 import '@interop/http-client'
 import { PwsClient } from '@interop/pws-client'
 import { signUp } from '../../src/lib/identity/signup'
@@ -38,12 +40,12 @@ import { visitPins } from '../../src/lib/identity/pins'
 import { randomBytes, toBase64url } from '../../src/lib/identity/bytes'
 
 const WAS = (process.env.WAS_URL ?? 'https://was.lcw-sandbox.org').replace(/\/+$/, '')
-const PROVISIONING = (process.env.PROVISIONING as 'open' | 'coupon' | undefined) ?? (process.env.COUPON ? 'coupon' : 'open')
+const PROVISIONING = (process.env.PROVISIONING as 'open' | 'account' | undefined) ?? (process.env.COUPON ? 'account' : 'open')
+// Sent once, by the signup, for the account Space
 const COUPON = process.env.COUPON ?? 'no-coupon'
-// What a session carries as its coupon (the registration token, after a
-// back-end login): here the coupon given, so the unlock Spaces the later
-// steps create redeem it too
-const coupon = PROVISIONING === 'coupon' ? COUPON : undefined
+// What every session below carries: how the unlock Spaces the later steps
+// create come to exist
+const provisioning = PROVISIONING
 const passphrase = `roundtrip-passphrase-${Date.now()}-${Math.random().toString(36).slice(2)}`
 const email = `roundtrip-${Date.now()}@example.test`
 
@@ -81,7 +83,7 @@ if (!found) {
   throw new Error('no record')
 }
 const entry = await time('transient login', () => openTransientSession({ credential, found, serverUrl: WAS }))
-const session: TransientSession = { ...entry.session, email, coupon }
+const session: TransientSession = { ...entry.session, email, provisioning }
 check('the session signs as the client annex', session.clientAnnexDid.startsWith('did:webvh:') && session.clientAnnexDid !== session.did)
 
 // Whether the generation the account points at admits a credential's annex
@@ -168,7 +170,7 @@ check('the remembered session signs as the account', remembered.session.did === 
 check('the remembered session reads the same user key', remembered.session.userKey.id === session.userKey.id)
 const again = await time('remembered login (record present)', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
 check('a second remembered login reuses the record', !again.enrolled && toBase64url(again.session.clientSeed) === toBase64url(remembered.session.clientSeed))
-const rememberedSession: RememberedSession = { ...again.session, email, coupon }
+const rememberedSession: RememberedSession = { ...again.session, email, provisioning }
 await time('name this browser in the connections directory', () => nameOwnClient(rememberedSession))
 const second = await registryOf(rememberedSession)
 const registry2 = await readUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, capability: second.capability })
@@ -184,7 +186,7 @@ check('the recovery session holds the user key', recovered?.session.userKey.id =
 
 // --- a second recovery code, issued from the recovery (transient) session ---
 if (recovered) {
-  const transientRecovery: TransientSession = { ...recovered.session, email, coupon }
+  const transientRecovery: TransientSession = { ...recovered.session, email, provisioning }
   const issuedAgain = await time('issue a recovery code (ladder branch)', () => issueRecoveryCode({ session: transientRecovery, label: 'Second code' }))
   const recoveredAgain = await time('second code login', () => recoverWithCode({ code: issuedAgain.code, serverUrl: WAS }))
   check('the second code opens the account', recoveredAgain?.session.did === session.did)
@@ -202,7 +204,7 @@ const joiner = await mintEnrollmentRequest()
 // annex generation (a code's rung is not committed in advance), so the
 // first session's generation delegation no longer names the pointed one
 const freshEntry = await time('passphrase login before the approvals', () => openTransientSession({ credential, found, serverUrl: WAS }))
-const session2: TransientSession = { ...freshEntry.session, email, coupon }
+const session2: TransientSession = { ...freshEntry.session, email, provisioning }
 // The clients module adopts a rotated user key into the stored session
 setSession(session2)
 const approved = await time('approve a connect code (ladder arm)', () => approveConnectCode({ session: session2, code: joiner.code, name: 'Wallet 2', label: 'Phone' }))
@@ -243,7 +245,7 @@ check('the registry is re-sealed under the rotated key', registry3 !== null && r
 // disconnects a joiner itself (the enrolled arm) ---
 const afterRotation = await time('remembered login after the rotation', () => openRememberedSession({ credential: passkey, found: passkeyFound, serverUrl: WAS, store }))
 check('the remembered browser adopts the rotated user key', afterRotation.session.userKey.id === rotated.userKey.id)
-const rememberedNow: RememberedSession = { ...afterRotation.session, email, coupon }
+const rememberedNow: RememberedSession = { ...afterRotation.session, email, provisioning }
 setSession(rememberedNow)
 const joiner2 = await mintEnrollmentRequest()
 await time('approve a connect code (enrolled arm)', () => approveConnectCode({ session: rememberedNow, code: joiner2.code, name: 'Wallet 3' }))
@@ -266,7 +268,7 @@ check('the remembered session adopted the rotated user key', current.userKey.id 
 // removed from the remembered session without its seed (no tap), leaves
 // the pointed generation for a fresh one that restates nothing ---
 const adding = await time('passphrase login to add a second passkey', () => openTransientSession({ credential, found, serverUrl: WAS }))
-const passkeyB = await time('add a second passkey credential', () => addListedPasskey({ ...adding.session, email, coupon }, 'Second passkey'))
+const passkeyB = await time('add a second passkey credential', () => addListedPasskey({ ...adding.session, email, provisioning }, 'Second passkey'))
 check('the second passkey is admitted to the pointed generation', await annexAdmits(passkeyB.ladderSeed))
 setSession(current)
 const removedB = await time('remove the second passkey from the remembered session', () => retireMethod({ session: current, method: passkeyB.method }))
@@ -279,7 +281,7 @@ check("the fresh generation admits the remembered session's passkey", await anne
 // from a passphrase session (the ladder arm), the session adopting each
 // rotation; a credential cannot retire itself ---
 const retiring = await time('passphrase login before the retirements', () => openTransientSession({ credential, found, serverUrl: WAS }))
-let acting: TransientSession = { ...retiring.session, email, coupon }
+let acting: TransientSession = { ...retiring.session, email, provisioning }
 setSession(acting)
 check('the passphrase session adopted the rotated user key at sign-in', acting.userKey.id === removedB.session.userKey.id)
 check('the passphrase admitted itself again at sign-in after the swap', await annexAdmits(found.ladderSeed!))
@@ -341,7 +343,7 @@ acting = getSession() as TransientSession
 // --- the passphrase still works after all of it ---
 const later = await time('passphrase login after the changes', () => openTransientSession({ credential, found, serverUrl: WAS }))
 check('the passphrase still opens the account, on the rotated user key', later.session.userKey.id === acting.userKey.id)
-const last = await registryOf({ ...later.session, email, coupon })
+const last = await registryOf({ ...later.session, email, provisioning })
 const registryLast = await readUnlockMethods({ pws: last.pws, spaceId: session.spaceId, userKey: later.session.userKey, capability: last.capability })
 check('the registry opens under the rotated key at the next sign-in', registryLast !== null)
 const wrong = await fetchStandingRecord({ credential: await passphraseCredential(`${passphrase}-wrong`), serverUrl: WAS })

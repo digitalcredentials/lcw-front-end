@@ -58,7 +58,7 @@ check('the password is still listed', during.some((m) => m.kind === 'passphrase'
 // A later visit on the passkey: the remembered login reuses the record
 const again = await loginWithPasskeySecret({ prfOutput: prf, config, store, email })
 check('the passkey signs in as a remembered client', again.kind === 'remembered' && again.userKey.id === session.userKey.id)
-check('the passkey session knows the email and the token', again.email === email && typeof again.coupon === 'string')
+check('the passkey session knows the email', again.email === email)
 
 // Removing the passkey from a password session: its credential is retired
 // (the user key rotates), its unlock Space is deleted, and it no longer
