@@ -7,6 +7,7 @@ import { wrapUnlockRecord } from '@interop/wallet-core/unlock'
 import { accountControllerResolver, pwsWebvhIdStore, webvhZcapClient } from '@interop/wallet-core/webvh'
 import { addUserKeyRosterRecipient, userKeyRosterDescriptorStore, userKeyRosterLogSigner } from '@interop/wallet-core/keys'
 import type { UnlockCredential } from './credential'
+import { notePendingSpace } from './pendingSpaces'
 import { provisionUnlockSpace } from './provision'
 import { delegateUnlockManagement, fetchStandingRecord, pointerOf, type StandingRecord } from './records'
 import { sessionSpaceCreation, type Session, type RememberedSession, type TransientSession } from './session'
@@ -46,6 +47,8 @@ export interface IssuedRecoveryCode {
 // code's unlock Space is created under the account, with a capability the
 // session delegates to the code's unlock did:key, so the server's capped
 // coupon-less path is not used.
+// The code is not listed here: the caller adds `entry` to the registry and
+// then removes the note this leaves in the account Space (`clearPendingSpace`).
 export async function issueRecoveryCode({ session, label = 'Recovery code' }: { session: Session; label?: string }): Promise<IssuedRecoveryCode> {
   const code = generateRecoveryCode()
   const credential = await recoveryCredential(code)
@@ -68,10 +71,16 @@ export async function issueRecoveryCode({ session, label = 'Recovery code' }: { 
     signer: unlock.recordSigner,
     bindingMacKey: client.bindingMacKey,
   })
+  // The capability to manage the code's unlock Space, delegated to the
+  // account before the Space exists, and a note of it in the account Space:
+  // should this issuance be interrupted before the caller lists the code, a
+  // later sign-in deletes the Space through the note (pendingSpaces.ts).
+  // The caller removes the note once the registry lists the entry.
+  const manageCapability = await delegateUnlockManagement({ credential, serverUrl, to: session.did })
+  await notePendingSpace({ session, unlockSpaceId: unlock.spaceId, manageCapability })
   await provisionUnlockSpace({ credential, serverUrl, creation: await sessionSpaceCreation(session) })
   await ensureUnlockSpace({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, controller: unlock.agent.id })
   await putUnlockKeyring({ baseServerUrl: serverUrl, zcapClient: unlock.zcapClient, serviceDescription, spaceId: unlock.spaceId, record })
-  const manageCapability = await delegateUnlockManagement({ credential, serverUrl, to: session.did })
 
   const recovery = { keyAgreementKeyMultibase: client.keyAgreementKeyMultibase, updateKeyMultibase: client.updateKeyMultibase }
   const recipient = { id: client.recipientKid, publicKeyMultibase: client.keyAgreementKeyMultibase }

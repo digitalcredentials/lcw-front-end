@@ -12,7 +12,9 @@ import { serviceDescriptionFor } from './service'
 // re-seals it under the new key, and a sign-in that finds it sealed under an
 // earlier key (a rotation interrupted before its re-seal) repairs it.
 
-async function registryClient(session: Session): Promise<{ pws: PwsClient; capability?: IZcap }> {
+// The client and capability the session reaches the registry's collection
+// with (the notes of pendingSpaces.ts live in the same collection).
+export async function registryClient(session: Session): Promise<{ pws: PwsClient; capability?: IZcap }> {
   const { signer, capabilityFor } = await sessionAgents(session)
   const pws = PwsClient.fromSigner({ baseServerUrl: session.serverUrl, signer, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
   const capability = capabilityFor(session.spaceId)

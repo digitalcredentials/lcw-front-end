@@ -1,12 +1,11 @@
-import { ladderVmAgent, ladderVmZcapClient, mintSpaceVerbCapability } from '@interop/wallet-core/clientAnnex'
-import { deleteUnlockSpace } from '@interop/wallet-core/keyring'
 import { preflightUnlockCredentialRetirement, retireUnlockCredential, type StandingUnlockKeys } from '@interop/wallet-core/unlock'
-import { didKeyZcapClient, keyAgreementCommitment } from '@interop/wallet-core/webvh'
-import { adoptUserKey, ceremonyAuthority, renewGenerationDelegation, retireAnnexInventory, type AnnexRetirement, type CeremonyAuthority } from './authority'
+import { keyAgreementCommitment } from '@interop/wallet-core/webvh'
+import { adoptUserKey, ceremonyAuthority, renewGenerationDelegation, retireAnnexInventory, type AnnexRetirement } from './authority'
 import { deleteClientKeyRecord } from './clientKeyRecord'
 import { updateRegistry } from './registry'
 import type { Session } from './session'
 import { emptyRegistry, removeMethod, type UnlockMethod } from './unlockMethods'
+import { deleteManagedUnlockSpace } from './unlockSpaceDeletion'
 
 // Removing a sign-in method (a passkey, a recovery code, a passphrase
 // another one replaced): wallet-core's unlock-credential retirement. One
@@ -62,30 +61,13 @@ async function unlockKeysOf(method: UnlockMethod): Promise<StandingUnlockKeys> {
   }
 }
 
-// Deletes the credential's unlock Space through a DELETE-only child of its
-// management capability: a password session delegates and invokes it as
-// its ladder VM (the server admits a ladder-signed link that is exactly a
-// target-exact DELETE of the parent's own Space), a passkey session as the
-// account. A Space already gone, or a refusal, is reported as not found.
-async function deleteUnlockSpaceOf({ authority, method }: { authority: CeremonyAuthority; method: UnlockMethod }): Promise<'deleted' | 'not-found' | 'kept'> {
-  const parent = method.manageCapability
-  if (!parent) {
+// Deletes the credential's unlock Space through its management capability
+// (unlockSpaceDeletion.ts). A method listed without one keeps its Space.
+async function deleteUnlockSpaceOf({ session, method }: { session: Session; method: UnlockMethod }): Promise<'deleted' | 'not-found' | 'kept'> {
+  if (!method.manageCapability) {
     return 'kept'
   }
-  const { session, serviceDescription } = authority
-  const base = { baseServerUrl: session.serverUrl, serviceDescription, spaceId: method.unlockSpaceId }
-  if (session.kind === 'transient') {
-    const ladderAgent = await ladderVmAgent({ ladderSeed: session.ladderSeed })
-    const child = await mintSpaceVerbCapability({
-      zcapClient: await ladderVmZcapClient({ accountDid: session.did, ladderSeed: session.ladderSeed }),
-      parent,
-      verb: 'DELETE',
-      controller: ladderAgent.id.split('#')[0],
-    })
-    return (await deleteUnlockSpace({ ...base, zcapClient: didKeyZcapClient({ keyAgent: ladderAgent }), capability: child })).outcome
-  }
-  const child = await mintSpaceVerbCapability({ zcapClient: authority.zcapClient, parent, verb: 'DELETE', controller: session.did })
-  return (await deleteUnlockSpace({ ...base, zcapClient: authority.zcapClient, capability: child })).outcome
+  return deleteManagedUnlockSpace({ session, unlockSpaceId: method.unlockSpaceId, manageCapability: method.manageCapability })
 }
 
 // Retires a sign-in method's credential and removes the method.
@@ -138,7 +120,7 @@ export async function retireMethod({ session, method, retiredLadderSeed }: { ses
   // nothing opens any more
   let unlockSpace: RetirementOutcome['unlockSpace'] = 'kept'
   try {
-    unlockSpace = await deleteUnlockSpaceOf({ authority, method })
+    unlockSpace = await deleteUnlockSpaceOf({ session: authority.session, method })
   } catch (err) {
     console.warn("The removed method's unlock Space could not be deleted:", err)
   }

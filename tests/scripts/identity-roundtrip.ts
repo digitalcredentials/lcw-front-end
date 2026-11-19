@@ -3,8 +3,9 @@
 // passphrase, a passkey credential added from it (a random secret under the
 // passkey KDF stands in for the PRF output), the remembered login that
 // self-enrolls this "browser" and the one that reuses its record, a
-// recovery code issued from each session kind and used, and the passphrase
-// again at the end.
+// recovery code issued from each session kind and used, the clean-up of an
+// issuance that was interrupted (the note of its unlock Space, from each
+// session kind), and the passphrase again at the end.
 //
 //   WAS_URL=https://was.lcw-sandbox.org COUPON=... npx tsx tests/scripts/identity-roundtrip.ts
 //   WAS_URL=http://localhost:3002 PROVISIONING=open npx tsx tests/scripts/identity-roundtrip.ts
@@ -20,19 +21,23 @@ import { PwsClient } from '@interop/pws-client'
 import { signUp } from '../../src/lib/identity/signup'
 import { deriveUnlockCredential, passphraseCredential } from '../../src/lib/identity/credential'
 import { PASSKEY_KDF } from '../../src/lib/identity/passkey'
-import { fetchStandingRecord } from '../../src/lib/identity/records'
+import { delegateUnlockManagement, fetchStandingRecord } from '../../src/lib/identity/records'
 import { openTransientSession } from '../../src/lib/identity/transient'
 import { addStandingCredential } from '../../src/lib/identity/standing'
 import { openRememberedSession } from '../../src/lib/identity/remembered'
 import { memoryClientKeyStore } from '../../src/lib/identity/clientKeyRecord'
-import { issueRecoveryCode, recoverWithCode } from '../../src/lib/identity/recovery'
+import { issueRecoveryCode, recoverWithCode, recoveryCredential } from '../../src/lib/identity/recovery'
+import { PENDING_SPACE_WAIT_MS, notePendingSpace, cleanUpPendingSpaces, type PendingCleanUp } from '../../src/lib/identity/pendingSpaces'
+import { provisionUnlockSpace } from '../../src/lib/identity/provision'
 import { readUnlockMethods, updateUnlockMethods, upsertMethod, type PasskeyUnlockMethod } from '../../src/lib/identity/unlockMethods'
-import { getSession, sessionAgents, setSession, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
+import { getSession, sessionAgents, sessionSpaceCreation, setSession, type TransientSession, type RememberedSession } from '../../src/lib/identity/session'
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
 import { pointerOf } from '../../src/lib/identity/records'
 import { CLIENT_NAME, approveConnectCode, disconnectWallet, listConnectedWallets, nameOwnClient, renameConnectedWallet } from '../../src/lib/identity/clients'
 import { MethodNotRemovableError, retireMethod } from '../../src/lib/identity/retire'
 import { completeEnrollmentCore, mintEnrollmentRequest } from '@interop/wallet-core/enrollment'
+import { ensureUnlockSpace } from '@interop/wallet-core/keyring'
+import { generateRecoveryCode } from '@interop/wallet-core/recovery'
 import { clientAnnexDidParts, clientAnnexRungAdmitted, delegatedClientsPointer } from '@interop/wallet-core/clientAnnex'
 import { delegatedWebvhLogStore, verifyAccountLog } from '@interop/wallet-core/webvh'
 import { agentsFromSeed } from '@interop/pws-client/identity'
@@ -127,7 +132,7 @@ async function addListedPasskey(from: TransientSession, label: string) {
 }
 const first = await registryOf(session)
 const registry = await readUnlockMethods({ pws: first.pws, spaceId: session.spaceId, userKey: session.userKey, capability: first.capability })
-check('the registry lists the passphrase', registry?.record.methods.some((m) => m.type === 'passphrase'), registry?.record.methods.map((m) => m.type))
+check('the registry lists the passphrase', registry?.record.methods.some((m) => m.type === 'passphrase') === true, registry?.record.methods.map((m) => m.type))
 
 // --- a passkey credential, added from the transient session ---
 const prf = randomBytes(32)
@@ -179,17 +184,56 @@ check('the registry lists both methods', registry2?.record.methods.map((m) => m.
 // --- a recovery code, issued from the remembered session, then used ---
 const issued = await time('issue a recovery code (enrolled branch)', () => issueRecoveryCode({ session: rememberedSession }))
 check('the code entry names its unlock Space', issued.entry.unlockSpaceId.length > 0)
+
+// --- the notes of pending Spaces (pendingSpaces.ts): the issuance noted the
+// code's unlock Space in the account before creating it, so an issuance
+// that is interrupted can be cleaned up afterwards ---
+// A clock past the waiting period, and what a clean-up did, in one line
+const pastTheWait = () => Date.now() + PENDING_SPACE_WAIT_MS + 1000
+const cleanUpSummary = (cleanUp: PendingCleanUp) =>
+  Object.entries(cleanUp)
+    .filter(([, ids]) => ids.length > 0)
+    .map(([outcome, ids]) => `${outcome} ${ids.length}`)
+    .join(', ') || 'no note'
+const nothingDone = (cleanUp: PendingCleanUp) => Object.values(cleanUp).every((ids) => ids.length === 0)
+const spaceExists = async (zcapClient: Parameters<typeof ensureUnlockSpace>[0]['zcapClient'], spaceId: string) =>
+  (await new PwsClient({ baseServerUrl: WAS, zcapClient, serviceDescription: await serviceDescriptionFor(WAS) }).space(spaceId).describe()) !== null
+// Not listed yet, and its note is younger than the waiting period
+const beforeListing = await cleanUpPendingSpaces({ session: rememberedSession })
+check('a running issuance is not touched (its note is younger than the waiting period)', beforeListing.waiting.join() === issued.entry.unlockSpaceId && beforeListing.deleted.length === 0, cleanUpSummary(beforeListing))
 await updateUnlockMethods({ pws: second.pws, spaceId: session.spaceId, userKey: rememberedSession.userKey, mutate: (existing) => upsertMethod({ record: existing!, entry: issued.entry }) })
+// Listed: the note is removed whatever its age, and the Space is kept
+const afterListing = await cleanUpPendingSpaces({ session: rememberedSession, now: pastTheWait() })
+check('once the registry lists the code its note is removed and its Space kept', afterListing.listed.join() === issued.entry.unlockSpaceId && afterListing.deleted.length === 0, cleanUpSummary(afterListing))
+// Two interrupted issuances, from the remembered session: one after its Space
+// was created, one before (the note alone)
+const interrupted = await recoveryCredential(generateRecoveryCode())
+await notePendingSpace({ session: rememberedSession, unlockSpaceId: interrupted.unlock.spaceId, manageCapability: await delegateUnlockManagement({ credential: interrupted, serverUrl: WAS, to: session.did }) })
+await provisionUnlockSpace({ credential: interrupted, serverUrl: WAS, creation: await sessionSpaceCreation(rememberedSession) })
+await ensureUnlockSpace({ baseServerUrl: WAS, zcapClient: interrupted.unlock.zcapClient, serviceDescription: await serviceDescriptionFor(WAS), spaceId: interrupted.unlock.spaceId, controller: interrupted.unlock.agent.id })
+const neverMade = await recoveryCredential(generateRecoveryCode())
+await notePendingSpace({ session: rememberedSession, unlockSpaceId: neverMade.unlock.spaceId, manageCapability: await delegateUnlockManagement({ credential: neverMade, serverUrl: WAS, to: session.did }) })
+const early = await cleanUpPendingSpaces({ session: rememberedSession })
+check('within the waiting period a Space that was never listed is kept', early.waiting.length === 2 && early.deleted.length === 0 && (await spaceExists(interrupted.unlock.zcapClient, interrupted.unlock.spaceId)), cleanUpSummary(early))
+const late = await time('clean up the pending Spaces (enrolled arm)', () => cleanUpPendingSpaces({ session: rememberedSession, now: pastTheWait() }))
+check('past the waiting period it is deleted (enrolled arm)', late.deleted.join() === interrupted.unlock.spaceId && !(await spaceExists(interrupted.unlock.zcapClient, interrupted.unlock.spaceId)), cleanUpSummary(late))
+check('a note whose Space was never created is removed', late.notFound.join() === neverMade.unlock.spaceId, cleanUpSummary(late))
+const settled = await cleanUpPendingSpaces({ session: rememberedSession, now: pastTheWait() })
+check('no note remains', nothingDone(settled), cleanUpSummary(settled))
 const recovered = await time('recovery login (transient)', () => recoverWithCode({ code: issued.code, serverUrl: WAS }))
 check('the recovery code opens the account', recovered?.session.did === session.did)
 check('the recovery session holds the user key', recovered?.session.userKey.id === session.userKey.id)
 
-// --- a second recovery code, issued from the recovery (transient) session ---
+// --- a second recovery code, issued from the recovery (transient) session.
+// It is never listed in the registry, which is how an issuance looks when
+// the page closes before the registry is written ---
+let unlisted: { code: string; unlockSpaceId: string } | undefined
 if (recovered) {
   const transientRecovery: TransientSession = { ...recovered.session, email, provisioning }
   const issuedAgain = await time('issue a recovery code (ladder branch)', () => issueRecoveryCode({ session: transientRecovery, label: 'Second code' }))
   const recoveredAgain = await time('second code login', () => recoverWithCode({ code: issuedAgain.code, serverUrl: WAS }))
   check('the second code opens the account', recoveredAgain?.session.did === session.did)
+  unlisted = { code: issuedAgain.code, unlockSpaceId: issuedAgain.entry.unlockSpaceId }
 }
 
 // --- connected wallets: a joiner (another wallet, minting its own keys and
@@ -207,6 +251,19 @@ const freshEntry = await time('passphrase login before the approvals', () => ope
 const session2: TransientSession = { ...freshEntry.session, email, provisioning }
 // The clients module adopts a rotated user key into the stored session
 setSession(session2)
+// The second code was never listed: the passphrase session finds the note
+// of its Space and, past the waiting period, deletes the Space (the ladder
+// arm: a DELETE the passphrase's ladder key delegates)
+if (unlisted) {
+  const waiting = await cleanUpPendingSpaces({ session: session2 })
+  check('the unlisted code is not touched within the waiting period', waiting.waiting.join() === unlisted.unlockSpaceId && waiting.deleted.length === 0, cleanUpSummary(waiting))
+  const cleaned = await time('clean up the pending Spaces (ladder arm)', () => cleanUpPendingSpaces({ session: session2, now: pastTheWait() }))
+  check("past the waiting period the unlisted code's Space is deleted (ladder arm)", cleaned.deleted.join() === unlisted.unlockSpaceId, cleanUpSummary(cleaned))
+  const opened = await recoverWithCode({ code: unlisted.code, serverUrl: WAS })
+  check('the unlisted code finds no record any more', opened === null)
+  const nothingLeft = await cleanUpPendingSpaces({ session: session2, now: pastTheWait() })
+  check('no note remains (transient session)', nothingDone(nothingLeft), cleanUpSummary(nothingLeft))
+}
 const approved = await time('approve a connect code (ladder arm)', () => approveConnectCode({ session: session2, code: joiner.code, name: 'Wallet 2', label: 'Phone' }))
 check('the approval names the joiner', approved.clientDid === joiner.clientDid)
 const joined = await time('the joiner completes its enrollment', () => complete(joiner))

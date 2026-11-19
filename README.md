@@ -101,7 +101,17 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   HKDF under a salt of its own). After any sign-in, an account with no code
   stored at the back end gets one, issued and stored there (`PUT
   /recovery`, encrypted); the user never sees it, because it reaches them
-  by email. **Forgot your password?** asks the back end to mail it
+  by email. The user takes no part in that step, so it can be interrupted
+  (the tab closed) after the code's unlock Space is created and before the
+  account lists the code, and the code, which is the Space's only key, is
+  then lost. The issuance therefore first writes a note in the account Space
+  (`pendingSpaces.ts`: the Space's id and the capability to manage it,
+  which the code's key delegates to the account before the Space exists)
+  and removes the note once the registry lists the code. A later sign-in
+  that finds a note more than ten minutes old whose code the registry does
+  not list deletes that Space through the capability, so it no longer
+  counts toward the account's limit (the server limits the Spaces of one
+  account). **Forgot your password?** asks the back end to mail it
   (`POST /forgot`); the recovery page takes the code and a new password,
   opens the account through the code (a transient session), adds the new
   password as a further credential, and replaces the used code with a
@@ -485,13 +495,15 @@ sign-in methods a run adds.
 - **Completed** as a first sign-in completes it: the recovery code the
   sign-in page issues in the background is issued and handed to the back
   end here. A test that signs in and ends within seconds would otherwise
-  cut that step short after the code's unlock Space exists and before the
-  account lists it, and nothing could delete that Space afterwards.
+  interrupt that step, and every sign-in after it would start another
+  issuance and create another unlock Space.
 - **Seeded** with the LCW Experience Badge (the credential inside the
   fixture's presentation) in `private-credentials`, tagged "University of
   Toronto", stored the way the wallet stores credentials
   (`src/lib/credentials.ts`).
-- **Deleted** with the account's own authority: each sign-in method's
+- **Deleted** with the account's own authority: the unlock Space of any
+  recovery code whose issuance a test interrupted (found through the note
+  the issuance left), each sign-in method's
   unlock Space through the management capability its credential delegated
   to the account, the client-annex Space, the account Space, and the
   passphrase's own unlock Space; then the back end's two rows for the
@@ -532,7 +544,9 @@ or `WAS_URL=... PROVISIONING=open` against a
 server that creates Spaces by id) exercises the identity layer against a
 PWS server without the back end: signup, the transient login, a passkey
 credential added from it, the remembered logins, recovery codes from both
-session kinds, then connected wallets from both (a joiner's connect code
+session kinds, the clean-up of a recovery code whose issuance was
+interrupted (its unlock Space deleted through its note, from both session
+kinds), then connected wallets from both (a joiner's connect code
 approved, the joiner completing its enrollment, the list, a rename, the
 disconnection with its user-key rotation, and the joiner refused after
 it), the removal of the recovery codes and the passkey credential from a
