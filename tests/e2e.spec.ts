@@ -19,8 +19,8 @@ import { removePublicCopy } from '../src/lib/publicCopy';
 // What doesn't, until it is repaired or removed (#199):
 // - the registration-code test needs a space server at VITE_WAS_BASE_URL:
 //   the server refuses the code when registration creates the account
-//   Space, and the page shows the sentence the back end answers its own
-//   check with (#200)
+//   Space, and the page says the code isn't valid and may already have
+//   been used (#200)
 // - the tests that sign in stop at the add-a-passkey offer (logIn doesn't
 //   mark it dismissed, as deployed.spec.ts does), and need the demo account
 //   (tests/scripts/register-demo.ts, seed-demo.ts) on the space server and
@@ -75,7 +75,7 @@ test('rejects registration with an invalid registration code', async ({ page }) 
   await page.getByLabel('Registration code').fill('not-the-code');
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByRole('alert')).toHaveText(
-    "Your registration code isn't valid. Please try again or obtain a new code."
+    "Your registration code isn't valid. You may have already used it. Please try again or obtain a new code."
   );
 });
 

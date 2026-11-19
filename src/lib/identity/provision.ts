@@ -92,8 +92,10 @@ const CODE_REFUSED = 'https://github.com/digitalcredentials/was-server-aws#coupo
 
 export class RegistrationCodeRefusedError extends Error {
   constructor() {
-    // The sentence the back end answers its own check of the code with
-    super("Your registration code isn't valid. Please try again or obtain a new code.")
+    // The sentence the back end answers its own check of the code with,
+    // plus the cause only this server can be the source of: a code spends
+    // one use per account, so one that worked before may have none left
+    super("Your registration code isn't valid. You may have already used it. Please try again or obtain a new code.")
     this.name = 'RegistrationCodeRefusedError'
   }
 }
