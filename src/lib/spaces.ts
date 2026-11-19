@@ -1,32 +1,26 @@
-import { PwsClient } from '@interop/pws-client'
-import { agentsFromSeed } from '@interop/pws-client/identity'
-import { didKeyZcapClient } from '@interop/wallet-core/webvh'
-import { getCoupon } from './auth'
 import { getSession, sessionAgents, type Session } from './identity/session'
-import { getSessionWASClientFor, serviceDescriptionFor } from './was'
+import { getSessionWASClientFor } from './was'
 
-// The PWS server's Spaces Repository: POST /spaces/ provisions a Space,
-// GET /spaces/ lists the caller's, and DELETE on the Space's own URL
-// deletes one. Creating and managing Spaces needs a session that signs as
-// the account (one opened with a passkey): a transient session's authority
-// is its generation delegation on the account Space alone.
+// The PWS server's Spaces Repository, as the wallet reads it: GET /spaces/
+// lists the Spaces registered to the account. The wallet creates its Spaces
+// at registration and when a sign-in credential is added
+// (src/lib/identity/provision.ts), and none after that. Managing a Space
+// needs a session that signs as the account (one opened with a passkey): a
+// transient session's authority is its generation delegation on the account
+// Space alone.
 //
 // Space URLs are kept without the trailing slash the spec's canonical form
 // carries (that is how the login API and the registry name them); the
 // client adds the slash where a request needs it.
 
-// What the wallet needs to know about a space. `type` is the wallet's
-// reading of the Space's type array: a batch-issuance space carries
-// "BatchSpace", every other space holds credentials.
+// What the wallet needs to know about a space; `types` is the Space's type
+// array.
 export interface SpaceInfo {
   url: string
-  type: 'credential' | 'batch'
   types: string[]
   name?: string
   createdAt?: string
 }
-
-export const BATCH_SPACE_TYPE = 'BatchSpace'
 
 export class PasskeySessionRequiredError extends Error {
   constructor(action = 'This action') {
@@ -48,45 +42,12 @@ function requireSession(): Session {
 }
 
 function spaceInfo(item: { id: string; type?: string[]; name?: string; createdAt?: string }): SpaceInfo {
-  const types = Array.isArray(item.type) ? item.type : ['Space']
   return {
     url: `${wasBase()}/space/${item.id}`,
-    type: types.includes(BATCH_SPACE_TYPE) ? 'batch' : 'credential',
-    types,
+    types: Array.isArray(item.type) ? item.type : ['Space'],
     ...(item.name !== undefined && { name: item.name }),
     ...(item.createdAt !== undefined && { createdAt: item.createdAt }),
   }
-}
-
-// Provisions a batch Space, the one kind of Space the wallet creates after
-// registration (the batch issuer calls this when a batch is saved; the user
-// has no "new space" of their own, the account Space being the one
-// credential space, as in FreeWallet's model). The Space is created with
-// the account's coupon (the registration token the session carries) under
-// the session's own client key in its did:key form, then handed to the
-// account's did:webvh, so every client of the account may use it. The
-// server hands a Space over only to a DID whose document lists the key
-// asking, which the account document does for an enrolled client's key
-// and would not for a key minted for the occasion. Resolves to the new
-// Space URL.
-export async function createSpace(type: 'batch', name: string): Promise<string> {
-  const session = requireSession()
-  if (session.kind !== 'remembered') {
-    throw new PasskeySessionRequiredError('Creating a space')
-  }
-  const { keyAgent, controllerDid } = await agentsFromSeed({ seed: session.clientSeed })
-  const asKey = didKeyZcapClient({ keyAgent })
-  const response = await asKey.request({
-    url: `${wasBase()}/spaces/`,
-    method: 'POST',
-    action: 'POST',
-    json: { controller: controllerDid, name, type: type === 'batch' ? ['Space', BATCH_SPACE_TYPE] : ['Space'], coupon: getCoupon() },
-  })
-  const { id } = response.data as { id: string }
-  const pws = new PwsClient({ baseServerUrl: session.serverUrl, zcapClient: asKey, serviceDescription: await serviceDescriptionFor(session.serverUrl) })
-  // The promotion: the creating key hands the Space to the account
-  await pws.space(id).configure({ name, controller: session.did, force: true })
-  return spaceInfo({ id }).url
 }
 
 // Lists the account's Spaces. A remembered session lists by the account
@@ -110,17 +71,6 @@ export async function listSpaces(): Promise<SpaceInfo[]> {
     url = page.next
   }
   return [...seen.values()]
-}
-
-// Deletes a Space (its registry row and its whole bucket) by invoking the
-// Space's canonical URL; the capability action equals the HTTP method.
-export async function deleteSpace(spaceUrl: string): Promise<void> {
-  const session = requireSession()
-  if (session.kind !== 'remembered') {
-    throw new PasskeySessionRequiredError('Deleting a space')
-  }
-  const { zcapClient } = await sessionAgents(session)
-  await zcapClient.request({ url: `${spaceUrl}/`, method: 'DELETE', action: 'DELETE' })
 }
 
 // Replaces the writable fields of a Space's metadata object (its name and

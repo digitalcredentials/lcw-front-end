@@ -7,8 +7,8 @@ browsing the account's
 spaces, adding, viewing, sharing, moving, deleting, and verifying Verifiable
 Credentials, claiming and presenting them over [CHAPI](https://chapi.io/), and
 mounting plugins such as the
-[batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui) panel
-for issuing batches of credentials. Credential collections are end-to-end
+[verifier-plugin](https://github.com/digitalcredentials/verifier-plugin) card
+that verifies an opened credential. Credential collections are end-to-end
 encrypted (EDV over WAS); the server stores ciphertext it cannot read.
 
 ## How it works
@@ -47,9 +47,8 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   the account Space and nothing else: it signs in to the back end
   (`POST /login`, which verifies the annex against the account document
   and returns the registration token, the PWS server's space-creation
-  coupon), claims credentials with a fresh `did:key`, and refuses to
-  create, rename or delete Spaces, to notify the batch issuer, and to sign
-  a presentation as the account (`PasskeySessionRequiredError`: those need
+  coupon), claims credentials with a fresh `did:key`, and presents the
+  account's own DIDs unsigned (signing a presentation as the account needs
   a passkey). A **remembered session**, from a passkey, signs as the
   account itself and reaches every Space. It holds a client key record in
   IndexedDB (`lcw-session`), sealed to the passkey's unlock key; the first
@@ -213,13 +212,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   brings it back with its tags; the server's delete is permanent, so the
   wallet keeps the copy itself). **Add Credential** tags a new credential
   with the category its type suggests (`src/lib/collectionName.ts`). The
-  page reads the account Space only: batch spaces belong to the Credential
-  Issuer page, which creates one when a batch is saved (`createSpace` in
-  `src/lib/spaces.ts`, through the server's `POST /spaces/` with the coupon
-  under the session's client key, then handed to the account DID, which
-  the server allows only to a key the account document lists) and deletes
-  it with the batch. Creating and deleting spaces sign as the account, so
-  they need a session opened with a passkey. Every state that waits on the
+  page reads the account Space only. Every state that waits on the
   network shows a `LoadingLabel` with a spinner and a message rather than
   a placeholder.
 - **End-to-end encryption** (`src/lib/edv.ts`): wallet-core provisions the
@@ -294,7 +287,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   there, and skips the documents of those folders that are not credentials.
   A file that is not a tar, or carries no `lcw-data-export/1` manifest, is
   refused with a sentence saying so. Other collections in the file
-  (activity entries, Trash records, batch files) are not imported.
+  (activity entries, Trash records) are not imported.
 - **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
   `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
   wallet with the [authn.io](https://authn.io) mediator (a once-per-session
@@ -319,8 +312,8 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   [aws-lambda-issuer](https://github.com/digitalcredentials/aws-lambda-issuer).
 - **Plugins** (`src/plugins/`): a plugin is a React component, bundled into
   the wallet from an npm package or a repository's `release` branch, that receives a
-  `WalletHost` object (session WAS client, spaces API, service base URLs,
-  `onUnauthorized`) and nothing else. `src/plugins/index.ts` lists the
+  `WalletHost` object (the session's PWS client and `onUnauthorized`) and
+  nothing else. `src/plugins/index.ts` lists the
   registered plugins; `App.tsx` generates a route for each plugin's page
   and `AppShell` a sidebar link for each page that wants one, rendered
   through `src/pages/PluginPage.tsx`. A plugin can instead, or also, fill
@@ -330,28 +323,21 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   guide for plugin authors and for registering a plugin here: the host
   interface, the package shape, distribution (npm or a `release` branch),
   and the registry entry.
-- **Credential Issuer** (`src/plugins/batchIssuerPlugin.ts`, `BatchIssuer.tsx`): the
-  [batch-issuer-ui](https://github.com/digitalcredentials/batch-issuer-ui)
-  panel as a plugin — its adapter is the host plus the issuer's `POST /notify`
-  and per-credential revocation against the
-  [status list service](https://github.com/digitalcredentials/status-list-lambda).
-  The package is installed from that repository's `release` branch
-  (`github:digitalcredentials/batch-issuer-ui#release`), which its workflow
-  rebuilds on every push to `main`; the lock file pins the commit. To take a
-  new build: `npm update @digitalcredentials/batch-issuer-ui`, then commit
-  the lock file.
 - **Verifier** (`src/plugins/verifierPlugin.ts`, `Verifier.tsx`): the
   [verifier-plugin](https://github.com/digitalcredentials/verifier-plugin)
   `<verifier-credential>` card in the verification panel of the credential
-  detail view; no page, so no sidebar link. Installed the same way, from
-  `github:digitalcredentials/verifier-plugin#release`, updated with
-  `npm update @digitalcredentials/verifier-plugin`. `Verifier.tsx` looks
+  detail view; no page, so no sidebar link. The package is installed from
+  that repository's `release` branch
+  (`github:digitalcredentials/verifier-plugin#release`), which its workflow
+  rebuilds on every push to `main`; the lock file pins the commit. To take a
+  new build: `npm update @digitalcredentials/verifier-plugin`, then commit
+  the lock file. `Verifier.tsx` looks
   issuers up in DCC's list of known registries, the same list the pre-share
   check uses (`src/lib/verify.ts`), and tells the card when that list didn't
   load rather than letting it fall back to its own default. Four registries
   on that list don't yet let a browser read them (dcc-members-oidf#65 and
   Credential Engine's), so an issuer found on none of the readable ones, such
-  as a batch issuer's per-batch DID, verifies but reads "We couldn't confirm
+  as one that signs with a `did:key` of its own, verifies but reads "We couldn't confirm
   who issued this": some of the lists didn't respond. Once those registries
   are readable, an issuer on no list reads "Genuine, but we can't confirm who
   issued it".
@@ -374,10 +360,8 @@ npm run dev
 
 `.env` points the app at the local back end; `.env.production` carries the
 deployed URLs (`VITE_API_BASE_URL` for lcw-back-end, `VITE_WAS_BASE_URL` for
-the WAS server's `/spaces`, `VITE_TEMPLATES_API_BASE`, `VITE_ISSUER_API_BASE`
-for the test issuer that grants the welcome credential, `VITE_BATCH_API_BASE`
-for the batch issuer's notify endpoint, and `VITE_STATUS_API_BASE` for the
-status list service). `VITE_WELCOME_URL` is the deployment's welcome page
+the PWS server, and `VITE_ISSUER_API_BASE` for the test issuer that grants
+the welcome credential). `VITE_WELCOME_URL` is the deployment's welcome page
 (`https://welcome.alpha.lcw.app` for alpha.lcw.app): a signed-out visitor
 who opens the wallet's plain address is sent there (`src/lib/welcomePage.ts`,
 the check in `src/App.tsx`), while `#` addresses (`#/login`, `#/register`),
@@ -434,10 +418,9 @@ DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 ```
 
 Opt-in smoke tests against a deployed instance: login and the credentials
-list with its tags, opening and verifying a credential, the batch issuer screen,
+list with its tags, opening and verifying a credential,
 sharing to LinkedIn, the My Credentials and title navigation resets, the
-welcome-credential dialog, creating, saving and deleting a batch (a
-scratch batch space, under a passkey session), the sign-in credentials
+welcome-credential dialog, the sign-in credentials
 page, a passkey added at sign-in that keeps the browser signed in until it
 is forgotten (a virtual authenticator with the PRF extension, through the
 Chrome DevTools Protocol), the Connected wallets page listing that
@@ -533,7 +516,7 @@ The site is served at [https://lcw-sandbox.org](https://lcw-sandbox.org)
 from the `dcc-lcw-ui` S3 bucket behind CloudFront (distribution
 `E6VT0O094YUC1`; the `dk59u8ewdxjcs.cloudfront.net` domain still works).
 `npm run build` bakes in the deployed service URLs from `.env.production`
-(local dev keeps using `.env`). The batch issuer panel is installed from its
+(local dev keeps using `.env`). The verifier plugin is installed from its
 repository's `release` branch, so nothing is built outside this repo.
 
 ```bash

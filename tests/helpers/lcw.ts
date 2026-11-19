@@ -77,8 +77,8 @@ export async function virtualAuthenticator(page: Page): Promise<void> {
 }
 
 // Signs in with the password and adds a passkey in the offer step, which
-// continues the session as a remembered client: what managing spaces (the
-// batch tests) and staying signed in need.
+// continues the session as a remembered client: what the Connected wallets
+// and replica tests, and staying signed in, need.
 export async function logInWithPasskey(page: Page) {
   await page.addInitScript(() => sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true'));
   await virtualAuthenticator(page);

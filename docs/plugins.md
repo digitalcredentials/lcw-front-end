@@ -3,8 +3,8 @@
 How a package becomes part of this wallet, written for whoever builds the
 package — a person or an AI agent — and for whoever registers it here.
 
-The wallet is thin. Features such as issuing credentials, verifying them,
-sharing them, or showing QR codes are plugins: separate packages that the
+The wallet is thin. Features such as verifying credentials, sharing them,
+or showing QR codes are plugins: separate packages that the
 wallet bundles at build time and mounts in fixed places. This document states
 what the wallet supplies, what a plugin package must look like, how it is
 distributed, and what is added to the wallet to register it.
@@ -28,7 +28,7 @@ of the sidebar with `menu: false` while keeping its route.
 
 | Place | What the wallet renders | Prop(s) |
 |---|---|---|
-| **Its own page**, with a link in the left sidebar unless it opts out (for example *Credential Issuer* at `/batches`) | `plugin.page.Component` inside the wallet's chrome, behind login | `host` |
+| **Its own page**, with a link in the left sidebar unless it opts out (for example a *Verify* page at `/verify`) | `plugin.page.Component` inside the wallet's chrome, behind login | `host` |
 | **The verification panel of the credential detail view** (the right-hand panel when a stored credential is opened) | `plugin.slots.credentialDetail`, in place of the wallet's built-in verifier | `credential`, `host` |
 
 A plugin whose UI is a **web component** (a custom element) is fine: the
@@ -42,18 +42,9 @@ so `<my-element credential={object} />` works with no ref.
 import type { PwsClient } from '@interop/pws-client';
 
 export interface WalletHost {
-  // The signed-in session's WAS client; null when the session is gone.
+  // The signed-in session's PWS client; null when the session is gone.
   getSession(): Promise<{ client: PwsClient } | null>;
-  // The WAS server's /spaces API, authenticated as the session's DID.
-  spaces: {
-    create(type: 'credential' | 'batch', name: string): Promise<string>; // resolves to the new space URL
-    list(): Promise<SpaceInfo[]>;   // { url, type, name?, createdAt? }
-    remove(spaceUrl: string): Promise<void>;
-  };
-  // Base URLs of the deployed services (no trailing slash).
-  statusApiBase: string;     // the status list service (POST /revoke, GET /{listId})
-  templatesApiBase: string;  // the credential-templates API (GET /templates)
-  // Call this when a WAS or back-end request is rejected as unauthorized;
+  // Call this when a PWS or back-end request is rejected as unauthorized;
   // the wallet clears the session and returns to the login page.
   onUnauthorized(): void;
 }
@@ -61,14 +52,14 @@ export interface WalletHost {
 
 Rules that follow from it:
 
-- **Session.** Call `host.getSession()` when you need the WAS client; do not
+- **Session.** Call `host.getSession()` when you need the PWS client; do not
   cache the client across user actions, because it is `null` once the session
   ends. Through it you reach the user's spaces and collections with the
   [`@interop/pws-client`](https://www.npmjs.com/package/@interop/pws-client)
   API (`client.space(id).collection(name).get/put/add/list…`). Collections
   the wallet created are end-to-end encrypted; the client decrypts and
   encrypts transparently, so a plugin reads and writes plain objects.
-- **Errors.** When a WAS or back-end call is rejected as unauthorized
+- **Errors.** When a PWS or back-end call is rejected as unauthorized
   (HTTP 401/403), call `host.onUnauthorized()` and stop. Show every other
   error in your own UI.
 - **Configuration.** Anything host-specific that is not in `WalletHost` (an
@@ -77,8 +68,8 @@ Rules that follow from it:
   component. Expose it as a prop; do not read it from the environment.
 - **Nothing else.** No `import.meta.env`, no `window.localStorage`, no
   `react-router` imports in the package. If your page needs navigation state
-  from the wallet (the batch issuer receives a space URL to open), the
-  registry entry reads it and passes it as a prop.
+  from the wallet (which stored credential to open, say), the registry entry
+  reads it and passes it as a prop.
 
 The `credentialDetail` slot additionally receives:
 
@@ -128,8 +119,8 @@ component library may set it.
 
 **Styling — pick one:**
 
-1. *Tailwind class names in JSX, no CSS shipped* (the batch issuer). The
-   wallet compiles them: the registry entry adds
+1. *Tailwind class names in JSX, no CSS shipped*. The wallet compiles
+   them: the registry entry adds
    `@source "../node_modules/@digitalcredentials/<package>/dist";` to
    [`src/index.css`](../src/index.css). The plugin then shares the wallet's
    theme. Only works in a Tailwind host.
@@ -163,7 +154,7 @@ One of these; the wallet's `package.json` names which. Every plugin, from its fi
 | Method | `package.json` entry | When |
 |---|---|---|
 | **npm** | `"@scope/name": "^1.2.3"` | the package is published |
-| **GitHub release branch** (current practice) | `"@scope/name": "github:org/repo#release"` | the package is not published yet. A workflow in the plugin repo builds `dist/` on every push to `main` and force-pushes it with `package.json`, `LICENSE` and `README.md` to a `release` branch. `npm install` clones that branch and runs none of the package's scripts, so the wallet needs none of the plugin's build tools. The wallet's lock file pins the commit; `npm update @scope/name` moves it. Reference implementation: [batch-issuer-ui `.github/workflows/release.yml`](https://github.com/digitalcredentials/batch-issuer-ui/blob/main/.github/workflows/release.yml) (a build job with a read-only token, a publish job that installs nothing). |
+| **GitHub release branch** (current practice) | `"@scope/name": "github:org/repo#release"` | the package is not published yet. A workflow in the plugin repo builds `dist/` on every push to `main` and force-pushes it with `package.json`, `LICENSE` and `README.md` to a `release` branch. `npm install` clones that branch and runs none of the package's scripts, so the wallet needs none of the plugin's build tools. The wallet's lock file pins the commit; `npm update @scope/name` moves it. Reference implementation: [verifier-plugin `.github/workflows/release.yml`](https://github.com/digitalcredentials/verifier-plugin/blob/main/.github/workflows/release.yml) (a build job with a read-only token, a publish job that installs nothing). |
 
 Do not rely on a `prepare` script that builds on install: it makes every
 wallet `npm install` run the plugin's toolchain, and fails on machines
@@ -193,11 +184,10 @@ export interface WalletPlugin {
 }
 ```
 
-Example — a React-component plugin with its own adapter (the batch issuer,
-[`src/plugins/batchIssuerPlugin.ts`](../src/plugins/batchIssuerPlugin.ts) and
-[`BatchIssuer.tsx`](../src/plugins/BatchIssuer.tsx)): the entry's component
-builds the package's `BatchIssuerAdapter` from `host` plus two wallet-side
-calls the panel needs and renders `<BatchIssuerPanel adapter={…} />`.
+A React-component plugin that takes an adapter of its own is registered the
+same way: the entry's component builds that adapter from `host`, adds any
+wallet-side calls the package needs, and renders the package's component
+with it.
 
 Example — a web-component plugin that appears only in the credential
 detail view (no page, so no route and no sidebar entry):
@@ -232,9 +222,10 @@ collections via `host.getSession()`) — add `page: { path: '/verify',
 description: 'Check a credential', Component: VerifierPage }`; add
 `menu: false` to it if the page should be reachable only by navigation.
 
-Then `plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin]` in
-`index.ts`, the dependency in `package.json`, and (Tailwind plugins only) the
-`@source` line in `src/index.css`.
+Then the entry in `plugins` in `index.ts` (today
+`plugins: WalletPlugin[] = [verifierPlugin]`), the dependency in
+`package.json`, and (Tailwind plugins only) the `@source` line in
+`src/index.css`.
 
 ## 6. Checklist for a plugin package
 
@@ -252,7 +243,7 @@ Then `plugins: WalletPlugin[] = [batchIssuerPlugin, verifierPlugin]` in
       events, and tolerate detach/reattach.
 - [ ] `sideEffects` not set to `false` if the import registers anything.
 - [ ] Distributed by npm or by a `release` branch built from `main` (the
-      batch-issuer-ui workflow is the reference); no `prepare` build.
+      verifier-plugin workflow is the reference); no `prepare` build.
 - [ ] README shows the wallet registry entry: the component(s), the props
       the wallet must pass, and any configuration.
 

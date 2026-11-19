@@ -37,8 +37,7 @@ import {
 // The wallet's front page: every credential of the account as a card,
 // narrowed by the holder's own tags (src/lib/credentials.ts), with a
 // detail view (summary, source, verification, tags, share, delete) and the
-// Trash. Batch spaces are the Credential Issuer page's; nothing here reads
-// them.
+// Trash.
 
 interface Summary {
   title: string;

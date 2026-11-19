@@ -14,14 +14,8 @@ export function clearToken(): void {
   clearSession()
 }
 
-// The account's registration token, returned by /login. The PWS server
-// requires it as the coupon when creating a space.
-export function getCoupon(): string | null {
-  return getSession()?.coupon ?? null
-}
-
 // The signed-in account's email, for the back-end endpoints that identify
-// the account by email (the batch issuer's notify, the welcome offer).
+// the account by email (the welcome offer).
 export function getEmail(): string | null {
   return getSession()?.email ?? null
 }
@@ -37,8 +31,8 @@ export function isAuthenticated(): boolean {
 }
 
 // Whether the session was opened with a passkey: the only session that
-// signs as the account itself, which managing Spaces, the batch issuer and
-// signing presentations as the account require.
+// signs as the account itself, which managing Spaces and signing
+// presentations as the account require.
 export function isRememberedSession(): boolean {
   return getSession()?.kind === 'remembered'
 }

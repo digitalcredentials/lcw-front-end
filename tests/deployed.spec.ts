@@ -8,9 +8,8 @@ import { packTar } from '../src/lib/tar';
 //
 //   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
 //
-// They use the deployed demo account, seeded by `npm run seed:demo` (tests/scripts/seed-demo.ts)
-// (the LCW Experience Badge, tagged University of Toronto), and
-// only read it -- the batch test creates and deletes a space of its own.
+// They use the deployed demo account, seeded by `npm run seed:demo` (tests/scripts/seed-demo.ts):
+// the LCW Experience Badge, tagged University of Toronto.
 
 test.skip(!DEPLOYED_URL, 'set DEPLOYED_URL to run the deployed smoke tests');
 
@@ -65,25 +64,6 @@ test('verifies a credential from the deployed space', async ({ page }) => {
     // The list itself loaded: whichever verdict, it isn't the one for a list
     // that never arrived.
     await expect(page.getByText(/list of known issuers didn't load/)).toHaveCount(0);
-  } finally {
-    if (noise.length) {
-      console.log(`--- browser noise ---\n${noise.join('\n')}`);
-    }
-  }
-});
-
-test('opens the batch issuer screen', async ({ page }) => {
-  const noise = capture(page);
-  await logIn(page);
-  try {
-    await page.getByRole('link', { name: 'Credential issuer' }).click();
-    // The panel is a linked (file:) package; if the bundle picks up its own
-    // React copy the screen white-screens with an invalid-hook TypeError, so
-    // assert both the render and the absence of page errors.
-    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'New batch' })).toBeVisible();
-    const pageErrors = noise.filter((line) => line.startsWith('[pageerror]'));
-    expect(pageErrors).toEqual([]);
   } finally {
     if (noise.length) {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
@@ -292,7 +272,7 @@ test('shows the contact choice under Settings, and changes it', async ({ page })
 });
 
 // The flows that need a remembered session (a session signed in with a
-// passkey signs as the account: managing spaces, staying signed in) share
+// passkey signs as the account and stays signed in) share
 // one browser context, so each run leaves one passkey credential and one
 // enrolled client on the demo account. They are not removed here: removing
 // either rotates the account's user key, and every rotation appends an
@@ -320,25 +300,6 @@ test.describe('with a passkey', () => {
       console.log(`--- browser noise ---\n${noise.join('\n')}`);
     }
     await context?.close();
-  });
-
-  test('creates, saves, and deletes a batch', async () => {
-    await page.getByRole('link', { name: 'Credential issuer' }).click();
-    await page.getByRole('button', { name: 'New batch' }).click();
-
-    // Saving creates the batch's own space and writes batch.json into its
-    // fresh (description-less) batch collection — the path that broke when
-    // the client became encryption-capable.
-    const name = `Deployed test batch ${Date.now()}`;
-    await page.getByLabel('Batch name').fill(name);
-    await page.getByRole('button', { name: 'Save batch' }).click();
-    await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 20000 });
-
-    // Delete the batch (its whole space); confirm() is a browser dialog
-    page.once('dialog', (dialog) => void dialog.accept());
-    await page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Credential batches' })).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText(name)).toBeHidden();
   });
 
   test('lists this browser under Connected wallets', async () => {

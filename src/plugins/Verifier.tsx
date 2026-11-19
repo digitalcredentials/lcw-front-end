@@ -9,8 +9,8 @@ type Credential = Record<string, unknown>;
 // The registries the verifier looks an issuer up in: DCC's list of known
 // registries, the same list the pre-share check uses (src/lib/verify.ts), so
 // the two never disagree about who issued a credential. Issuers on no list
-// (the batch issuer's per-batch DIDs, say) still verify; the card then says
-// it could not confirm who issued the credential.
+// (one that signs with a did:key of its own, say) still verify; the card
+// then says it could not confirm who issued the credential.
 //
 // A failed download remembers which credential it was for, so the next
 // credential asks for the list again instead of going without it until the

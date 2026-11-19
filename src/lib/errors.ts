@@ -4,8 +4,7 @@
 // None of those messages mean anything to a learner, and some carry a URL or a
 // status code. So every failure shown in the wallet is translated here into a
 // sentence saying what failed and what the person can do, with the technical
-// text kept for the console and a details toggle. Modelled on
-// batch-issuer-ui's describeFailure (src/lib/errors.ts there).
+// text kept for the console and a details toggle.
 
 // What the person was doing when the request failed; the sentence shown names
 // the action.
@@ -290,8 +289,8 @@ function isNameRefused(error: unknown): boolean {
 const COUPON_REQUIRED = 'https://github.com/digitalcredentials/was-server-aws#coupon-required'
 
 // Turns a failure into a sentence saying what failed and what the person can
-// do. Like batch-issuer-ui's describeFailure, it names a cause only where the
-// error shows it, and otherwise says to try again.
+// do. It names a cause only where the error shows it, and otherwise says to
+// try again.
 export function describeError(action: WalletAction, error: unknown): Failure {
   const detail = technicalDetail(error)
   // The summary, not the error: an HTTP client's error keeps the request it
