@@ -1,7 +1,16 @@
-import type { CollectionEncryption } from '@interop/pws-client'
+import { PwsClient, type CollectionEncryption } from '@interop/pws-client'
 import { agentsFromSeed } from '@interop/pws-client/identity'
 import { selfEnrollClientCore } from '@interop/wallet-core/clientAnnex'
-import { accountControllerResolver, delegatedWebvhLogStore, verifyAccountLog, webvhZcapClient, isWebvhDid, type VerifiedAccountLog } from '@interop/wallet-core/webvh'
+import {
+  accountControllerResolver,
+  delegatedWebvhLogStore,
+  ensureDidWebProjection,
+  pwsWebvhIdStore,
+  verifyAccountLog,
+  webvhZcapClient,
+  isWebvhDid,
+  type VerifiedAccountLog,
+} from '@interop/wallet-core/webvh'
 import { unwrapUserKeyGenerations, userKeyRosterDescriptorStore, userKeyRosterLogSigner, type ClientKeyRecord, type UserKey } from '@interop/wallet-core/keys'
 import { checkUserKeyRosterAtLogin } from '@interop/wallet-core/clients'
 import { ID_COLLECTION } from '@interop/wallet-core/space'
@@ -105,6 +114,18 @@ export async function openRememberedSession({
 
   const agents = await agentsFromSeed({ seed: record.clientSeed })
   const zcapClient = webvhZcapClient({ keyAgent: agents.keyAgent, did })
+  if (enrolled) {
+    // The did:web projection (id/did.json beside the log), brought up to
+    // the document as it stands now. The enrollment was signed by the
+    // credential's ladder through its bridge delegation, which reaches
+    // did.jsonl alone, so the projection did not yet list this client's
+    // key, and a verifier that resolves the account's did:web would not
+    // find the key this browser signs a presentation with. The client just
+    // enrolled signs as the account and writes it. Best effort, as every
+    // writer of the projection treats it: the log is the source of truth.
+    const idStore = pwsWebvhIdStore({ pws: new PwsClient({ baseServerUrl, zcapClient, serviceDescription }), spaceId, pinStore: visitPins })
+    await ensureDidWebProjection({ store: idStore, did, doc: verified.doc }).catch((err) => console.warn('The did:web projection could not be republished after the enrollment:', err))
+  }
   const rosterStore = userKeyRosterDescriptorStore({
     baseServerUrl,
     zcapClient,
