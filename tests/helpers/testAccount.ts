@@ -38,6 +38,7 @@ import type { ZcapClient } from '@interop/ezcap'
 import type { IZcap } from '@interop/data-integrity-core/zcap'
 import { ensureRecoveryCode, loginWithPassphrase, registerAccount, sessionAgents, setSession } from '../../src/lib/identity'
 import { passphraseCredential } from '../../src/lib/identity/credential'
+import { cleanUpPendingSpaces } from '../../src/lib/identity/pendingSpaces'
 import { fetchStandingRecord } from '../../src/lib/identity/records'
 import { serviceDescriptionFor } from '../../src/lib/identity/service'
 import { openTransientSession } from '../../src/lib/identity/transient'
@@ -221,9 +222,9 @@ export async function createTestAccount({ name, seed = true, log = console.log }
   // What the sign-in page does in the background after a first sign-in,
   // run to its end here: the account's recovery code is issued, listed and
   // handed to the back end. A test that signs in and is over within
-  // seconds would otherwise cut that short, after the code's unlock Space
-  // exists and before the account lists it, and nothing could delete that
-  // Space afterwards; the next sign-in would then issue another.
+  // seconds would otherwise interrupt it, and every sign-in after it
+  // would start another issuance and create another unlock Space (each
+  // deleted with the account, through the note its issuance leaves).
   await ensureRecoveryCode({ session, config: account.config })
   if (seed) {
     const { name: credentialName, cid } = await seedBadge(session)
@@ -251,7 +252,8 @@ async function deleteSpace({ serverUrl, spaceId, zcapClient, capability }: { ser
 }
 
 // Deletes the account's Spaces with the account's own authority, as far as
-// the passphrase reaches: every other sign-in method's unlock Space (through
+// the passphrase reaches: the unlock Space of any recovery code whose
+// issuance was interrupted, every other sign-in method's unlock Space (through
 // the management capability its credential delegated to the account), the
 // client-annex Space, the account Space, and last the passphrase's own
 // unlock Space, which the passphrase controls by itself. The passphrase
@@ -300,6 +302,20 @@ async function deleteSpaces(account: TestAccount, report: DeletionReport, log: L
       const session = { ...entry.session, email: account.email }
       const { signer, capabilityFor } = await sessionAgents(session)
       const pws = PwsClient.fromSigner({ baseServerUrl: serverUrl, signer, serviceDescription: await serviceDescriptionFor(serverUrl) })
+      // The unlock Spaces of recovery codes whose issuance a test interrupted
+      // (the account never listed them): found through the notes the
+      // issuance left, with no waiting period, since nothing else is using
+      // the account by now
+      const unfinished = await cleanUpPendingSpaces({ session, waitMs: 0 }).catch((err: Error) => {
+        report.left.push(`the notes of unfinished recovery codes could not be read (${err.message})`)
+        return null
+      })
+      for (const spaceId of unfinished?.deleted ?? []) {
+        report.deleted.push(`the unlock Space of an unfinished recovery code (${spaceId})`)
+      }
+      for (const spaceId of unfinished?.failed ?? []) {
+        report.left.push(`the unlock Space of an unfinished recovery code (${spaceId})`)
+      }
       const registry = await readUnlockMethods({ pws, spaceId: session.spaceId, userKey: session.userKey, capability: capabilityFor(session.spaceId) }).catch(() => null)
       for (const method of registry?.record.methods ?? []) {
         if (method.unlockSpaceId === session.unlockSpaceId) {

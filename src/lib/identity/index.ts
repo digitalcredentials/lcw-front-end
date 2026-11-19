@@ -9,6 +9,7 @@ import { openTransientSession, TransientLoginUnavailableError } from './transien
 import { openRememberedSession } from './remembered'
 import { addStandingCredential } from './standing'
 import { signUp, AccountExistsError } from './signup'
+import { clearPendingSpace, cleanUpPendingSpaces } from './pendingSpaces'
 import { issueRecoveryCode, recoverWithCode } from './recovery'
 import { upsertMethod, upsertPassphraseMethod, emptyRegistry, type UnlockMethod } from './unlockMethods'
 import type { CollectionEncryption } from '@interop/pws-client'
@@ -448,11 +449,19 @@ export async function hasStoredRecoveryCode({ session, config }: { session: Sess
 // the account's address on request (the wallet never shows it). An account
 // the back end already holds a code for gets none, unless forced.
 export async function ensureRecoveryCode({ session, config, force = false }: { session: Session; config: Pick<IdentityConfig, 'apiBase'>; force?: boolean }): Promise<{ issued: boolean; code?: string }> {
+  // First, the Spaces of issuances that were interrupted on an earlier visit
+  // are deleted (pendingSpaces.ts). A failure here does not stop the rest:
+  // the next sign-in tries again
+  await cleanUpPendingSpaces({ session }).catch((err) => console.warn('The Spaces of unfinished recovery codes could not be cleaned up:', err))
   if (!force && (await hasStoredRecoveryCode({ session, config }))) {
     return { issued: false }
   }
   const { code, entry } = await issueRecoveryCode({ session })
   await updateRegistry(session, (existing) => upsertMethod({ record: existing ?? emptyRegistry(), entry }))
+  // The registry lists the code now, so the note of its Space is no longer
+  // needed. A note that could not be removed here is removed by the next
+  // clean-up
+  await clearPendingSpace({ session, unlockSpaceId: entry.unlockSpaceId }).catch((err) => console.warn("The note of the recovery code's Space could not be removed:", err))
   const formatted = formatRecoveryCode({ code })
   const { zcapClient } = await sessionAgents(session)
   await zcapClient.request({ url: `${config.apiBase}/recovery`, method: 'PUT', action: 'write', json: { email: session.email, code: formatted } })
