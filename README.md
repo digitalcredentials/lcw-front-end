@@ -31,7 +31,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   unlock `did:key`, to which whoever acts for the account delegates a
   capability to create that one Space. Nothing keeps the code after signup,
   and the server's capped coupon-less path is never used for this wallet's
-  accounts. The
+  accounts. The server limits how many Spaces an account holds this way at
+  once (its `MaxSpacesPerAccount`, 100 on the sandbox): at the limit, adding
+  a sign-in method fails with a sentence saying to remove one, and removing
+  one deletes its Space and frees a place. The
   **account Space** holds the account's `did:webvh` log in its
   world-readable `id` collection (served through the identity domain,
   `VITE_ID_DOMAIN`), the user key (X25519, the recipient of every encrypted

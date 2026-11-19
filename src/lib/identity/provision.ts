@@ -12,7 +12,9 @@ import type { UnlockCredential } from './credential'
 // other Space of the wallet (the client-annex Space, the unlock Space of
 // each sign-in method) is created under it, at `POST /space/{account}/spaces`,
 // with a capability on the account Space and no code. Nothing keeps the
-// code after signup.
+// code after signup. The server limits how many Spaces an account holds
+// this way at once; removing a sign-in method deletes its Space and frees
+// a place.
 //
 // The server creates a Space only for the did:key that signs the request
 // and will control it. The account Space's controller is seldom that key,
@@ -114,6 +116,18 @@ export async function createAccountSpace({ zcapClient, serverUrl, registrationCo
   }
 }
 
+// The server's answer when the account already holds as many Spaces created
+// under it as the server allows one account. For a wallet those are its
+// client-annex Space and one Space per sign-in method.
+const LIMIT_REACHED = 'https://w3id.org/pws#quota-exceeded'
+
+export class AccountSpaceLimitError extends Error {
+  constructor() {
+    super('This account has as many sign-in methods as the storage server allows. Remove one you no longer use under Sign-in credentials, then try again.')
+    this.name = 'AccountSpaceLimitError'
+  }
+}
+
 // Creates a Space by id under the account Space, signed as the did:key that
 // will control it: with the grant delegated to that key, or with none when
 // the key is the account Space's own controller.
@@ -127,13 +141,20 @@ export async function createSpaceUnderAccount({
   name,
   type,
 }: NewSpace & { accountSpaceId: string; capability?: IZcap }): Promise<void> {
-  await zcapClient.request({
-    url: accountSpacesUrl(serverUrl, accountSpaceId),
-    method: 'POST',
-    action: 'POST',
-    ...(capability && { capability }),
-    json: { id, controller, name, type },
-  })
+  try {
+    await zcapClient.request({
+      url: accountSpacesUrl(serverUrl, accountSpaceId),
+      method: 'POST',
+      action: 'POST',
+      ...(capability && { capability }),
+      json: { id, controller, name, type },
+    })
+  } catch (err) {
+    if (statusOf(err) === 507 && problemTypeOf(err) === LIMIT_REACHED) {
+      throw new AccountSpaceLimitError()
+    }
+    throw err
+  }
 }
 
 // Creates a credential's unlock Space under the account, signed as the
