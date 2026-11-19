@@ -16,7 +16,7 @@ import { normalizeDisplayName, pwsConnectionsStore, readConnections, retireConne
 import { approveEnrollment, enrollmentClientDid, isConnectCode, parseEnrollmentRequest, type EnrollmentRequest } from '@interop/wallet-core/enrollment'
 import { CONNECTIONS_COLLECTION, WALLET_ACTIVITY_COLLECTION, addHistoryClientConnected, addHistoryClientRevoked } from '@interop/wallet-core/space'
 import { clientSigningKeyMultibase, ensureDidWebProjection, walletClientDid } from '@interop/wallet-core/webvh'
-import { adoptUserKey, ceremonyAuthority, renewGenerationDelegation, type CeremonyAuthority } from './authority'
+import { adoptUserKey, ceremonyAuthority, invalidateVerifiedAccountLog, renewGenerationDelegation, type CeremonyAuthority } from './authority'
 import { readRegistry } from './registry'
 import { sessionSpaceUrl, sessionVaultKeys, type RememberedSession, type Session } from './session'
 import type { UnlockMethodsRecord } from './unlockMethods'
@@ -120,7 +120,12 @@ export function refusalMessage(refusal: DisconnectRefusal | undefined): string {
   }
 }
 
+// The list comes from the account log as it stands now, not from the copy
+// the session keeps for a minute after a read (./authority): a wallet
+// connected from another browser a moment ago is on it, and this is where
+// a person looks for exactly that wallet.
 export async function listConnectedWallets(session: Session): Promise<ConnectedWallet[]> {
+  invalidateVerifiedAccountLog()
   const authority = await ceremonyAuthority(session)
   const verified = await authority.verified()
   const readDirectoryEntries = async () => {
