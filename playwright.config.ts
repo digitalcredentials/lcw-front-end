@@ -2,6 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
+  // With DEPLOYED_URL set, the tests against a deployed wallet run on an
+  // account made before the first test and deleted after the last
+  globalSetup: './tests/global-setup.ts',
+  globalTeardown: './tests/global-teardown.ts',
   timeout: 60_000,
   expect: { timeout: 20_000 },
   use: {

@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
-import { DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, logInWithPasskey, titled, trashCard } from './helpers/lcw';
+import { ACCOUNT_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, logInWithPasskey, titled, trashCard } from './helpers/lcw';
 
 // The account Space shared with FreeWallet, demonstrated against both
-// wallets: FreeWallet opens the demo account this wallet registered with
+// wallets: FreeWallet opens the account this wallet registered with
 // the passphrase alone (the same unlock derivation; its login remembers the
 // browser, which self-enrolls as a client of the account), lists the
 // credential this wallet stored, and adds one that this wallet's replica
@@ -14,10 +14,12 @@ import { DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, dis
 // FreeWallet checkout; the remember-this-browser seam its own tests use is a
 // dev-build feature) and the deployed wallet.
 //
-//   FREEWALLET_URL=http://localhost:5174 DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/freewallet.spec.ts
+//   FREEWALLET_URL=http://localhost:5174 DEPLOYED_URL=https://lcw-sandbox.org REGISTRATION_CODE=... npx playwright test tests/freewallet.spec.ts
 //
-// Each run adds one passkey client of this wallet to the demo account and
-// rotates its user key once (the disconnect).
+// It runs on the account the run registers before the first test and
+// deletes after the last (tests/global-setup.ts), so what it adds (a
+// passkey client of this wallet, FreeWallet's client, one user-key
+// rotation at the disconnect) goes with the account.
 
 const FREEWALLET_URL = (process.env.FREEWALLET_URL ?? '').replace(/\/+$/, '');
 
@@ -33,7 +35,7 @@ async function logInToFreeWallet(page: Page, { remember }: { remember: boolean }
       (window as unknown as { __E2E_REMEMBER_BROWSER__?: boolean }).__E2E_REMEMBER_BROWSER__ = true;
     });
   }
-  await page.locator('input[type="password"]').fill(DEMO_PASSPHRASE);
+  await page.locator('input[type="password"]').fill(ACCOUNT_PASSPHRASE);
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
 }
 
@@ -97,9 +99,21 @@ test('FreeWallet and this wallet share the account Space', async ({ browser }) =
     });
 
     await test.step('disconnecting FreeWallet here refuses its next login', async () => {
-      const clientsAfter = await connectedWalletKeys(lcw);
-      const enrolled = clientsAfter.filter((key) => !clientsBefore.includes(key));
-      expect(enrolled, 'FreeWallet enrolled one client').toHaveLength(1);
+      // FreeWallet enrolls its browser as a client after its login has
+      // landed, so the list is read again until the client is on it. On an
+      // account as small as the run's own, everything above is over before
+      // that entry is published.
+      let enrolled: string[] = [];
+      await expect
+        .poll(
+          async () => {
+            await lcw.getByRole('link', { name: 'My Credentials' }).click();
+            enrolled = (await connectedWalletKeys(lcw)).filter((key) => !clientsBefore.includes(key));
+            return enrolled.length;
+          },
+          { message: 'FreeWallet enrolled one client', timeout: 180_000, intervals: [5_000] }
+        )
+        .toBe(1);
       const card = lcw.locator(`[data-wallet-key="${enrolled[0]}"]`);
       lcw.once('dialog', (dialog) => void dialog.accept());
       await card.getByRole('button', { name: 'Disconnect' }).click();

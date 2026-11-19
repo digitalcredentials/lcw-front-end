@@ -1,25 +1,28 @@
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { DEMO_EMAIL, DEMO_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, titled, trashCard, virtualAuthenticator } from './helpers/lcw';
+import { ACCOUNT_EMAIL, ACCOUNT_PASSPHRASE, DEPLOYED_URL, addThrough, capture, credentialCard, discardFromTrash, listedAfresh, logIn, logInWithPasskey, titled, trashCard, virtualAuthenticator } from './helpers/lcw';
 import { packTar } from '../src/lib/tar';
 
 // Smoke tests against a deployed instance. Opt-in: they run only when
 // DEPLOYED_URL is set, so the regular local suite never touches production.
 //
-//   DEPLOYED_URL=https://lcw-sandbox.org npx playwright test tests/deployed.spec.ts
+//   DEPLOYED_URL=https://lcw-sandbox.org REGISTRATION_CODE=... npx playwright test tests/deployed.spec.ts
 //
-// They use the deployed demo account, seeded by `npm run seed:demo` (tests/scripts/seed-demo.ts):
-// the LCW Experience Badge, tagged University of Toronto.
+// They run on an account of their own, which the run registers before the
+// first test and deletes after the last (tests/global-setup.ts,
+// tests/helpers/testAccount.ts; needs the deployment's registration code
+// and AWS access to it). It holds the LCW Experience Badge, tagged
+// University of Toronto.
 
 test.skip(!DEPLOYED_URL, 'set DEPLOYED_URL to run the deployed smoke tests');
 
 // Signing in on a browser with passkey support offers to add a passkey
 // before continuing; the suite signs in with the passphrase alone, so the
-// offer is marked dismissed for the demo account, as "Not now" does.
+// offer is marked dismissed for the account, as "Not now" does.
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((email) => {
     localStorage.setItem(`lcw_passkey_offer_dismissed:${email.toLowerCase()}`, 'true');
-  }, DEMO_EMAIL);
+  }, ACCOUNT_EMAIL);
 });
 
 test('logs in and lists the credentials with their tags', async ({ page }) => {
@@ -30,7 +33,7 @@ test('logs in and lists the credentials with their tags', async ({ page }) => {
     await expect(page.getByText('Digital Credentials Commons')).toBeVisible();
     await expect(page.getByText('Learner Credential Wallet').first()).toBeVisible();
     // The sidebar names the signed-in account
-    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
+    await expect(page.getByTestId('signed-in-as')).toContainText(ACCOUNT_EMAIL);
     // The seeded credential's tag is a filter chip, and the credential a card
     await expect(page.getByRole('button', { name: /University of Toronto/ })).toBeVisible();
     await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
@@ -164,14 +167,14 @@ test('My Credentials and the title link back to the list', async ({ page }) => {
 
 test('offers the welcome credential on first open after registration', async ({ page }) => {
   const noise = capture(page);
-  // Simulate this browser having just registered the demo account
+  // Simulate this browser having just registered the account
   await page.addInitScript((email) => {
     sessionStorage.setItem('lcw_wallet_prompt_dismissed', 'true');
     localStorage.setItem('lcw_welcome_pending', email);
-  }, DEMO_EMAIL);
+  }, ACCOUNT_EMAIL);
   await page.goto(`${DEPLOYED_URL}/#/login`);
-  await page.getByLabel('Email').fill(DEMO_EMAIL);
-  await page.getByLabel('Password').fill(DEMO_PASSPHRASE);
+  await page.getByLabel('Email').fill(ACCOUNT_EMAIL);
+  await page.getByLabel('Password').fill(ACCOUNT_PASSPHRASE);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   try {
     // The offer, with the name that goes on the credential
@@ -210,7 +213,7 @@ test('lists the sign-in credentials under Settings, and adds a passkey there', a
   try {
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('link', { name: 'Sign-in credentials' }).click();
-    // The demo account signed in with its password, so that credential is
+    // The account signed in with its password, so that credential is
     // listed as the session's and cannot be removed from it
     const current = page.locator('[data-credential-current="true"]');
     await expect(current).toBeVisible();
@@ -259,7 +262,7 @@ test('shows the contact choice under Settings, and changes it', async ({ page })
     // open, so clicking Settings here would close it.
     await expect(page.getByRole('heading', { name: 'Email updates' })).toBeVisible();
     await expect(choice).toBeChecked({ checked: !before });
-    // The demo account's choice as it was
+    // The account's choice as it was
     await choice.setChecked(before);
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('status')).toContainText('Saved');
@@ -273,12 +276,9 @@ test('shows the contact choice under Settings, and changes it', async ({ page })
 
 // The flows that need a remembered session (a session signed in with a
 // passkey signs as the account and stays signed in) share
-// one browser context, so each run leaves one passkey credential and one
-// enrolled client on the demo account. They are not removed here: removing
-// either rotates the account's user key, and every rotation appends an
-// entry carrying the whole descriptor to the roster log and to every
-// encrypted collection's log, which grows them with the square of the
-// rotation count (the credentials script removes them on demand).
+// one browser context, which adds one passkey credential and one enrolled
+// client to the account. They are not removed here (the credentials script
+// covers removal): the whole account is deleted when the run ends.
 test.describe('with a passkey', () => {
   test.describe.configure({ mode: 'serial' });
   let context: BrowserContext;
@@ -292,7 +292,7 @@ test.describe('with a passkey', () => {
     // The password sign-in offers a passkey; adding one makes this browser
     // a remembered client of the account
     await logInWithPasskey(page);
-    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
+    await expect(page.getByTestId('signed-in-as')).toContainText(ACCOUNT_EMAIL);
   });
 
   test.afterAll(async () => {
@@ -365,7 +365,7 @@ test.describe('with a passkey', () => {
     await page.reload();
     await page.getByRole('button', { name: 'Continue with passkey' }).click();
     await expect(credentialCard(page, 'LCW Experience Badge')).toBeVisible();
-    await expect(page.getByTestId('signed-in-as')).toContainText(DEMO_EMAIL);
+    await expect(page.getByTestId('signed-in-as')).toContainText(ACCOUNT_EMAIL);
 
     // Forgetting the browser drops its record: a fresh tab asks to sign in
     await page.getByRole('button', { name: 'Settings' }).click();
@@ -379,8 +379,8 @@ test.describe('with a passkey', () => {
   });
 });
 
-// Settings → Download my data: the tar is read back, and the demo credential
-// is found decrypted under the demo space's folder and its collection's.
+// Settings → Download my data: the tar is read back, and the seeded credential
+// is found decrypted under the account space's folder and its collection's.
 test('downloads every document unencrypted as one tar, and imports it back', async ({ page }) => {
   // The download, two imports and the clean-up each wait on the Space
   test.setTimeout(300_000);
@@ -402,11 +402,11 @@ test('downloads every document unencrypted as one tar, and imports it back', asy
     expect(names[0]).toBe('manifest.json');
     const manifest = JSON.parse(new TextDecoder().decode(entries[0].bytes));
     expect(manifest.format).toBe('lcw-data-export/1');
-    expect(manifest.account).toBe(DEMO_EMAIL);
+    expect(manifest.account).toBe(ACCOUNT_EMAIL);
     expect(manifest.problems).toEqual([]);
     // No account collection, holder key or public copy reaches the file
     expect(names.filter((n) => /\/(id|account|dids|public|public-credentials|key-map|unlock-methods|connections|inbox|app-keys)\//.test(n))).toEqual([]);
-    // The demo credential, decrypted, under its space folder and the
+    // The seeded credential, decrypted, under its space folder and the
     // private-credentials collection
     const badge = entries.find(
       (e) => /\/private-credentials\/[^/]+\.json$/.test(e.name) && new TextDecoder().decode(e.bytes).includes('LCW Experience Badge')
@@ -416,7 +416,7 @@ test('downloads every document unencrypted as one tar, and imports it back', asy
     const credential = JSON.parse(new TextDecoder().decode(badge!.bytes));
     expect(credential.jwe).toBeUndefined();
     expect(credential.type).toContain('VerifiableCredential');
-    // The demo credential's tag travels in the manifest
+    // The seeded credential's tag travels in the manifest
     const folder = badge!.name.slice(0, badge!.name.lastIndexOf('/'));
     const tagged = manifest.spaces.flatMap((s: { folder: string; collections: { folder: string; tags?: Record<string, string[]> }[] }) =>
       s.collections.filter((c) => `${s.folder}/${c.folder}` === folder).map((c) => c.tags?.[badge!.name.slice(folder.length + 1)])
