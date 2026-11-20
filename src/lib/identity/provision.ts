@@ -92,14 +92,29 @@ interface NewSpace {
 // expired, or with no uses left.
 const CODE_REFUSED = 'https://github.com/digitalcredentials/was-server-aws#coupon-required'
 
+export const SUPPORT_EMAIL = 'support@lcw.app'
+
+// One message for every refused code: the server answers a wrong code, an
+// expired one and one with no uses left the same way. The register page
+// shows the same sentences with "sign in" and the address as links.
 export class RegistrationCodeRefusedError extends Error {
   constructor() {
-    // The sentence the back end answers its own check of the code with,
-    // plus the cause only this server can be the source of: a code spends
-    // one use per account, so one that worked before may have none left
-    super("Your registration code isn't valid. You may have already used it. Please try again or obtain a new code.")
+    super(
+      `That registration code isn't valid or has already been used. Check it against your invitation email. If you've already made an account with it, sign in instead. To get a new code, email ${SUPPORT_EMAIL}.`
+    )
     this.name = 'RegistrationCodeRefusedError'
   }
+}
+
+// Whether an error, or what caused it, is a refused registration code
+// (matched by name: the error may come wrapped by the ceremony it stopped).
+export function isRegistrationCodeRefused(err: unknown): boolean {
+  for (let current = err as { name?: string; cause?: unknown } | undefined, depth = 0; current && depth < 5; current = current.cause as typeof current, depth++) {
+    if (current.name === 'RegistrationCodeRefusedError') {
+      return true
+    }
+  }
+  return false
 }
 
 // Creates the account Space by id with the registration code, signed as the

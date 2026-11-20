@@ -4,6 +4,7 @@ import PasswordInput from '../components/PasswordInput';
 import { Link } from 'react-router-dom';
 import { registerAccount } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
+import { SUPPORT_EMAIL, isRegistrationCodeRefused } from '../lib/identity/provision';
 import { markWelcomePending } from '../lib/welcome';
 
 export default function RegisterPage() {
@@ -14,6 +15,10 @@ export default function RegisterPage() {
   // "Contact me with news and updates": unticked unless the tester ticks it
   const [contactOptIn, setContactOptIn] = useState(false);
   const [error, setError] = useState('');
+  // The server refused the registration code: a message with links of its
+  // own, shown in place of `error`. Nothing was created and the code was not
+  // spent, so the form stays as it is for a corrected code
+  const [codeRefused, setCodeRefused] = useState(false);
   // Set once the back end has started the registration: the form gives way
   // to a "Check your email" state, so a second click cannot register again
   const [submitted, setSubmitted] = useState<{ message: string; email: string } | null>(null);
@@ -25,6 +30,7 @@ export default function RegisterPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    setCodeRefused(false);
 
     if (password !== confirmPassword) {
       setError('Passwords do not match.');
@@ -54,7 +60,11 @@ export default function RegisterPage() {
         console.error('Could not remember the welcome offer:', err);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to register. Please try again.');
+      if (isRegistrationCodeRefused(err)) {
+        setCodeRefused(true);
+      } else {
+        setError(err instanceof Error ? err.message : 'Unable to register. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -145,6 +155,21 @@ export default function RegisterPage() {
               <span className="block text-xs text-gray-500">You can change this later in Settings.</span>
             </label>
           </div>
+
+          {codeRefused && (
+            <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              That registration code isn&#39;t valid or has already been used. Check it against your invitation
+              email. If you&#39;ve already made an account with it,{' '}
+              <Link to="/login" className="font-medium underline">
+                sign in
+              </Link>{' '}
+              instead. To get a new code, email{' '}
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium underline">
+                {SUPPORT_EMAIL}
+              </a>
+              .
+            </p>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
