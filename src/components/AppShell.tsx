@@ -4,6 +4,7 @@ import { clearToken, getEmail } from '../lib/auth';
 import { stopReplica } from '../lib/replica/replica';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
 import { isWelcomePending, clearWelcomePending, requestWelcomeCredential, dismissBadgeOffer, isBadgeOfferDismissed, walletHoldsNoCredential } from '../lib/welcome';
+import { badgeUnavailable } from '../lib/badgeStatus';
 import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
 import FailureText from './FailureText';
@@ -74,7 +75,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     // A pending welcome flow replaces the generic enable-wallet prompt: its
     // own CHAPI step covers enabling.
-    const dismissed = isBadgeOfferDismissed();
+    // No offer in this visit once it was put away, and none at all once the
+    // account has collected as many badges as it may
+    const dismissed = isBadgeOfferDismissed() || badgeUnavailable();
     const welcomePending = !dismissed && isWelcomePending(getEmail());
     if (welcomePending) {
       setWelcomeStep('offer');
