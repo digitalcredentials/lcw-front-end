@@ -23,6 +23,7 @@ import { PASSKEY_KDF, assertPasskey, registerPasskey } from './passkey'
 import { defaultClientKeyStore, deleteAllClientKeyRecords, hasAnyClientKeyRecord, type ClientKeyStore } from './clientKeyRecord'
 import { sessionAgents, type RememberedSession, type Session, type TransientSession } from './session'
 import { fromBase64url, toBase64url } from './bytes'
+import { recordBadgeAvailable } from '../badgeStatus'
 
 // The identity layer's entry points: registration, sign-in with a
 // passphrase (a transient session), a passkey (a remembered one) or a
@@ -48,6 +49,8 @@ export interface LoginResult {
   verified: boolean
   email: string
   controller: string
+  // Whether the account may still collect the alpha testing badge
+  badgeAvailable?: boolean
 }
 
 export const invalidCredentials = () => Object.assign(new Error('Invalid email or password.'), { status: 401 })
@@ -58,7 +61,11 @@ export const invalidCredentials = () => Object.assign(new Error('Invalid email o
 async function backEndLogin({ session, email, config }: { session: Omit<Session, 'email' | 'provisioning'>; email: string; config: Pick<IdentityConfig, 'apiBase'> }): Promise<LoginResult> {
   const { zcapClient } = await sessionAgents({ ...session, email } as Session)
   const response = await zcapClient.request({ url: `${config.apiBase}/login`, method: 'POST', action: 'write', json: { email } })
-  return response.data as LoginResult
+  const result = response.data as LoginResult
+  // Whether the account may still collect the alpha testing badge, for the
+  // signed-in shell's offer
+  recordBadgeAvailable(result?.badgeAvailable)
+  return result
 }
 
 export async function registerAccount({

@@ -178,8 +178,13 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`). The
   offer is made again at every sign-in for as long as the wallet holds no
   credential ("Your Alpha Testing Badge is still available for
-  collection."); declining it puts it away until the next sign-in. The
-  issuer gives the badge to wallet accounts only, once each: the wallet asks
+  collection."); declining it puts it away until the next sign-in. An
+  account may collect the badge a limited number of times (three, set on the
+  back end), so one deleted by accident can be collected again; the back
+  end's answer to the sign-in says whether the account still may
+  (`badgeAvailable`, `src/lib/badgeStatus.ts`), and once it may not, the
+  offer is no longer made. The
+  issuer gives the badge to wallet accounts only: the wallet asks
   its back end for the account's grant (`POST /badge-grant`, signed as the
   account) and sends it to the issuer with the request for the emailed link.
 - **Credentials, in FreeWallet's layout** (`src/lib/credentials.ts`,

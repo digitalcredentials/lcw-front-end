@@ -3,13 +3,17 @@ import { getSession, sessionAgents } from './identity';
 import { identityConfig } from './identity/config';
 import { listResourceIds } from './credentials';
 import { getSessionWASClient } from './was';
+import { recordBadgeAvailable } from './badgeStatus';
 // The welcome-credential flow: an account is offered a welcome credential
 // (the LCW Alpha Testing Badge from the test issuer) the first time the
 // wallet opens after registration, and again at every sign-in for as long
-// as the wallet holds no credential. Registration marks the first offer
-// pending for the email; the signed-in shell shows the flow.
+// as the wallet holds no credential and the account may still collect the
+// badge. Registration marks the first offer pending for the email; the
+// signed-in shell shows the flow.
 //
-// The issuer gives the badge to wallet accounts, once each. The wallet asks
+// The issuer gives the badge to wallet accounts, a limited number of times
+// each (so one deleted by accident can be collected again); the back end
+// says at sign-in whether the account may still collect it (badgeStatus.ts). The wallet asks
 // its back end for the account's grant (a request signed as the account)
 // and sends it to the issuer with the request for the emailed link.
 
@@ -89,6 +93,8 @@ async function badgeGrant(email: string): Promise<string> {
     return grant;
   } catch (err) {
     if ((err as { status?: number }).status === 409) {
+      // The account has collected as many as it may: not offered again
+      recordBadgeAvailable(false);
       throw new PlainError('This account has already collected its Alpha Testing Badge.');
     }
     throw err;
