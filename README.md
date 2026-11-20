@@ -174,8 +174,14 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   `did:key` form, which the server requires, before the Space is promoted.
   On the first open after registering, the
   wallet offers to issue a **welcome credential** (the test issuer's LCW
-  Sandbox Badge) and, in the same flow, to enable the browser wallet
-  (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`).
+  Alpha Testing Badge) and, in the same flow, to enable the browser wallet
+  (`src/lib/welcome.ts`, the dialog in `src/components/AppShell.tsx`). The
+  offer is made again at every sign-in for as long as the wallet holds no
+  credential ("Your Alpha Testing Badge is still available for
+  collection."); declining it puts it away until the next sign-in. The
+  issuer gives the badge to wallet accounts only, once each: the wallet asks
+  its back end for the account's grant (`POST /badge-grant`, signed as the
+  account) and sends it to the issuer with the request for the emailed link.
 - **Credentials, in FreeWallet's layout** (`src/lib/credentials.ts`,
   `src/lib/credentialStore.ts`): every credential is stored as the bare
   Verifiable Credential (a presentation handed to the wallet is unwrapped,
@@ -431,8 +437,12 @@ runs — clear `policies/UniversityOfToronto/LCWExperience.json.json` from the
 demo space bucket to reset.
 
 ```bash
-npm run test:claim
+BADGE_CLAIM_CODE=... npm run test:claim
 ```
+
+The issuer gives the badge to wallet accounts and to holders of its claim
+code (its `ClaimCode` stack parameter); a script is not a wallet account, so
+this one and `npm run test:holder` present the code.
 
 Drives the wallet side of the CHAPI claim (exchange, DIDAuth, saving the
 issued credential) against the deployed issuer without a browser or the

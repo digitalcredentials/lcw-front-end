@@ -1,7 +1,7 @@
 // Drives the wallet's claim flow (the same steps src/lib/claim.ts performs,
 // minus the WAS DID storage) against a deployed issuer, without CHAPI.
 //
-//   node tests/scripts/claim-wire.mjs [exchange-api-base]
+//   BADGE_CLAIM_CODE=... node tests/scripts/claim-wire.mjs [exchange-api-base]
 import '@interop/http-client';
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
 import { Ed25519Signature2020 } from '@interop/ed25519-signature';
@@ -11,7 +11,21 @@ import jsigs from '@interop/jsonld-signatures';
 const API = (process.argv[2] ?? 'https://ko29d8ljta.execute-api.us-east-1.amazonaws.com').replace(/\/+$/, '');
 const documentLoader = securityLoader().build();
 
-const created = await (await fetch(`${API}/workflows/lcw-sandbox-badge/exchanges`, { method: 'POST' })).json();
+// The issuer gives the badge to wallet accounts and to holders of its claim
+// code; a script is neither, so it presents the code (BADGE_CLAIM_CODE)
+const CODE = process.env.BADGE_CLAIM_CODE;
+if (!CODE) {
+  console.error("Set BADGE_CLAIM_CODE: the issuer's claim code.");
+  process.exit(1);
+}
+const createdResponse = await fetch(`${API}/workflows/lcw-sandbox-badge/exchanges`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: CODE })
+});
+if (!createdResponse.ok) {
+  console.error(`The issuer refused the exchange (${createdResponse.status}): ${await createdResponse.text()}`);
+  process.exit(1);
+}
+const created = await createdResponse.json();
 const exchangeUrl = created.verifiablePresentationRequest.interact.service[0].serviceEndpoint;
 console.log('exchange:', created.exchangeId);
 
