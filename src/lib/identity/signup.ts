@@ -14,7 +14,7 @@ import { accountCollectionStores, userKeyRosterDescriptorStore, userKeyRosterLog
 import { WALLET_SPACE_NAME } from '@interop/wallet-core/space'
 import { memoryResourceLogPinStore } from '@interop/vh-resource-log'
 import { passphraseCredential, type UnlockCredential } from './credential'
-import { createAccountSpace, createSpaceUnderAccount, spaceCreationBy, type Provisioning } from './provision'
+import { RegistrationCodeRefusedError, createAccountSpace, createSpaceUnderAccount, spaceCreationBy, type Provisioning } from './provision'
 import { bindStandingRecord, fetchStandingRecord, pointerOf } from './records'
 import { emptyRegistry, standingFieldsOf, updateUnlockMethods, upsertPassphraseMethod } from './unlockMethods'
 import { serviceDescriptionFor } from './service'
@@ -185,6 +185,10 @@ export async function signUp({
           body: JSON.stringify({ email, did, registrationCode, contactOptIn }),
         })
         const body = (await res.json().catch(() => ({}))) as ErrorBody
+        if (res.status === 403) {
+          // The back end's own check of the code
+          throw new RegistrationCodeRefusedError()
+        }
         if (!res.ok) {
           throw new Error(body.error ?? 'Unable to register. Please try again.')
         }
