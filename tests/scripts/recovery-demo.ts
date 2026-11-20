@@ -1,14 +1,15 @@
 // Exercises account recovery against the deployed back end and PWS server, on
 // an account the run makes and deletes (tests/helpers/testAccount.ts): issues
 // a recovery code (a standing credential of the account, handed to the back
-// end), recovers with that code under an interim passphrase (which retires
+// end; first as a replacement interrupted before the earlier code is
+// retired), recovers with that code under an interim passphrase (which retires
 // the first passphrase's credential and the used code, and stores a
 // replacement code), then sets the first passphrase back (which retires the
 // interim one). Each retirement rotates the user key.
 //
 //   REGISTRATION_CODE=... npx tsx tests/scripts/recovery-demo.ts
 import '@interop/http-client'
-import { hasStoredRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, recoverAccount, replacePassphrase, replaceRecoveryCode } from '../../src/lib/identity'
+import { ensureRecoveryCode, hasStoredRecoveryCode, listSignInMethods, loginWithPassphrase, loginWithRecoveryCode, recoverAccount, replacePassphrase, replaceRecoveryCode } from '../../src/lib/identity'
 import { recordPassphrase, withTestAccount } from '../helpers/testAccount'
 
 let failures = 0
@@ -22,6 +23,16 @@ const attempt = (run: () => Promise<unknown>) => run().then(() => 'signed in', (
 await withTestAccount('recovery', async ({ email, passphrase, config }) => {
   // A fresh code, every code listed before it retired (the one the account
   // was given when it was made), so the account carries one code
+  // First, a replacement interrupted after its new code is handed to the
+  // back end and before the earlier code is retired (the replacement's first
+  // step alone): the stored code is the new one and it opens the account
+  const starting = await loginWithPassphrase({ email, passphrase, config })
+  const halfway = await ensureRecoveryCode({ session: starting, config, force: true })
+  const listedHalfway = await listSignInMethods({ session: starting })
+  check('an interrupted replacement leaves the earlier code listed beside the new one', listedHalfway.filter((m) => m.kind === 'recovery-code').length === 2, listedHalfway.map((m) => m.kind).join(', '))
+  const opened = await attempt(() => loginWithRecoveryCode({ email, code: halfway.code!, config }))
+  check('the code the back end holds after the interruption opens the account', opened === 'signed in', opened)
+  // The complete replacement: both of those codes are retired
   const first = await loginWithPassphrase({ email, passphrase, config })
   const issued = await replaceRecoveryCode({ session: first, config })
   const session = issued.session

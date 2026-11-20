@@ -28,6 +28,10 @@ import { openReplica, removeReplica, REPLICA_COLLECTIONS, type ReplicaDatabase, 
 const POLL_MS = 30_000
 // How long the first read after a start waits for the first pull to settle
 const FIRST_SYNC_MS = 20_000
+// How often, and how many times, the ciphers' rebuild for a new user key is
+// tried again while the collections take their key epochs (five minutes)
+const REKEY_RETRY_MS = 2_000
+const REKEY_ATTEMPTS = 150
 const WRITER_ID_PREFIX = 'lcw:'
 
 export interface Replica {
@@ -186,14 +190,33 @@ async function start(session: RememberedSession): Promise<Replica> {
   await controller.start()
   setTimeout(settleFirst, FIRST_SYNC_MS)
   // A user key this tab adopts mid-session (a rotation it ran) re-keys the
-  // ciphers; a session that ends stops the replica
+  // ciphers. The session adopts the key part-way through the rotation,
+  // before the collections have taken a key epoch under it, and until they
+  // have, the ciphers cannot be built for the new key. So the rebuild is
+  // tried again until it succeeds: the ciphers of the previous key stay in
+  // use meanwhile, and a rebuild that never succeeds is reported once.
+  let stopped = false
+  let rekeyTimer: ReturnType<typeof setTimeout> | undefined
+  const rekey = (next: RememberedSession, attempt: number) => {
+    ciphers.rebuild(next).then(notify, (err) => {
+      if (stopped || replica.session !== next) {
+        return
+      }
+      if (attempt >= REKEY_ATTEMPTS) {
+        console.warn('Wallet: the replica ciphers could not be rebuilt for the new user key:', err)
+        return
+      }
+      rekeyTimer = setTimeout(() => rekey(next, attempt + 1), REKEY_RETRY_MS)
+    })
+  }
   const unsubscribe = subscribeSession((next) => {
     if (!next || next.kind !== 'remembered' || next.spaceId !== session.spaceId) {
       return
     }
     if (next.userKey.id !== replica.session.userKey.id) {
       replica.session = next
-      ciphers.rebuild(next).then(notify, (err) => console.warn('Wallet: the replica ciphers could not be rebuilt for the new user key:', err))
+      clearTimeout(rekeyTimer)
+      rekey(next, 1)
     }
   })
   const replica: Replica = {
@@ -209,6 +232,8 @@ async function start(session: RememberedSession): Promise<Replica> {
     },
     reSync: () => controller.reSync(),
     stop: async () => {
+      stopped = true
+      clearTimeout(rekeyTimer)
       unsubscribe()
       listeners.clear()
       if (current === replica) {

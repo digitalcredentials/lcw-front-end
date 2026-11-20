@@ -153,7 +153,9 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   browser is its path), and a password session lists no row as its own.
   Both record a `wallet-activity` entry. **Removing a sign-in method**
   (`retire.ts`): a passkey's **Remove** under Sign-in credentials, and
-  **Replace recovery code**, run wallet-core's unlock-credential
+  **Replace recovery code** (which first issues the new code and hands it
+  to the back end, so that the back end holds a working code if the
+  replacement is interrupted), run wallet-core's unlock-credential
   retirement: one account-log entry strikes the credential's keys and its
   ladder from the account document, the user key is rotated and every
   encrypted collection re-keyed as for a disconnection, then the wallet
@@ -581,8 +583,12 @@ browser (RxDB's memory storage) on a remembered session opened with a
 stand-in passkey: the first pull lists the seeded credential with its tag, a
 credential and its tags added through the replica reach the Space, a
 credential added directly reaches the replica, and the Trash flow
-round-trips through it. The script also reports the annex generations the
-login collected.
+round-trips through it. Then a second wallet is connected and disconnected
+from the session, which rotates the user key: a credential added through
+the replica afterwards must be sealed under the collection's new key epoch
+(the replica rebuilds its ciphers once the collections have that epoch,
+trying again every two seconds until then). The script also reports the
+annex generations the login collected.
 
 ## Deploy
 
