@@ -270,18 +270,22 @@ export async function removeSignInMethod({ session, unlockSpaceId }: { session: 
   return retireMethod({ session, method })
 }
 
-// Replaces the account's recovery code: every listed code is retired (the
-// one this session signed in with excepted; recovery itself retires that
-// one) and a fresh code is issued and handed to the back end.
+// Replaces the account's recovery code: a fresh code is issued and handed
+// to the back end, then every code listed before it is retired (the one
+// this session signed in with excepted; recovery itself retires that one).
+// The new code comes first so that the back end holds a working code at
+// every point: interrupted before the hand-over it still holds the previous
+// one, which is still listed; interrupted after it, the codes not yet
+// retired stay listed until the next replacement retires them.
 export async function replaceRecoveryCode({ session, config }: { session: Session; config: Pick<IdentityConfig, 'apiBase'> }): Promise<{ session: Session; code?: string }> {
+  const before = (await readRegistry(session))?.methods ?? []
+  const { code } = await ensureRecoveryCode({ session, config, force: true })
   let current = session
-  const registry = await readRegistry(session)
-  for (const method of registry?.methods ?? []) {
+  for (const method of before) {
     if (method.type === 'recovery-code' && method.unlockSpaceId !== current.unlockSpaceId) {
       current = (await retireMethod({ session: current, method })).session
     }
   }
-  const { code } = await ensureRecoveryCode({ session: current, config, force: true })
   return { session: current, ...(code && { code }) }
 }
 
@@ -481,9 +485,9 @@ export async function requestRecoveryEmail({ email, config }: { email: string; c
 
 // Recovers the account with the emailed code: signs in on the code, sets
 // the new passphrase (retiring the previous one), then replaces the
-// recovery code: every listed code is retired, the used one included, and
-// a fresh one is issued to the back end. Resolves the session on the new
-// passphrase.
+// recovery code: a fresh one is issued to the back end, then every code
+// listed before it is retired, the used one included. Resolves the session
+// on the new passphrase.
 export async function recoverAccount({ email, code, passphrase, config }: { email: string; code: string; passphrase: string; config: IdentityConfig }): Promise<Session> {
   const codeSession = await loginWithRecoveryCode({ email, code, config })
   const session = await replacePassphrase({ session: codeSession, passphrase, config })

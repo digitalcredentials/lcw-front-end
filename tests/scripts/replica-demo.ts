@@ -3,14 +3,19 @@
 // makes and deletes (tests/helpers/testAccount.ts): a stand-in passkey opens
 // a remembered session, the replica pulls the account's credentials, a
 // credential and its tags added through the replica reach the Space, a
-// credential added directly reaches the replica, and the Trash flow
-// round-trips through it.
+// credential added directly reaches the replica, the Trash flow
+// round-trips through it, and after a user-key rotation run from the
+// session the replica seals what it writes under the new key epoch.
 //
 //   REGISTRATION_CODE=... npx tsx tests/scripts/replica-demo.ts
 import '@interop/http-client'
 import { readFileSync } from 'node:fs'
 import { getRxStorageMemory } from 'rxdb/plugins/storage-memory'
-import { addPasskeyCredential, loginWithPassphrase, memoryClientKeyStore, requireTransient, setSession } from '../../src/lib/identity'
+import { PwsClient } from '@interop/pws-client'
+import { mintEnrollmentRequest } from '@interop/wallet-core/enrollment'
+import { plaintextCollection } from '@interop/wallet-core/space'
+import { addPasskeyCredential, approveConnectCode, disconnectWallet, getSession, listConnectedWallets, loginWithPassphrase, memoryClientKeyStore, requireTransient, sessionAgents, setSession } from '../../src/lib/identity'
+import { serviceDescriptionFor } from '../../src/lib/identity/service'
 import { pendingAnnexCollection } from '../../src/lib/identity/annexGc'
 import { randomBytes } from '../../src/lib/identity/bytes'
 import { directCredentialStore, discardTrashItem, listTrash, restoreFromTrash, sessionStores, trashCredential, type CredentialBody } from '../../src/lib/credentialStore'
@@ -121,6 +126,56 @@ await withTestAccount('replica', async ({ email, passphrase, config }) => {
     }
     await until('the cleanup is pushed', async () => ((await direct.readCredential(directAdded.cid)) === null ? true : null))
   }
+
+  // --- a user-key rotation run from this session ------------------------------
+  // Another wallet is connected and disconnected: the disconnection rotates
+  // the user key, this session adopts the new key part-way through, and each
+  // collection takes a key epoch under it afterwards. The replica has to seal
+  // what it writes from then on under the new epoch.
+  const warnings: string[] = []
+  const warn = console.warn
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(' '))
+    warn(...args)
+  }
+  const joiner = await mintEnrollmentRequest()
+  await approveConnectCode({ session: getSession()!, code: joiner.code, name: 'Second wallet' })
+  const joined = (await listConnectedWallets(getSession()!)).find((wallet) => wallet.did === joiner.clientDid)
+  check('a second wallet is connected', joined !== undefined)
+  if (joined) {
+    const outcome = await disconnectWallet({ session: getSession()!, wallet: joined })
+    check('the disconnection completed and rotated the user key', outcome.completion === 'complete' && outcome.rotated, outcome)
+    const rotated = getSession()!
+    check('the session adopted the rotated user key', rotated.userKey.id !== remembered.userKey.id)
+    // The key epoch a stored credential is sealed under, read from the Space as stored
+    const { signer } = await sessionAgents(rotated)
+    const raw = plaintextCollection({ pws: PwsClient.fromSigner({ baseServerUrl: rotated.serverUrl, signer, serviceDescription: await serviceDescriptionFor(rotated.serverUrl) }), spaceId: rotated.spaceId, collectionId: 'private-credentials' })
+    const sealedUnder = async (rid: string) => {
+      const envelope = (await raw.resource(rid).get()) as { jwe?: { recipients?: { header?: { kid?: string } }[] } } | null
+      return envelope?.jwe?.recipients?.[0]?.header?.kid ?? null
+    }
+    const after = await sessionStores()
+    if (!after) {
+      throw new Error('no stores after the rotation')
+    }
+    const directAfter = await directCredentialStore(after.space).addCredential({ body: fixtureNamed('Direct, after the rotation') })
+    const currentEpoch = await sealedUnder(directAfter.rid)
+    const viaReplica = await after.store.addCredential({ body: fixtureNamed('Replica, after the rotation') })
+    const replicaEpoch = await until('the credential added after the rotation is pushed', () => sealedUnder(viaReplica.rid))
+    check('a direct write after the rotation names a key epoch', currentEpoch !== null, currentEpoch)
+    check('the replica seals a credential added after the rotation under the same key epoch', replicaEpoch !== null && replicaEpoch === currentEpoch, { replica: replicaEpoch, direct: currentEpoch })
+    const pulledAfter = await until('the direct credential is pulled after the rotation', () => after.store.readCredential(directAfter.cid))
+    check('the replica reads a credential sealed under the new key epoch', pulledAfter !== null && nameOf(pulledAfter) === 'Direct, after the rotation')
+    check('the replica reported no failure to rebuild its ciphers', !warnings.some((line) => line.includes('could not be rebuilt')), warnings.filter((line) => line.includes('could not be rebuilt')).map((line) => line.slice(0, 160)))
+    for (const cid of [directAfter.cid, viaReplica.cid]) {
+      await trashCredential({ ...after, cid })
+      const item = (await listTrash(after.space)).find((entry) => entry.cid === cid)
+      if (item) {
+        await discardTrashItem(after.space, item)
+      }
+    }
+  }
+  console.warn = warn
   await stopReplica()
 })
 console.log(failures ? `\n${failures} FAILED` : '\nall ok')
