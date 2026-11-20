@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clearToken, getEmail } from '../lib/auth';
 import { stopReplica } from '../lib/replica/replica';
 import { registerWallet, unregisterWallet, isWalletEnabled } from '../lib/chapi';
-import { isWelcomePending, clearWelcomePending, requestWelcomeCredential } from '../lib/welcome';
+import { isWelcomePending, clearWelcomePending, requestWelcomeCredential, dismissBadgeOffer, isBadgeOfferDismissed, walletHoldsNoCredential } from '../lib/welcome';
 import LoadingLabel from './LoadingLabel';
 import { pluginPages } from '../plugins';
 import FailureText from './FailureText';
@@ -46,9 +46,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [promptError, setPromptError] = useState<Failure | null>(null);
 
   // The welcome-credential flow, offered on the first open after this
-  // browser registered the account: offer (name entry) -> chapi (enable the
-  // browser wallet, skipped when already enabled) -> sending -> sent.
+  // browser registered the account, and again at every sign-in for as long
+  // as the wallet holds no credential (the reminder): offer (name entry) ->
+  // chapi (enable the browser wallet, skipped when already enabled) ->
+  // sending -> sent. Declining it, or sending the email, puts it away until
+  // the next sign-in.
   const [welcomeStep, setWelcomeStep] = useState<'offer' | 'chapi' | 'sending' | 'sent' | null>(null);
+  const [welcomeReminder, setWelcomeReminder] = useState(false);
   const [welcomeName, setWelcomeName] = useState('');
   const [welcomeError, setWelcomeError] = useState<Failure | null>(null);
 
@@ -70,11 +74,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     // A pending welcome flow replaces the generic enable-wallet prompt: its
     // own CHAPI step covers enabling.
-    const welcomePending = isWelcomePending(getEmail());
+    const dismissed = isBadgeOfferDismissed();
+    const welcomePending = !dismissed && isWelcomePending(getEmail());
     if (welcomePending) {
       setWelcomeStep('offer');
     }
-    refreshWalletState().then((enabled) => {
+    // Not the first open: the offer is made again while the wallet is empty
+    const reminding = welcomePending || dismissed ? Promise.resolve(false) : walletHoldsNoCredential();
+    void Promise.all([refreshWalletState(), reminding]).then(([enabled, remind]) => {
+      if (remind) {
+        setWelcomeReminder(true);
+        setWelcomeStep('offer');
+        return;
+      }
       // Only a definitive "not enabled" prompts; a failed query does not
       if (!welcomePending && enabled === false && !sessionStorage.getItem('lcw_wallet_prompt_dismissed')) {
         setEnablePromptOpen(true);
@@ -94,6 +106,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     try {
       await requestWelcomeCredential(welcomeName.trim(), email);
       clearWelcomePending();
+      dismissBadgeOffer();
       setWelcomeStep('sent');
     } catch (err) {
       setWelcomeError(describeError('welcome-email', err));
@@ -124,8 +137,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     await sendWelcomeCredential();
   }
 
+  // Declined for now: it is offered again at the next sign-in, for as long
+  // as the wallet holds no credential
   function declineWelcome() {
     clearWelcomePending();
+    dismissBadgeOffer();
     setWelcomeStep(null);
   }
 
@@ -360,7 +376,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             {welcomeStep === 'offer' && (
               <form onSubmit={(e) => { e.preventDefault(); acceptWelcomeOffer(); }}>
                 <h2 className="text-lg font-semibold text-gray-800 mb-2">
-                  Welcome to your wallet!
+                  {welcomeReminder ? 'Your Alpha Testing Badge is still available for collection.' : 'Welcome to your wallet!'}
                 </h2>
                 <p className="text-sm text-gray-600 mb-4">
                   To get you started — and to confirm everything is working

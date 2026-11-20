@@ -9,7 +9,7 @@
 // did:web, and checks that the issuer verified it (it resolves the did:web
 // over HTTPS) and bound the credential to that DID. Nothing is stored.
 //
-//   REGISTRATION_CODE=... npx tsx tests/scripts/claim-web-holder.ts [issuer-api-base]
+//   REGISTRATION_CODE=... BADGE_CLAIM_CODE=... npx tsx tests/scripts/claim-web-holder.ts [issuer-api-base]
 import '@interop/http-client'
 import { Ed25519Signature2020 } from '@interop/ed25519-signature'
 import { securityLoader } from '@interop/security-document-loader'
@@ -44,7 +44,16 @@ await withTestAccount('web-holder', async ({ email, passphrase, config }) => {
   check("the projection lists the client's key under the did:web", projection?.verificationMethod?.some((vm) => vm.id === `${webDid}#${multibase}`) === true)
 
   // The exchange, as the wallet's claim runs it
-  const created = (await (await fetch(`${issuerApi}/workflows/lcw-sandbox-badge/exchanges`, { method: 'POST' })).json()) as {
+  // The issuer gives the badge to wallet accounts (through an emailed link,
+  // which a script cannot open) and to holders of its claim code, which
+  // this run presents
+  const createdResponse = await fetch(`${issuerApi}/workflows/lcw-sandbox-badge/exchanges`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: process.env.BADGE_CLAIM_CODE ?? '' }),
+  })
+  check('the issuer accepts the claim code (BADGE_CLAIM_CODE)', createdResponse.ok, createdResponse.status)
+  const created = (await createdResponse.json()) as {
     exchangeId: string
     verifiablePresentationRequest: { interact: { service: { serviceEndpoint: string }[] } }
   }

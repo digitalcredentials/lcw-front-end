@@ -14,6 +14,7 @@ import {
   type Session,
 } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
+import { resetBadgeOffer } from '../lib/welcome';
 
 export const RP_NAME = 'Learner Credential Wallet';
 const DISMISSED_KEY = (email: string) => `lcw_passkey_offer_dismissed:${email.trim().toLowerCase()}`;
@@ -72,6 +73,8 @@ export default function LoginPage() {
 
   function enter(session: Session) {
     setSession(session);
+    // A sign-in offers the welcome credential again, if it is still due
+    resetBadgeOffer();
     afterSignIn(session);
     navigate('/files');
   }
