@@ -11,11 +11,16 @@ import FailureText from './FailureText';
 import ExportDataModal from './ExportDataModal';
 import ImportDataModal from './ImportDataModal';
 import { describeError, type Failure } from '../lib/errors';
+import { feedbackPageUrl } from '../lib/welcomePage';
+
+// Where Share feedback goes; fixed for the deployment
+const feedbackUrl = feedbackPageUrl();
 
 // The signed-in layout: the product title and navigation run down a left
 // sidebar (My Credentials, one link per registered plugin such as Credential
 // Issuer, Settings — which holds the browser-wallet registration — and Sign
-// Out at the bottom); pages render into the main column. On a phone (below
+// Out at the bottom, under Share feedback when the deployment has a welcome
+// page); pages render into the main column. On a phone (below
 // Tailwind's md, 768px) the title runs across the top instead, and the links
 // fold away behind a menu button (three lines; an X while open).
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -352,6 +357,25 @@ export default function AppShell({ children }: { children: ReactNode }) {
           )}
         </nav>
         <div id="app-account" className={`${menuOpen ? '' : 'hidden'} md:block px-3 py-4 border-t border-gray-200`}>
+          {/* The welcome site's feedback page, in a new tab so the wallet
+              stays open; only on a deployment with a welcome page. The
+              phone menu folds on the way, so the wallet's page is what the
+              tester comes back to. */}
+          {feedbackUrl && (
+            <a
+              href={feedbackUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setMenuOpenAt(null)}
+              className="mb-2 flex w-full items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+            >
+              Share feedback
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5h5v5M19 5l-8 8M17 14v5H5V7h5" />
+              </svg>
+              <span className="sr-only">(opens in a new tab)</span>
+            </a>
+          )}
           {/* Who is signed in: the account's email, from the session */}
           <p className="px-3 pb-2 text-xs text-gray-500" data-testid="signed-in-as">
             Signed in as

@@ -12,6 +12,17 @@ export function welcomePageUrl(): string | undefined {
   return (import.meta.env.VITE_WELCOME_URL ?? '').trim() || undefined
 }
 
+// The welcome site's full-page feedback form, which the wallet's Share
+// feedback link opens (lcw-welcome serves it at /feedback, and records
+// ?from=wallet as where the feedback was sent from). Undefined without a
+// welcome page, so the wallet shows no link rather than a broken one.
+export function feedbackPageUrl(welcomeUrl = welcomePageUrl()): string | undefined {
+  if (!welcomeUrl) {
+    return undefined
+  }
+  return `${welcomeUrl.replace(/\/+$/, '')}/feedback?from=wallet`
+}
+
 // The wallet's plain address: its root, with no `#` page and no query
 export function isPlainAddress({ pathname, search, hash }: { pathname: string; search: string; hash: string }): boolean {
   return (pathname === '/' || pathname === '/index.html') && search === '' && (hash === '' || hash === '#/')

@@ -402,8 +402,10 @@ the welcome credential). `VITE_WELCOME_URL` is the deployment's welcome page
 who opens the wallet's plain address is sent there (`src/lib/welcomePage.ts`,
 the check in `src/App.tsx`), while `#` addresses (`#/login`, `#/register`),
 paths the hosting serves itself (`/request`), a session in the tab and a
-browser a passkey remembers open the wallet as before. The sandbox sets
-none, so its plain address opens the sign-in form. The full local stack
+browser a passkey remembers open the wallet as before. The sidebar's
+**Share feedback** link opens the welcome site's feedback page
+(`/feedback?from=wallet`) in a new tab. The sandbox sets none, so its plain
+address opens the sign-in form and it has no feedback link. The full local stack
 is:
 
 - **lcw-back-end** `sam local start-api --port 3001 ...` — the login API
