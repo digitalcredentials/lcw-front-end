@@ -240,6 +240,18 @@ test('the register page asks about news and updates, unticked', async ({ page })
   await expect(contact).not.toBeChecked();
 });
 
+test('the register page takes the registration code from an invitation link', async ({ page }) => {
+  await page.goto(`${DEPLOYED_URL}/#/register?code=LCW-FROMTHELINK`);
+  const code = page.getByLabel('Registration code');
+  await expect(code).toHaveValue('LCW-FROMTHELINK');
+  // The field stays editable
+  await code.fill('LCW-TYPED');
+  await expect(code).toHaveValue('LCW-TYPED');
+  await page.goto(`${DEPLOYED_URL}/#/login`);
+  await page.goto(`${DEPLOYED_URL}/#/register`);
+  await expect(page.getByLabel('Registration code')).toHaveValue('');
+});
+
 test('shows the contact choice under Settings, and changes it', async ({ page }) => {
   const noise = capture(page);
   await logIn(page);
