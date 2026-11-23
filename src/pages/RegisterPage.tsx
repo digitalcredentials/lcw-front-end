@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import Brand from '../components/Brand';
 import PasswordInput from '../components/PasswordInput';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { registerAccount } from '../lib/identity';
 import { identityConfig } from '../lib/identity/config';
 import { SUPPORT_EMAIL, isRegistrationCodeRefused } from '../lib/identity/provision';
@@ -11,7 +11,10 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [registrationCode, setRegistrationCode] = useState('');
+  // An invitation's link carries the person's registration code
+  // (#/register?code=...), which fills the field; it can still be edited
+  const [searchParams] = useSearchParams();
+  const [registrationCode, setRegistrationCode] = useState(() => searchParams.get('code')?.trim() ?? '');
   // "Contact me with news and updates": unticked unless the tester ticks it
   const [contactOptIn, setContactOptIn] = useState(false);
   const [error, setError] = useState('');
