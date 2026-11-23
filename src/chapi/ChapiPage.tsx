@@ -334,7 +334,7 @@ export default function ChapiPage() {
         {phase.step === 'starting' && <p className="text-sm"><LoadingLabel label="Waiting for the credential request…" /></p>}
 
         {phase.step === 'not-signed-in' && (
-          <PopupSignIn onSignedIn={resumeAfterSignIn} onCancel={cancel} />
+          <PopupSignIn purpose={requestRef.current ? 'share' : 'save'} onSignedIn={resumeAfterSignIn} onCancel={cancel} />
         )}
 
         {phase.step === 'claiming' && (
@@ -544,9 +544,17 @@ export default function ChapiPage() {
 }
 
 // The popup's own sign-in: this window holds no session of the wallet's
-// (sessionStorage is per window), so the user signs in here with the same
-// email and passphrase, and the waiting flow resumes.
-function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>; onCancel: () => void }) {
+// (sessionStorage is per window), so the user confirms who they are here,
+// with a passkey or the same email and password, and the waiting flow
+// resumes. The person is usually signed in to the wallet in another tab, so
+// the wording says what the step is for (nobody else can add to, or share
+// from, a wallet left open) instead of asking them to "sign in".
+function PopupSignIn({ purpose, onSignedIn, onCancel }: { purpose: 'save' | 'share'; onSignedIn: () => Promise<void>; onCancel: () => void }) {
+  const withPasskey = passkeySupported();
+  const why =
+    purpose === 'save'
+      ? "To keep your wallet safe, confirm it's you before this credential is saved."
+      : "To keep your wallet safe, confirm it's you before your credentials are shared.";
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -562,7 +570,7 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
       await onSignedIn();
     } catch (err) {
       const status = (err as { status?: number }).status;
-      setError(status === 400 || status === 401 ? 'Invalid email or password.' : 'Unable to sign in. Please try again.');
+      setError(status === 400 || status === 401 ? 'Invalid email or password.' : "We couldn't confirm it's you. Please try again.");
       setLoading(false);
     }
   }
@@ -575,23 +583,27 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
       await onSignedIn();
     } catch (err) {
       console.error('Passkey sign-in failed:', err);
-      setError('Unable to sign in with a passkey. Please try again.');
+      setError("We couldn't confirm it's you with a passkey. Please try again.");
       setLoading(false);
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3" noValidate>
-      <p className="text-sm text-gray-700">Sign in to continue.</p>
-      {passkeySupported() && (
-        <button
-          type="button"
-          onClick={handlePasskey}
-          disabled={loading}
-          className="w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2"
-        >
-          Sign in with a passkey
-        </button>
+      <h2 className="text-base font-semibold text-gray-800">{withPasskey ? 'Approve with your passkey' : "Confirm it's you"}</h2>
+      <p className="text-sm text-gray-700">{why}</p>
+      {withPasskey && (
+        <>
+          <button
+            type="button"
+            onClick={handlePasskey}
+            disabled={loading}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+          >
+            Continue with passkey
+          </button>
+          <p className="pt-2 text-sm text-gray-600">No passkey on this browser? Use your password.</p>
+        </>
       )}
       <div>
         <label htmlFor="chapi-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -615,9 +627,13 @@ function PopupSignIn({ onSignedIn, onCancel }: { onSignedIn: () => Promise<void>
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
+        className={
+          withPasskey
+            ? 'w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2'
+            : 'w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2'
+        }
       >
-        {loading ? 'Signing in…' : 'Sign in'}
+        {loading ? 'Confirming…' : 'Continue with password'}
       </button>
       <button type="button" onClick={onCancel} className="w-full border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium text-sm rounded-lg px-4 py-2">
         Close
