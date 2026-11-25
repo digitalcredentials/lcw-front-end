@@ -1,7 +1,13 @@
 {
   "name": "Learner Credential Wallet (Sandbox)",
   "short_name": "LCW Sandbox",
-  "icons": [],
+  "icons": [
+    {
+      "src": "/dcc-commons-mark.png",
+      "sizes": "600x600",
+      "type": "image/png"
+    }
+  ],
   "credential_handler": {
     "url": "/chapi.html",
     "enabledTypes": ["VerifiablePresentation"]
