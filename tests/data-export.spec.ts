@@ -200,7 +200,8 @@ test('packDataExport lays the documents out by space and collection, with a mani
 // (wallet-core itself cannot load under the Playwright runner)
 async function userKeys() {
   const { epochId, secret } = await mintEpoch();
-  const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) });
+  // The key's type marks its id optional; it's set here, as the cipher needs
+  const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) }) as X25519KeyAgreementKey2020 & { id: string };
   // pws-client's singleKeyResolver (its identity module cannot load here)
   const keyResolver = async ({ id }: { id?: string }) => {
     if (id !== keyAgreementKey.id) {
@@ -254,6 +255,7 @@ test('exportedCollections decrypts an encrypted collection with the user key and
       ]),
     },
     keys,
+    spaceUrl: 'https://was.example/space/dcc-was-1',
     label: 'Main Space',
     problems,
   });
@@ -294,6 +296,7 @@ test('exportedCollections opens a governed collection with the descriptor its hi
       ]),
     },
     keys,
+    spaceUrl: 'https://was.example/space/dcc-pws-1',
     label: 'Main Space',
     problems,
   });

@@ -130,7 +130,8 @@ test('importCredentials adds through the store, keeps what is there with its tag
 // The user key, built as wallet-core's `userKeyVaultKeys` builds it
 async function userKeys() {
   const { epochId, secret } = await mintEpoch();
-  const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) });
+  // The key's type marks its id optional; it's set here, as the cipher needs
+  const keyAgreementKey = X25519KeyAgreementKey2020.fromRawSecret({ secret, controller: epochId, id: epochKeyIdFor(epochId) }) as X25519KeyAgreementKey2020 & { id: string };
   const keyResolver = async ({ id }: { id?: string }) => {
     if (id !== keyAgreementKey.id) {
       throw new Error(`Unknown key id "${id}".`);
