@@ -4,7 +4,6 @@ import { execSync } from 'node:child_process';
 import QRCode from 'qrcode';
 import { PwsClient, type ResourceData } from '@interop/pws-client';
 import { Ed25519VerificationKey } from '@interop/ed25519-verification-key';
-import { removePublicCopy } from '../src/lib/publicCopy';
 
 // End-to-end tests of the wallet UI. The Vite dev server is started
 // automatically (or reused if already up on :5173), and the app takes its
@@ -307,9 +306,9 @@ test('shows a credential source in the read-only editor', async ({ page }) => {
   await expect(page.locator('section[aria-label="Credential verification"]')).toBeHidden();
 });
 
-// Sharing. Sharing publishes a copy of the credential in the space's public
-// collection under a fixed id, so sharing again brings the same link back
-// (src/lib/publicCopy.ts). These helpers reach the demo space directly, signed
+// Sharing. Before #231, sharing published a copy of the credential in the
+// space's public collection under a fixed id, so sharing again brought the
+// same link back. These helpers reach the demo space directly, signed
 // with the demo key, to plant a copy shared before the dialog opens and to
 // clean up whatever a failed test left behind.
 const DEMO_SPACE_ID = 'dcc-was-01011f5b-59ea-4e62-880e-d6ad666e361c';
@@ -344,9 +343,14 @@ async function lcwExperienceId(): Promise<string> {
   return item.id;
 }
 
+// Takes the shared copy down as src/lib/publicCopy.ts did before #231 removed
+// it, kept here because this file must load for any test to run. #231 also
+// changed where shared copies live, so this needs porting with the rest.
 async function takeDownLcwExperience() {
   const pub = (await demoSpace()).collection('public', { encryption: 'plaintext' });
-  await removePublicCopy(pub, 'UniversityOfToronto', await lcwExperienceId());
+  const id = `UniversityOfToronto--${await lcwExperienceId()}`;
+  await pub.resource(id).clearPolicy();
+  await pub.resource(id).delete().catch(() => undefined);
 }
 
 async function openShareDialog(page: Page): Promise<Locator> {

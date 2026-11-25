@@ -12,7 +12,6 @@ const CREDENTIAL = {
   type: ['VerifiableCredential', 'OpenBadgeCredential'],
   name: 'Introduction to Verifiable Credentials',
   issuer: { id: 'did:key:z6MkIssuer', name: 'DCC' },
-  credentialSubject: { id: 'did:key:z6MkHolder', name: 'Ada' },
 };
 
 function certIdOf(credential: CredentialLike): string | null {
