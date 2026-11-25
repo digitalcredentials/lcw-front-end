@@ -1,0 +1,13 @@
+{
+  /* Type-checks the tests as part of `npm run build`, so a src change that
+     breaks a test file fails the build instead of stopping every test run */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tests.tsbuildinfo",
+    "types": ["vite/client", "node"],
+    /* Tests load the harness by its dev-server address, /tests/harness/... */
+    "paths": { "/tests/*": ["./tests/*"] }
+  },
+  /* src's declarations for untyped packages, which the src files tests import rely on */
+  "include": ["tests", "playwright.config.ts", "src/**/*.d.ts"]
+}
