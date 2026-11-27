@@ -3,6 +3,7 @@ import Brand from '../components/Brand';
 import * as polyfill from 'credential-handler-polyfill';
 import * as WebCredentialHandler from 'web-credential-handler';
 import { runExchange, saveCredential, type ClaimResult } from '../lib/claim';
+import { listed, saveClaimed, sharedSuggestion } from '../lib/claimed';
 import { getSessionWASClient } from '../lib/was';
 import { isAuthenticated } from '../lib/auth';
 import { loginWithPassphrase, loginWithPasskey, passkeySupported, setSession } from '../lib/identity';
@@ -34,9 +35,9 @@ type Phase =
   | { step: 'not-signed-in' }
   // `from` is the requesting site's host, named while the claim runs
   | { step: 'claiming'; from: string }
-  // The issued credential, shown with the tags it will be saved under
+  // The issued credentials, shown with the tags they will be saved under
   | { step: 'choose'; claim: ClaimResult }
-  | { step: 'saved'; credential: string; tags: string[] }
+  | { step: 'saved'; credentials: string[]; tags: string[] }
   // The verifier-request flow: consent first (naming the requester up front),
   // then a picker over the credentials that match the request
   | { step: 'consent'; origin: string; reasons: string[] }
@@ -72,13 +73,16 @@ async function signedIn(): Promise<boolean> {
 
 export default function ChapiPage() {
   const [phase, setPhase] = useState<Phase>({ step: 'starting' });
-  // The tags the credential is saved under, as typed: comma-separated,
-  // pre-filled with the category its type suggests
+  // The tags the credentials are saved under, as typed: comma-separated,
+  // pre-filled with the category their type suggests
   const [tagsDraft, setTagsDraft] = useState('');
   const [saving, setSaving] = useState(false);
-  // A failed save, shown on the save step: the issued credential is still
+  // A failed save, shown on the save step: the issued credentials are still
   // held, so Save can be pressed again
   const [saveError, setSaveError] = useState<Failure | null>(null);
+  // Which of the claim's credentials are already stored (their positions),
+  // so a Save pressed again after a failure stores only the rest
+  const savedRef = useRef<Set<number>>(new Set());
   // Resolves the get() hook's promise, handing the issued credential back to
   // the mediator (and closing the popup).
   const resolveRef = useRef<((r: GetResponse) => void) | null>(null);
@@ -158,6 +162,7 @@ export default function ChapiPage() {
     setPhase({ step: 'claiming', from: hostOf(origin) });
     const claim = await runExchange(exchangeUrl);
     claimRef.current = claim;
+    savedRef.current = new Set();
     await loadSaveStep(claim);
   }
 
@@ -187,11 +192,12 @@ export default function ChapiPage() {
     }
   }
 
-  // Offers the issued credential for saving, with the tag its type suggests.
-  // Called once the claim has run; Save never re-runs the exchange, since
-  // the credential is already issued.
+  // Offers the issued credentials for saving, with the tag their type
+  // suggests (none when they suggest different ones). Called once the claim
+  // has run; Save never re-runs the exchange, since the credentials are
+  // already issued.
   function loadSaveStep(claim: ClaimResult) {
-    setTagsDraft(suggestTag(claim.credential));
+    setTagsDraft(sharedSuggestion(claim.credentials.map(suggestTag)));
     setSaveError(null);
     setPhase({ step: 'choose', claim });
   }
@@ -204,15 +210,15 @@ export default function ChapiPage() {
     setSaveError(null);
     try {
       const tags = normalizeTags(tagsDraft.split(','));
-      const displayName = credentialName(claimRef.current.credential);
-      await saveCredential({ tags, credential: claimRef.current.credential });
+      const { credentials } = claimRef.current;
+      await saveClaimed({ credentials, saved: savedRef.current, save: (credential) => saveCredential({ tags, credential }) });
       // Hand the issued presentation back to the issuer page via the mediator
       resolveRef.current?.({
         type: 'response',
         dataType: 'VerifiablePresentation',
         data: claimRef.current.envelope,
       });
-      setPhase({ step: 'saved', credential: displayName, tags });
+      setPhase({ step: 'saved', credentials: credentials.map(credentialName), tags });
     } catch (err) {
       if (isSessionEnded(err)) {
         fail('save-claim', err);
@@ -323,8 +329,10 @@ export default function ChapiPage() {
     }
   }
 
-  // The issuer named on a just-received credential, for the save step
-  const receivedFrom = phase.step === 'choose' ? issuerName(phase.claim.credential) : null;
+  // What was just received, for the save step: the credentials, and the
+  // issuer named on them
+  const received = phase.step === 'choose' ? phase.claim.credentials : [];
+  const receivedFrom = received.length ? issuerName(received[0]) : null;
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
@@ -345,10 +353,25 @@ export default function ChapiPage() {
 
         {phase.step === 'choose' && (
           <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              You received <span className="font-medium text-gray-800">{credentialName(phase.claim.credential)}</span>
-              {receivedFrom ? ` from ${receivedFrom}` : ''}.
-            </p>
+            {received.length === 1 ? (
+              <p className="text-sm text-gray-600">
+                You received <span className="font-medium text-gray-800">{credentialName(received[0])}</span>
+                {receivedFrom ? ` from ${receivedFrom}` : ''}.
+              </p>
+            ) : (
+              <div className="text-sm text-gray-600">
+                <p>
+                  You received {received.length} credentials{receivedFrom ? ` from ${receivedFrom}` : ''}:
+                </p>
+                <ul className="mt-1 list-disc pl-5" data-testid="received-credentials">
+                  {received.map((credential, index) => (
+                    <li key={index} className="font-medium text-gray-800">
+                      {credentialName(credential)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div>
               <label htmlFor="tags" className="block text-sm font-medium text-gray-700 mb-1">
                 Tags
@@ -364,7 +387,9 @@ export default function ChapiPage() {
                 placeholder="e.g. Degrees, University of Toronto"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
-              <p className="mt-1 text-xs text-gray-500">Separate tags with commas. You can change them later in the wallet.</p>
+              <p className="mt-1 text-xs text-gray-500">
+                Separate tags with commas. {received.length > 1 ? 'They go on each credential. ' : ''}You can change them later in the wallet.
+              </p>
             </div>
             {saveError && (
               <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -380,7 +405,7 @@ export default function ChapiPage() {
                 disabled={saving}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-medium text-sm rounded-lg px-4 py-2"
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Saving…' : received.length > 1 ? `Save ${received.length} credentials` : 'Save'}
               </button>
             </div>
           </div>
@@ -389,7 +414,7 @@ export default function ChapiPage() {
         {phase.step === 'saved' && (
           <div>
             <p role="status" className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              Saved {phase.credential}{phase.tags.length ? ` with the ${phase.tags.length === 1 ? 'tag' : 'tags'} ${phase.tags.join(', ')}` : ''}. You can close this window.
+              Saved {listed(phase.credentials)}{phase.tags.length ? ` with the ${phase.tags.length === 1 ? 'tag' : 'tags'} ${phase.tags.join(', ')}` : ''}. You can close this window.
             </p>
             <button onClick={() => window.close()} className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm rounded-lg px-4 py-2">
               Done

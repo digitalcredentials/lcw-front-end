@@ -8,17 +8,19 @@ import { DIDS_COLLECTION } from './credentials'
 import { sessionStores } from './credentialStore'
 import { IssuerError, PlainError, outsideText } from './errors'
 import { getSession, acceptedMethodsOf, chooseAccountMethod, holderSigner, type HolderSigner } from './identity'
+import { claimedCredentials } from './claimed'
 import type { ResourceData } from '@interop/pws-client'
 
 const documentLoader = securityLoader().build()
 
 export interface ClaimResult {
-  // The issued credential (what gets stored)
-  credential: Record<string, unknown>
-  // The presentation the issuer returned it in (handed back to the
+  // The issued credentials (what gets stored): one, or several when the
+  // issuer issues more than one in the exchange
+  credentials: Record<string, unknown>[]
+  // The presentation the issuer returned them in (handed back to the
   // issuer's page by the CHAPI flow)
   envelope: Record<string, unknown>
-  // The wallet DID the credential is bound to
+  // The wallet DID the credentials are bound to
   holderDid: string
 }
 
@@ -29,7 +31,7 @@ export interface ClaimResult {
 //      account then signs for it later), else a fresh did:key kept in the
 //      space's "dids" collection
 //   3. sign a DIDAuth presentation with it and POST it back
-//   4. receive the issued credential, bound to that DID
+//   4. receive the issued credentials (one or several), bound to that DID
 export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
   const session = await getSessionWASClient()
   const account = getSession()
@@ -100,7 +102,7 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     documentLoader
   })
 
-  // 4. The issued credential comes back in a presentation envelope
+  // 4. The issued credentials come back in a presentation envelope
   const issueResponse = await fetch(exchangeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -113,14 +115,14 @@ export async function runExchange(exchangeUrl: string): Promise<ClaimResult> {
     throw new IssuerError(outsideText(result.error) ?? `The issuer rejected the presentation (${issueResponse.status}).`, issueResponse.status)
   }
   const envelope = result.verifiablePresentation
-  const credential = envelope?.verifiableCredential?.[0]
-  if (!credential) {
+  const credentials = claimedCredentials(envelope)
+  if (!credentials.length) {
     throw new PlainError("The issuer didn't send a credential. Go back to the issuer's page and try again.")
   }
-  return { credential, envelope, holderDid }
+  return { credentials, envelope, holderDid }
 }
 
-// Saves the claimed credential in the account's private-credentials, with
+// Saves one claimed credential in the account's private-credentials, with
 // the holder's tags. Resolves to its content cid.
 export async function saveCredential({ tags, credential }: { tags: string[]; credential: Record<string, unknown> }): Promise<{ cid: string }> {
   const stores = await sessionStores()
