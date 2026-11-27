@@ -324,7 +324,7 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   A file that is not a tar, or carries no `lcw-data-export/1` manifest, is
   refused with a sentence saying so. Other collections in the file
   (activity entries, Trash records) are not imported.
-- **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/present.ts`,
+- **CHAPI** (`src/chapi/`, `src/lib/claim.ts`, `src/lib/claimed.ts`, `src/lib/present.ts`,
   `src/lib/chapi.ts`): **Settings → Enable browser wallet** registers the
   wallet with the [authn.io](https://authn.io) mediator (a once-per-session
   prompt also offers it when the wallet opens unregistered). When an issuer
@@ -341,7 +341,10 @@ encrypted (EDV over WAS); the server stores ciphertext it cannot read.
   the account can present what was bound to it; a `did:key` credential is
   presented with its stored key. The issued credential is saved in the
   account's `private-credentials` with the tags the user types, pre-filled
-  with the category its type suggests. An incoming
+  with the category its type suggests. An issuer may issue several
+  credentials in one exchange, all bound to the one holder DID: the save
+  step lists them and saves every one under the same tags
+  (`src/lib/claimed.ts`). An incoming
   **verifiable presentation request** from a verifier site shows what is being
   asked for, lets the user pick credentials, verifies them first (warn-only),
   and answers with a signed presentation. The companion issuer lives in
